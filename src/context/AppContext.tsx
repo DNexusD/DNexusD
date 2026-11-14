@@ -1,0 +1,4462 @@
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { 
+  UserRole, 
+  AccountTier, 
+  POSClient, 
+  Supplier, 
+  SuperAdmin, 
+  Catalog, 
+  DigitalService, 
+  DepositRequest, 
+  LoanRepaymentRequest,
+  LoanPaymentRecord,
+  Order, 
+  AccountingEntry, 
+  AdminAccountingEntry,
+  InviteLink, 
+  DeliveryMethod,
+  ServicePackage,
+  AuthUser,
+  OfficeEmployee,
+  EmployeePermissions,
+  AppNotification,
+  WalletLoanRepaymentReceipt,
+  SupplierBankAccount,
+  ReceiverConfirmationStatus,
+  DropdownOptionItem,
+  PlatformDropdownListKey,
+  PlatformInterfaceSettings
+} from '../types';
+import {
+  DEFAULT_PLATFORM_INTERFACE_SETTINGS,
+  mergePlatformSettings,
+  normalizeDropdownValue
+} from '../utils/platformSettings';
+import {
+  getLoanPaidAmount,
+  getLoanRemainingAmount,
+  validateWalletRepayment,
+  validateBankTransferRepayment,
+  applyLoanPaymentToLoan,
+  buildWalletLoanRepaymentReceipt,
+  roundCurrency
+} from '../utils/loanRepayments';
+import {
+  getActiveBankAccountsForDeposit,
+  resolveBankAccountReceiverPos,
+  validateBankAccountInput,
+  normalizeEmail,
+  isAccountAssignedToPos
+} from '../utils/bankAccounts';
+import {
+  calculateBaseSupplierFee,
+  calculateServicePurchasePricing
+} from '../utils/pricing';
+import {
+  mapPasswordResetErrorAr,
+  validateResetPasswordInput
+} from '../utils/passwordReset';
+import {
+  initialSuppliers,
+  initialSupplier,
+  initialSupplierBankAccounts,
+  initialSuperAdmin,
+  initialPosClients,
+  initialCatalogs,
+  initialServices,
+  initialDepositRequests,
+  initialOrders,
+  initialAccountingEntries,
+  initialAdminAccountingEntries,
+  initialInviteLinks,
+  initialNotifications
+} from '../data/mockData';
+import confetti from 'canvas-confetti';
+import {
+  testConnection,
+  auth,
+  googleProvider,
+  db,
+  handleFirestoreError,
+  OperationType,
+  ConnectionTestResult,
+  sendPasswordResetEmail,
+  verifyPasswordResetCode,
+  confirmPasswordReset
+} from '../services/firebase';
+import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { onSnapshot, collection, doc } from 'firebase/firestore';
+import { firestoreSync } from '../services/firestoreSync';
+
+interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  title: string;
+  description?: string;
+}
+
+interface AppContextType {
+  role: UserRole;
+  setRole: (role: UserRole) => void;
+  viewMode: 'mobile_frame' | 'responsive';
+  setViewMode: (mode: 'mobile_frame' | 'responsive') => void;
+  activeNavTab: string;
+  setActiveNavTab: (tab: string) => void;
+
+  // Firebase Firestore Status & Sync
+  isFirestoreConnected: boolean;
+  isSyncingWithFirestore: boolean;
+  isSupplierSelectionRequired: boolean;
+  setIsSupplierSelectionRequired: (required: boolean) => void;
+  syncAllToFirestore: () => Promise<void>;
+  clearUsersSuppliersAndClientsData: () => Promise<void>;
+  checkDatabaseConnection: () => Promise<ConnectionTestResult>;
+
+  // Authentication State & Actions
+  isAuthenticated: boolean;
+  currentUser: AuthUser | null;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
+  sendLoginOtp: (email: string) => Promise<{ success: boolean; code?: string; error?: string; remainingSeconds?: number }>;
+  verifyLoginOtpAndLogin: (email: string, password: string, otpCode: string) => Promise<{ success: boolean; error?: string }>;
+  registerAccount: (params: {
+    name: string;
+    email: string;
+    password: string;
+    role: UserRole;
+    phone?: string;
+    tradeName?: string;
+    supplierId?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  requestPasswordReset: (email: string) => Promise<{
+    success: boolean;
+    message: string;
+  }>;
+  verifyResetCode: (oobCode: string) => Promise<{
+    valid: boolean;
+    email?: string;
+    error?: string;
+  }>;
+  completePasswordReset: (
+    oobCode: string,
+    newPassword: string,
+    confirmPassword: string
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    isExpiredOrInvalidCode?: boolean;
+  }>;
+  logout: () => void;
+  
+  // Data entities
+  currentPos: POSClient;
+  setCurrentPosId: (id: string) => void;
+  posClients: POSClient[];
+  suppliers: Supplier[];
+  availableClientSuppliers: Supplier[];
+  supplier: Supplier;
+  currentPosSupplier: Supplier;
+  setCurrentSupplierId: (id: string) => void;
+  superAdmin: SuperAdmin;
+  catalogs: Catalog[];
+  services: DigitalService[];
+  depositRequests: DepositRequest[];
+  loanRepaymentRequests: LoanRepaymentRequest[];
+  supplierBankAccounts: SupplierBankAccount[];
+  orders: Order[];
+  accountingEntries: AccountingEntry[];
+  adminAccountingEntries: AdminAccountingEntry[];
+  inviteLinks: InviteLink[];
+  notifications: AppNotification[];
+  supplierNotifications: AppNotification[];
+  clientNotifications: AppNotification[];
+  unreadNotificationsCount: number;
+  unreadSupplierNotificationsCount: number;
+  unreadPosNotificationsCount: number;
+  markNotificationAsRead: (id: string) => void;
+  markAllNotificationsAsRead: () => void;
+  clearAllNotifications: () => void;
+  markAllSupplierNotificationsAsRead: () => void;
+  clearSupplierNotifications: () => void;
+  addNotification: (notif: Omit<AppNotification, 'id' | 'createdAt' | 'isRead'>) => void;
+  
+  // Actions
+  triggerConfetti: () => void;
+  showToast: (toast: Omit<ToastMessage, 'id'>) => void;
+  toasts: ToastMessage[];
+  removeToast: (id: string) => void;
+  
+  // Fee calculation helper
+  calculateFee: (amount: number, sup?: Supplier) => number;
+
+  // Purchase & Transactions
+  executePurchase: (params: {
+    service: DigitalService;
+    pkg: ServicePackage;
+    deliveryMethod: DeliveryMethod;
+    deliveryDetails: {
+      playerId?: string;
+      playerNickname?: string;
+      accountEmail?: string;
+      accountPassword?: string;
+      verificationCodeEntered?: string;
+      voucherCode?: string;
+    };
+    paymentMethod: 'wallet' | 'visa';
+    customerName?: string;
+    customerPhone?: string;
+    resalePrice?: number;
+  }) => Promise<{ success: boolean; orderId?: string; error?: string; voucherCode?: string; isPendingSupplier?: boolean }>;
+  
+  executeBalanceTransfer: (params: {
+    targetPosCode: string;
+    amount: number;
+  }) => Promise<{ success: boolean; error?: string }>;
+  
+  submitDepositRequest: (params: {
+    amount: number;
+    requestType?: 'cash' | 'loan';
+    transferNumber?: string;
+    transferSenderName?: string;
+    bankName?: string;
+    targetBankAccountId?: string;
+    loanReason?: string;
+    transferReceiptImage?: string;
+    transferReceiptFileName?: string;
+  }) => void;
+
+  saveSupplierBankAccount: (input: {
+    id?: string;
+    bankName: string;
+    accountNumber: string;
+    iban?: string;
+    country: string;
+    accountHolderName: string;
+    accountHolderEmail: string;
+    accountHolderPhone?: string;
+    delegatedPosId?: string;
+    canReceiveSupplierTransfers: boolean;
+    isPrimary?: boolean;
+    isActive?: boolean;
+    notes?: string;
+  }) => { success: boolean; error?: string; account?: SupplierBankAccount };
+  toggleBankAccountTransferPrivilege: (accountId: string, enabled: boolean) => void;
+  deleteSupplierBankAccount: (accountId: string) => void;
+  confirmDepositReceiptByReceiver: (depositId: string, decision: 'confirmed' | 'rejected', note?: string) => void;
+  confirmLoanRepaymentReceiptByReceiver: (requestId: string, decision: 'confirmed' | 'rejected', note?: string) => void;
+  
+  approveDepositRequest: (depositId: string) => void;
+  rejectDepositRequest: (depositId: string, reason?: string) => void;
+  markLoanAsRepaid: (depositId: string) => void;
+  payLoanFromWallet: (loanId: string, amount: number) => Promise<{ success: boolean; error?: string; receipt?: WalletLoanRepaymentReceipt }>;
+  submitLoanRepaymentRequest: (params: {
+    loanId: string;
+    amount: number;
+    transferNumber: string;
+    bankName: string;
+    senderName: string;
+    notes?: string;
+    targetBankAccountId?: string;
+    transferReceiptImage?: string;
+    transferReceiptFileName?: string;
+  }) => Promise<{ success: boolean; requestId?: string; request?: LoanRepaymentRequest; error?: string }>;
+  approveLoanRepaymentRequest: (requestId: string, overrideAmount?: number) => void;
+  rejectLoanRepaymentRequest: (requestId: string, reason?: string) => void;
+  
+  completeSupplierOrder: (orderId: string, notes?: string) => void;
+  rejectSupplierOrder: (orderId: string, reason?: string) => void;
+  sendSupplierReplyToClient: (orderId: string, message: string) => void;
+  confirmClientOtpRead: (orderId: string) => void;
+
+  updatePosTier: (posId: string, newTier: AccountTier) => void;
+  togglePosLoanPrivilege: (posId: string) => void;
+  togglePosReceiveTransfersPrivilege: (posId: string) => void;
+  togglePosBonusPrivilege: (posId: string) => void;
+  togglePosGiftsPrivilege: (posId: string) => void;
+  updatePosProfile: (posId: string, updates: Partial<POSClient>) => void;
+  updateSupplierProfile: (supplierId: string, updates: Partial<Supplier>) => void;
+  createInviteLink: (targetTier: AccountTier) => InviteLink;
+  
+  addCatalog: (nameAr: string, descriptionAr: string, icon: string, isFreeGiftsCatalog?: boolean) => void;
+  updateCatalog: (id: string, updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>) => void;
+  deleteCatalog: (id: string) => { success: boolean; error?: string };
+  addService: (service: Omit<DigitalService, 'id' | 'supplierId' | 'isActive'>) => void;
+  updateService: (id: string, updates: Partial<Omit<DigitalService, 'id' | 'supplierId'>>) => void;
+  deleteService: (id: string) => void;
+
+  // Platform Interface Settings, Fixed Admin Catalogs & Dynamic Dropdowns
+  platformSettings: PlatformInterfaceSettings;
+  updatePlatformInterfaceSettings: (updates: Partial<PlatformInterfaceSettings>) => void;
+  addFixedCatalogByAdmin: (input: { nameAr: string; descriptionAr: string; icon: string; isFreeGiftsCatalog?: boolean }) => void;
+  updateFixedCatalogByAdmin: (id: string, updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>) => void;
+  deleteFixedCatalogByAdmin: (id: string) => { success: boolean; error?: string };
+  addDropdownOption: (listKey: PlatformDropdownListKey, input: { labelAr: string; value?: string }) => { success: boolean; error?: string };
+  updateDropdownOption: (listKey: PlatformDropdownListKey, optionId: string, updates: Partial<Pick<DropdownOptionItem, 'labelAr' | 'value' | 'isActive'>>) => void;
+  deleteDropdownOption: (listKey: PlatformDropdownListKey, optionId: string) => void;
+  
+  addSupplier: (newSup: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => void;
+  updateSupplierFeeConfig: (supplierId: string, config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
+  updateGlobalFeeConfig: (config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
+  adminSettleBank: (amount: number, bankIban: string) => void;
+  adminTransferToAgent: (targetPosCode: string, amount: number) => void;
+  addOfficeEmployee: (employeeData: {
+    name: string;
+    email: string;
+    password?: string;
+    phone: string;
+    roleTitle: string;
+    permissions: EmployeePermissions;
+  }) => void;
+  updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => void;
+  removeOfficeEmployee: (empId: string) => void;
+}
+
+const AppContext = createContext<AppContextType | undefined>(undefined);
+
+export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [role, setRole] = useState<UserRole>('pos_client');
+  const [viewMode, setViewMode] = useState<'mobile_frame' | 'responsive'>('mobile_frame');
+  const [activeNavTab, setActiveNavTab] = useState<string>('store');
+  
+  const [posClients, setPosClients] = useState<POSClient[]>(() => {
+    const saved = localStorage.getItem('digipos_clients_v2');
+    return saved ? JSON.parse(saved) : initialPosClients;
+  });
+  
+  const [currentPosId, setCurrentPosId] = useState<string>('pos-1');
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
+    const saved = localStorage.getItem('digipos_suppliers_v2');
+    return saved ? JSON.parse(saved) : initialSuppliers;
+  });
+
+  const [currentSupplierId, setCurrentSupplierId] = useState<string>('sup-jamal-01');
+  
+  const supplier = suppliers.find(s => s.id === currentSupplierId) || suppliers[0] || initialSupplier;
+  
+  const [superAdmin, setSuperAdmin] = useState<SuperAdmin>(() => {
+    const saved = localStorage.getItem('digipos_admin_v2');
+    return saved ? JSON.parse(saved) : initialSuperAdmin;
+  });
+
+  const [platformSettings, setPlatformSettings] = useState<PlatformInterfaceSettings>(() => {
+    const saved = localStorage.getItem('digipos_platform_settings_v1');
+    if (saved) {
+      try {
+        return mergePlatformSettings(JSON.parse(saved) as Partial<PlatformInterfaceSettings>);
+      } catch {
+        return DEFAULT_PLATFORM_INTERFACE_SETTINGS;
+      }
+    }
+    return DEFAULT_PLATFORM_INTERFACE_SETTINGS;
+  });
+  
+  const [catalogs, setCatalogs] = useState<Catalog[]>(() => {
+    const saved = localStorage.getItem('digipos_catalogs_v2');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Catalog[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasFreeGiftCatalog = parsed.some(
+            c => c.isFreeGiftsCatalog || c.id === 'cat-free-gifts' || (c.nameAr && c.nameAr.includes('الهدايا المجانية'))
+          );
+          if (!hasFreeGiftCatalog) {
+            const giftCatalogSeed = initialCatalogs.find(c => c.id === 'cat-free-gifts');
+            if (giftCatalogSeed) return [...parsed, giftCatalogSeed];
+          }
+          return parsed;
+        }
+      } catch {
+        // fallback
+      }
+    }
+    return initialCatalogs;
+  });
+  
+  const [services, setServices] = useState<DigitalService[]>(() => {
+    const saved = localStorage.getItem('digipos_services_v2');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as DigitalService[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const giftSeedFlag = localStorage.getItem('digipos_gift_catalog_seeded_v1');
+          if (!giftSeedFlag) {
+            localStorage.setItem('digipos_gift_catalog_seeded_v1', '1');
+            const hasGiftService = parsed.some(s => s.catalogId === 'cat-free-gifts' || s.id === 'srv-gift-pubg-60');
+            if (!hasGiftService) {
+              const giftSrvSeed = initialServices.find(s => s.id === 'srv-gift-pubg-60');
+              if (giftSrvSeed) return [...parsed, giftSrvSeed];
+            }
+          }
+          return parsed;
+        }
+      } catch {
+        // fallback
+      }
+    }
+    return initialServices;
+  });
+  
+  const [depositRequests, setDepositRequests] = useState<DepositRequest[]>(() => {
+    const saved = localStorage.getItem('digipos_deposits_v2');
+    return saved ? JSON.parse(saved) : initialDepositRequests;
+  });
+
+  const [loanRepaymentRequests, setLoanRepaymentRequests] = useState<LoanRepaymentRequest[]>(() => {
+    const saved = localStorage.getItem('digipos_loan_repayments_v1');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [supplierBankAccounts, setSupplierBankAccounts] = useState<SupplierBankAccount[]>(() => {
+    const saved = localStorage.getItem('digipos_supplier_bank_accounts_v1');
+    if (saved) {
+      try {
+        const parsed: SupplierBankAccount[] = JSON.parse(saved);
+        const existingIds = new Set(parsed.map(a => a.id));
+        const missing = initialSupplierBankAccounts.filter(a => !existingIds.has(a.id));
+        if (missing.length > 0) {
+          const merged = [...parsed, ...missing];
+          localStorage.setItem('digipos_supplier_bank_accounts_v1', JSON.stringify(merged));
+          return merged;
+        }
+        return parsed;
+      } catch {
+        return initialSupplierBankAccounts;
+      }
+    }
+    return initialSupplierBankAccounts;
+  });
+  
+  const [orders, setOrders] = useState<Order[]>(() => {
+    const saved = localStorage.getItem('digipos_orders_v2');
+    return saved ? JSON.parse(saved) : initialOrders;
+  });
+  
+  const [accountingEntries, setAccountingEntries] = useState<AccountingEntry[]>(() => {
+    const saved = localStorage.getItem('digipos_accounting_v2');
+    return saved ? JSON.parse(saved) : initialAccountingEntries;
+  });
+
+  const [adminAccountingEntries, setAdminAccountingEntries] = useState<AdminAccountingEntry[]>(() => {
+    const saved = localStorage.getItem('digipos_admin_accounting_v2');
+    return saved ? JSON.parse(saved) : initialAdminAccountingEntries;
+  });
+  
+  const [inviteLinks, setInviteLinks] = useState<InviteLink[]>(() => {
+    const saved = localStorage.getItem('digipos_invites_v2');
+    return saved ? JSON.parse(saved) : initialInviteLinks;
+  });
+
+  const [notifications, setNotifications] = useState<AppNotification[]>(() => {
+    const saved = localStorage.getItem('digipos_notifications_v2');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        // fallback
+      }
+    }
+    const v1 = localStorage.getItem('digipos_notifications_v1');
+    if (v1) {
+      try {
+        const parsed = JSON.parse(v1);
+        if (Array.isArray(parsed)) {
+          const supplierSeeds = initialNotifications.filter(n => n.targetRole === 'supplier');
+          return [...supplierSeeds, ...parsed.filter((n: any) => !supplierSeeds.some(s => s.id === n.id))];
+        }
+      } catch {
+        // fallback
+      }
+    }
+    return initialNotifications;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('digipos_notifications_v2', JSON.stringify(notifications));
+  }, [notifications]);
+
+  const markNotificationAsRead = (id: string) => {
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, isRead: true } : n)));
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+  };
+
+  const clearAllNotifications = () => {
+    setNotifications([]);
+  };
+
+  const markAllSupplierNotificationsAsRead = () => {
+    setNotifications(prev =>
+      prev.map(n =>
+        (n.targetRole === 'supplier' || (!n.targetRole && !n.posId)) &&
+        (!n.supplierId || n.supplierId === supplier?.id)
+          ? { ...n, isRead: true }
+          : n
+      )
+    );
+  };
+
+  const clearSupplierNotifications = () => {
+    setNotifications(prev =>
+      prev.filter(
+        n =>
+          !(
+            (n.targetRole === 'supplier' || (!n.targetRole && !n.posId)) &&
+            (!n.supplierId || n.supplierId === supplier?.id)
+          )
+      )
+    );
+  };
+
+  const addNotification = (notif: Omit<AppNotification, 'id' | 'createdAt' | 'isRead'>) => {
+    const newNotif: AppNotification = {
+      ...notif,
+      id: `notif-${Date.now().toString().slice(-6)}-${Math.floor(100 + Math.random() * 900)}`,
+      isRead: false,
+      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+    };
+    setNotifications(prev => [newNotif, ...prev]);
+  };
+
+  // Authentication state
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    const saved = localStorage.getItem('digipos_auth_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const isAuthenticated = currentUser !== null;
+
+  // Track active OTP per email with 2-minute duration
+  const [activeOtps, setActiveOtps] = useState<Record<string, { code: string; expiresAt: number }>>({});
+
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  // Firebase Firestore connection state
+  const [isFirestoreConnected, setIsFirestoreConnected] = useState<boolean>(false);
+  const [isSyncingWithFirestore, setIsSyncingWithFirestore] = useState<boolean>(false);
+  const [isSupplierSelectionRequired, setIsSupplierSelectionRequired] = useState<boolean>(false);
+
+  // Compute registered suppliers for the currently logged in / authenticated client
+  const availableClientSuppliers = React.useMemo(() => {
+    if (!currentUser || currentUser.role !== 'pos_client') {
+      return suppliers;
+    }
+    const cleanEmail = currentUser.email.toLowerCase();
+    const matchingPosRecords = posClients.filter(p => p.email?.toLowerCase() === cleanEmail);
+    if (matchingPosRecords.length === 0) {
+      return suppliers;
+    }
+    const registeredSupIds = Array.from(new Set(matchingPosRecords.map(p => p.supplierId)));
+    const registeredSuppliers = suppliers.filter(s => registeredSupIds.includes(s.id));
+    return registeredSuppliers.length > 0 ? registeredSuppliers : suppliers;
+  }, [currentUser, posClients, suppliers]);
+
+  // Validate Connection to Firestore on boot and on-demand
+  const checkDatabaseConnection = async (): Promise<ConnectionTestResult> => {
+    const res = await testConnection();
+    setIsFirestoreConnected(res.success);
+    return res;
+  };
+
+  useEffect(() => {
+    checkDatabaseConnection().then((res) => {
+      if (res.success) {
+        console.log('Firebase Firestore connection verified:', res.message);
+        firestoreSync.deleteAccountByEmail('almekhlafiraghad2@gmail.com').then((res) => {
+          if (res.deletedCount > 0) {
+            console.log(`Successfully purged ${res.deletedCount} records for almekhlafiraghad2@gmail.com from Firestore`);
+          }
+        }).catch(console.error);
+      } else {
+        console.warn('Firebase Firestore initial connection test:', res.message);
+      }
+    }).catch(err => {
+      console.warn('Firestore connection check error:', err);
+      setIsFirestoreConnected(false);
+    });
+
+    // Purge target email from local state
+    setPosClients(prev => prev.filter(p => p.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com'));
+    setSuppliers(prev => prev.filter(s => s.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com').map(s => ({
+      ...s,
+      employees: s.employees ? s.employees.filter(e => e.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com') : []
+    })));
+  }, []);
+
+  const isRegisteringRef = React.useRef(false);
+  const suppliersRef = React.useRef(suppliers);
+  suppliersRef.current = suppliers;
+  const currentPosIdRef = React.useRef(currentPosId);
+  currentPosIdRef.current = currentPosId;
+  const currentSupplierIdRef = React.useRef(supplier?.id);
+  currentSupplierIdRef.current = supplier?.id;
+
+  // Listen to Firebase Auth state (registered once on mount)
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      // Prevent auto-authenticating during account registration
+      if (isRegisteringRef.current) {
+        return;
+      }
+
+      if (fbUser) {
+        const cleanEmail = (fbUser.email || '').trim().toLowerCase();
+        if (cleanEmail === 'almekhlafiraghad2@gmail.com') {
+          fbSignOut(auth).catch(console.error);
+          setCurrentUser(null);
+          return;
+        }
+        let userRole: UserRole = 'pos_client';
+
+        // Check if supplier or admin or client
+        const matchedSup = suppliersRef.current.find(s => s.email?.toLowerCase() === cleanEmail);
+        if (cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin')) {
+          userRole = 'super_admin';
+          setActiveNavTab('overview');
+        } else if (matchedSup || cleanEmail.includes('supplier')) {
+          userRole = 'supplier';
+          if (matchedSup) setCurrentSupplierId(matchedSup.id);
+          setActiveNavTab('catalogs');
+        } else {
+          userRole = 'pos_client';
+          setActiveNavTab('store');
+        }
+
+        const userObj: AuthUser = {
+          id: fbUser.uid,
+          email: cleanEmail,
+          name: fbUser.displayName || 'مستخدم فايربيس',
+          role: userRole,
+          phone: fbUser.phoneNumber || undefined,
+          associatedId: userRole === 'supplier' ? (matchedSup?.id || currentSupplierIdRef.current || 'sup-jamal-01') : currentPosIdRef.current
+        };
+        setCurrentUser(userObj);
+        setRole(userRole);
+      } else {
+        // Preserve OTP / employee sessions that do not use Firebase Auth currentUser
+        setCurrentUser(prev => {
+          if (prev && (prev.id.startsWith('usr-') || prev.id.startsWith('emp-'))) {
+            return prev;
+          }
+          return null;
+        });
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Real-time synchronization from Firestore
+  useEffect(() => {
+    if (!isFirestoreConnected) return;
+
+    // 1. Orders live sync
+    const unsubOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
+      if (!snapshot.empty) {
+        const remoteOrders: Order[] = [];
+        snapshot.forEach(docSnap => {
+          remoteOrders.push(docSnap.data() as Order);
+        });
+        remoteOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        setOrders(remoteOrders);
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'orders');
+    });
+
+    // 2. Deposit Requests & Loans live sync
+    const unsubDeposits = onSnapshot(collection(db, 'depositRequests'), (snapshot) => {
+      if (!snapshot.empty) {
+        const remoteDeps: DepositRequest[] = [];
+        snapshot.forEach(docSnap => {
+          remoteDeps.push(docSnap.data() as DepositRequest);
+        });
+        remoteDeps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        setDepositRequests(remoteDeps);
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'depositRequests');
+    });
+
+    // 3. POS Clients live sync (Deduplicated by ID)
+    const unsubClients = onSnapshot(collection(db, 'posClients'), (snapshot) => {
+      if (!snapshot.empty) {
+        const clientMap = new Map<string, POSClient>();
+        snapshot.forEach(docSnap => {
+          const client = docSnap.data() as POSClient;
+          if (client && client.id) {
+            clientMap.set(client.id, client);
+          }
+        });
+        setPosClients(Array.from(clientMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'posClients');
+    });
+
+    // 4. Suppliers live sync (Deduplicated by ID)
+    const unsubSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
+      if (!snapshot.empty) {
+        const supMap = new Map<string, Supplier>();
+        snapshot.forEach(docSnap => {
+          const sup = docSnap.data() as Supplier;
+          if (sup && sup.id) {
+            supMap.set(sup.id, sup);
+          }
+        });
+        setSuppliers(Array.from(supMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'suppliers');
+    });
+
+    // 5. Loan Repayment Requests live sync
+    const unsubLoanRepayments = onSnapshot(collection(db, 'loanRepaymentRequests'), (snapshot) => {
+      if (!snapshot.empty) {
+        const remoteReqs: LoanRepaymentRequest[] = [];
+        snapshot.forEach(docSnap => {
+          remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
+        });
+        remoteReqs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        setLoanRepaymentRequests(remoteReqs);
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'loanRepaymentRequests');
+    });
+
+    // 6. Supplier Bank Accounts live sync
+    const unsubBankAccounts = onSnapshot(collection(db, 'supplierBankAccounts'), (snapshot) => {
+      if (!snapshot.empty) {
+        const accMap = new Map<string, SupplierBankAccount>();
+        snapshot.forEach(docSnap => {
+          const acc = docSnap.data() as SupplierBankAccount;
+          if (acc && acc.id) {
+            accMap.set(acc.id, acc);
+          }
+        });
+        setSupplierBankAccounts(Array.from(accMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'supplierBankAccounts');
+    });
+
+    // 7. Catalogs live sync
+    const unsubCatalogs = onSnapshot(collection(db, 'catalogs'), (snapshot) => {
+      if (!snapshot.empty) {
+        const catMap = new Map<string, Catalog>();
+        snapshot.forEach(docSnap => {
+          const cat = docSnap.data() as Catalog;
+          if (cat && cat.id) {
+            catMap.set(cat.id, cat);
+          }
+        });
+        setCatalogs(Array.from(catMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'catalogs');
+    });
+
+    // 8. Services live sync
+    const unsubServices = onSnapshot(collection(db, 'services'), (snapshot) => {
+      if (!snapshot.empty) {
+        const srvMap = new Map<string, DigitalService>();
+        snapshot.forEach(docSnap => {
+          const srv = docSnap.data() as DigitalService;
+          if (srv && srv.id) {
+            srvMap.set(srv.id, srv);
+          }
+        });
+        setServices(Array.from(srvMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'services');
+    });
+
+    // 9. Platform Interface Settings live sync
+    const unsubPlatformSettings = onSnapshot(doc(db, 'system', 'platformSettings'), (docSnap) => {
+      if (docSnap.exists()) {
+        setPlatformSettings(mergePlatformSettings(docSnap.data() as Partial<PlatformInterfaceSettings>));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'system/platformSettings');
+    });
+
+    return () => {
+      unsubOrders();
+      unsubDeposits();
+      unsubClients();
+      unsubSuppliers();
+      unsubLoanRepayments();
+      unsubBankAccounts();
+      unsubCatalogs();
+      unsubServices();
+      unsubPlatformSettings();
+    };
+  }, [isFirestoreConnected]);
+
+  // Sync to local storage
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('digipos_auth_user', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('digipos_auth_user');
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    localStorage.setItem('digipos_clients_v2', JSON.stringify(posClients));
+  }, [posClients]);
+  useEffect(() => {
+    localStorage.setItem('digipos_suppliers_v2', JSON.stringify(suppliers));
+  }, [suppliers]);
+  useEffect(() => {
+    localStorage.setItem('digipos_admin_v2', JSON.stringify(superAdmin));
+  }, [superAdmin]);
+  useEffect(() => {
+    localStorage.setItem('digipos_platform_settings_v1', JSON.stringify(platformSettings));
+  }, [platformSettings]);
+  useEffect(() => {
+    localStorage.setItem('digipos_catalogs_v2', JSON.stringify(catalogs));
+  }, [catalogs]);
+  useEffect(() => {
+    localStorage.setItem('digipos_services_v2', JSON.stringify(services));
+  }, [services]);
+  useEffect(() => {
+    localStorage.setItem('digipos_deposits_v2', JSON.stringify(depositRequests));
+  }, [depositRequests]);
+  useEffect(() => {
+    localStorage.setItem('digipos_loan_repayments_v1', JSON.stringify(loanRepaymentRequests));
+  }, [loanRepaymentRequests]);
+  useEffect(() => {
+    localStorage.setItem('digipos_supplier_bank_accounts_v1', JSON.stringify(supplierBankAccounts));
+  }, [supplierBankAccounts]);
+  useEffect(() => {
+    localStorage.setItem('digipos_orders_v2', JSON.stringify(orders));
+  }, [orders]);
+  useEffect(() => {
+    localStorage.setItem('digipos_accounting_v2', JSON.stringify(accountingEntries));
+  }, [accountingEntries]);
+  useEffect(() => {
+    localStorage.setItem('digipos_admin_accounting_v2', JSON.stringify(adminAccountingEntries));
+  }, [adminAccountingEntries]);
+  useEffect(() => {
+    localStorage.setItem('digipos_invites_v2', JSON.stringify(inviteLinks));
+  }, [inviteLinks]);
+
+  // Google Login via Firebase Popup
+  const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    const conn = await testConnection();
+    if (!conn.success) {
+      setIsFirestoreConnected(false);
+      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
+      showToast({
+        type: 'error',
+        title: 'فشل الاتصال بقاعدة البيانات',
+        description: `تعذر إتمام تسجيل الدخول عبر Google لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
+      });
+      return { success: false, error: errMsg };
+    }
+    setIsFirestoreConnected(true);
+    try {
+      const res = await signInWithPopup(auth, googleProvider);
+      const fbUser = res.user;
+      const cleanEmail = (fbUser.email || '').toLowerCase();
+      const displayName = fbUser.displayName || 'مستخدم Google';
+
+      let userRole: UserRole = 'pos_client';
+      let userName = displayName;
+      let associatedId = '';
+
+      const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
+      const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
+
+      let matchedEmployeeSupplier: Supplier | undefined;
+      let matchedEmployeeName = '';
+      for (const sup of suppliers) {
+        if (sup.employees && sup.employees.some(e => e.email?.toLowerCase() === cleanEmail)) {
+          matchedEmployeeSupplier = sup;
+          const emp = sup.employees.find(e => e.email?.toLowerCase() === cleanEmail);
+          if (emp) matchedEmployeeName = emp.name;
+          break;
+        }
+      }
+
+      if (matchedSup) {
+        userRole = 'supplier';
+        userName = matchedSup.name;
+        associatedId = matchedSup.id;
+        setCurrentSupplierId(matchedSup.id);
+        setIsSupplierSelectionRequired(false);
+        setActiveNavTab('catalogs');
+      } else if (matchedEmployeeSupplier) {
+        userRole = 'supplier';
+        userName = `${matchedEmployeeName} (موظف مكتب)`;
+        associatedId = matchedEmployeeSupplier.id;
+        setCurrentSupplierId(matchedEmployeeSupplier.id);
+        setIsSupplierSelectionRequired(false);
+        setActiveNavTab('catalogs');
+      } else if (isSuperAdminEmail) {
+        userRole = 'super_admin';
+        userName = superAdmin.name || displayName;
+        associatedId = 'admin';
+        setIsSupplierSelectionRequired(false);
+        setActiveNavTab('overview');
+      } else {
+        userRole = 'pos_client';
+        setActiveNavTab('store');
+        const matchingPosRecords = posClients.filter(p => p.email?.toLowerCase() === cleanEmail);
+        if (matchingPosRecords.length > 0) {
+          userName = matchingPosRecords[0].ownerName;
+          associatedId = matchingPosRecords[0].id;
+
+          const registeredSupIds = Array.from(new Set(matchingPosRecords.map(p => p.supplierId)));
+          const matchedSuppliers = suppliers.filter(s => registeredSupIds.includes(s.id));
+
+          if (matchedSuppliers.length === 1) {
+            setCurrentSupplierId(matchedSuppliers[0].id);
+            const clientRecord = matchingPosRecords.find(p => p.supplierId === matchedSuppliers[0].id) || matchingPosRecords[0];
+            setCurrentPosId(clientRecord.id);
+            setIsSupplierSelectionRequired(false);
+          } else {
+            setIsSupplierSelectionRequired(true);
+            setCurrentSupplierId(matchedSuppliers[0]?.id || suppliers[0].id);
+            setCurrentPosId(matchingPosRecords[0].id);
+          }
+        } else {
+          // Auto create client record in POS clients
+          const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
+          const newPos: POSClient = {
+            id: `pos-fb-${fbUser.uid.slice(0, 8)}`,
+            posCode: newPosCode,
+            tradeName: `متجر ${displayName}`,
+            ownerName: displayName,
+            phone: fbUser.phoneNumber || '+966 55 000 0000',
+            email: cleanEmail,
+            country: 'المملكة العربية السعودية',
+            city: 'الرياض',
+            supplierId: supplier.id,
+            tier: 'regular',
+            walletBalance: 0,
+            totalSpent: 0,
+            ordersCount: 0,
+            createdAt: new Date().toISOString().substring(0, 10),
+            qrCodeValue: `DIGIPOS:${newPosCode}`,
+            logoUrl: fbUser.photoURL || undefined
+          };
+          setPosClients(prev => [newPos, ...prev.filter(p => p.id !== newPos.id)]);
+          associatedId = newPos.id;
+          setCurrentPosId(newPos.id);
+          setIsSupplierSelectionRequired(false);
+          firestoreSync.savePosClient(newPos).catch(console.error);
+        }
+      }
+
+      const authUser: AuthUser = {
+        id: fbUser.uid,
+        email: cleanEmail,
+        name: userName,
+        role: userRole,
+        phone: fbUser.phoneNumber || undefined,
+        associatedId
+      };
+
+      setCurrentUser(authUser);
+      setRole(userRole);
+      firestoreSync.saveUser(authUser).catch(console.error);
+
+      // Auto-sync all records to Firestore so collections appear immediately in the Firebase console
+      setTimeout(() => {
+        syncAllToFirestore().catch(console.error);
+      }, 500);
+
+      if (userRole !== 'pos_client') {
+        triggerConfetti();
+      }
+      showToast({
+        type: 'success',
+        title: 'تم تسجيل الدخول عبر Google ومزامنة السحابة',
+        description: `مرحباً بك ${userName}. تم ربط ومزامنة كافة البيانات مع قاعدة بيانات Firestore بنجاح.`
+      });
+
+      return { success: true };
+    } catch (err: unknown) {
+      console.error('Google Sign-in failed:', err);
+      const msg = err instanceof Error ? err.message : 'تعذر تسجيل الدخول عبر Google';
+      showToast({
+        type: 'error',
+        title: 'فشل تسجيل الدخول',
+        description: msg
+      });
+      return { success: false, error: msg };
+    }
+  };
+
+  // Sync / Seed all local & mock state to Firebase Firestore
+  const syncAllToFirestore = async (): Promise<void> => {
+    setIsSyncingWithFirestore(true);
+    try {
+      const res = await firestoreSync.seedInitialDataToFirestore({
+        posClients,
+        suppliers,
+        superAdmin,
+        catalogs,
+        services,
+        orders,
+        depositRequests,
+        loanRepaymentRequests,
+        supplierBankAccounts,
+        accountingEntries,
+        adminAccountingEntries,
+        inviteLinks
+      });
+
+      if (res.success) {
+        setIsFirestoreConnected(true);
+        triggerConfetti();
+        showToast({
+          type: 'success',
+          title: 'تمت مزامنة كافة البيانات مع فايربيس بنجاح!',
+          description: 'تم قيد وتوثيق الطلبات، والمحافظ، والعملاء، والسلف، والعمليات المالية في قاعدة بيانات Firestore السحابية.'
+        });
+      } else {
+        showToast({
+          type: 'error',
+          title: 'تعذرت المزامنة مع فايربيس',
+          description: res.error || 'حدث خطأ أثناء كتابة البيانات إلى Firestore'
+        });
+      }
+    } finally {
+      setIsSyncingWithFirestore(false);
+    }
+  };
+
+  // Clear local storage and Firestore collections for users, suppliers, and posClients
+  const clearUsersSuppliersAndClientsData = async (): Promise<void> => {
+    setIsSyncingWithFirestore(true);
+    try {
+      // 1. Purge LocalStorage
+      localStorage.removeItem('digipos_clients_v2');
+      localStorage.removeItem('digipos_suppliers_v2');
+      localStorage.removeItem('digipos_auth_user');
+
+      // 2. Clear state
+      setPosClients([]);
+      setSuppliers([]);
+      setCurrentUser(null);
+
+      // 3. Clear Firestore collections if connected
+      const conn = await testConnection();
+      if (conn.success) {
+        const res = await firestoreSync.clearUsersSuppliersAndClients();
+        triggerConfetti();
+        showToast({
+          type: 'success',
+          title: 'تم إفراغ البيانات المحلية والسحابية بنجاح!',
+          description: `تم إفراغ ومسح سجلات مجموعات users, suppliers, posClients (${res.usersCleared} مستخدم، ${res.suppliersCleared} مورد، ${res.clientsCleared} عميل).`
+        });
+      } else {
+        showToast({
+          type: 'success',
+          title: 'تم إفراغ التخزين المحلي بنجاح',
+          description: 'تم مسح وحذف سجلات العميل والمورد والمستخدمين من التخزين المحلي.'
+        });
+      }
+    } catch (err: unknown) {
+      console.error('Failed to clear data:', err);
+      showToast({
+        type: 'error',
+        title: 'تعذر إفراغ البيانات',
+        description: err instanceof Error ? err.message : String(err)
+      });
+    } finally {
+      setIsSyncingWithFirestore(false);
+    }
+  };
+
+  // Auth Operations
+  const sendLoginOtp = async (email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return { success: false, error: 'يرجى إدخال البريد الإلكتروني أولاً' };
+    }
+
+    // Always verify database connectivity before sending OTP
+    const conn = await testConnection();
+    if (!conn.success) {
+      setIsFirestoreConnected(false);
+      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
+      showToast({
+        type: 'error',
+        title: 'فشل الاتصال بقاعدة البيانات',
+        description: `تعذر إرسال رمز التحقق لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
+      });
+      return { success: false, error: errMsg };
+    }
+    setIsFirestoreConnected(true);
+
+    // Check if there is an unexpired OTP
+    const existing = activeOtps[cleanEmail];
+    const now = Date.now();
+    if (existing && existing.expiresAt > now) {
+      const remainingSec = Math.ceil((existing.expiresAt - now) / 1000);
+      return { 
+        success: true, 
+        code: existing.code, 
+        remainingSeconds: remainingSec 
+      };
+    }
+
+    // Generate 6-digit random code
+    const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = now + (2 * 60 * 1000); // 2 minutes exact validity
+
+    setActiveOtps(prev => ({
+      ...prev,
+      [cleanEmail]: {
+        code: generatedCode,
+        expiresAt
+      }
+    }));
+
+    showToast({
+      type: 'info',
+      title: 'تم الاتصال بالقاعدة وإرسال رمز التحقق (OTP)',
+      description: `تم التحقق من قاعدة البيانات بنجاح وإرسال رمز التحقق: ${generatedCode} (صالح لمدة دقيقتين فقط)`
+    });
+
+    return { 
+      success: true, 
+      code: generatedCode, 
+      remainingSeconds: 120 
+    };
+  };
+
+  const verifyLoginOtpAndLogin = async (email: string, password: string, otpCode: string) => {
+    // 1. Mandatory Database Connection Verification
+    const conn = await testConnection();
+    if (!conn.success) {
+      setIsFirestoreConnected(false);
+      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
+      showToast({
+        type: 'error',
+        title: 'فشل الاتصال بقاعدة البيانات',
+        description: `تعذر إتمام عملية تسجيل الدخول لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
+      });
+      return { success: false, error: errMsg };
+    }
+    setIsFirestoreConnected(true);
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanOtp = otpCode.trim();
+
+    if (!cleanEmail || !password) {
+      showToast({ type: 'error', title: 'بيانات غير مكتملة', description: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+      return { success: false, error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' };
+    }
+
+    // 2. Verify OTP existence and expiration (2 minutes limit)
+    const storedOtp = activeOtps[cleanEmail];
+    const now = Date.now();
+
+    if (!storedOtp) {
+      showToast({ type: 'error', title: 'رمز غير موجود', description: 'يرجى طلب رمز تحقق أولاً عبر زر "إرسال الرمز"' });
+      return { success: false, error: 'يرجى طلب رمز تحقق أولاً عبر زر "إرسال الرمز"' };
+    }
+
+    if (now > storedOtp.expiresAt) {
+      showToast({ type: 'error', title: 'انتهت صلاحية الرمز', description: 'انتهت صلاحية رمز التحقق (مدة الصلاحية دقيقتين فقط). يرجى طلب رمز جديد.' });
+      return { success: false, error: 'انتهت صلاحية رمز التحقق (مدة الصلاحية دقيقتين فقط). يرجى طلب رمز جديد.' };
+    }
+
+    if (storedOtp.code !== cleanOtp) {
+      showToast({ type: 'error', title: 'رمز غير صحيح', description: 'رمز التحقق المدخل غير متطابق. تأكد من الرمز المرسل.' });
+      return { success: false, error: 'رمز التحقق المدخل غير متطابق. تأكد من الرمز المرسل.' };
+    }
+
+    // 3. Identify user role based on email or existing accounts
+    let userRole: UserRole = 'pos_client';
+    let userName = 'محمد العتيبي (نقطة البيع)';
+    let associatedId = 'pos-1';
+
+    const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
+    const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
+
+    // Check if any supplier has an employee with this email
+    let matchedEmployeeSupplier: Supplier | undefined;
+    let matchedEmployee: OfficeEmployee | undefined;
+    for (const sup of suppliers) {
+      if (sup.employees && sup.employees.length > 0) {
+        const emp = sup.employees.find(e => e.email?.toLowerCase().trim() === cleanEmail);
+        if (emp) {
+          matchedEmployeeSupplier = sup;
+          matchedEmployee = emp;
+          break;
+        }
+      }
+    }
+
+    if (matchedEmployee && matchedEmployeeSupplier) {
+      // 3.A: Strict Password Verification against the password set by the store manager
+      const configuredPassword = (matchedEmployee.password || '').trim();
+      const enteredPassword = password.trim();
+
+      if (!configuredPassword || configuredPassword !== enteredPassword) {
+        showToast({
+          type: 'error',
+          title: 'كلمة المرور غير صحيحة',
+          description: 'كلمة المرور المدخلة غير صحيحة! لا تتطابق مع كلمة المرور التي حددها مالك المتجر (المورد) لحساب هذا الموظف.'
+        });
+        return {
+          success: false,
+          error: 'كلمة المرور غير صحيحة. يرجى إدخال كلمة المرور التي أعدها مالك المتجر للموظف.'
+        };
+      }
+
+      // Password matches! Authenticate as employee in this supplier's store
+      userRole = 'employee';
+      userName = matchedEmployee.name;
+      associatedId = matchedEmployeeSupplier.id;
+      setCurrentSupplierId(matchedEmployeeSupplier.id);
+      setIsSupplierSelectionRequired(false);
+
+      // Direct employee to permitted section
+      if (matchedEmployee.permissions.canManageOrders) {
+        setActiveNavTab('pending_orders');
+      } else if (matchedEmployee.permissions.canManageCatalogs) {
+        setActiveNavTab('catalogs');
+      } else if (matchedEmployee.permissions.canReviewDeposits) {
+        setActiveNavTab('deposits');
+      } else if (matchedEmployee.permissions.canManageClients) {
+        setActiveNavTab('clients');
+      } else {
+        setActiveNavTab('catalogs');
+      }
+    } else {
+      // 3.B: Verify password for non-employee roles
+      let isPasswordValid = false;
+      const demoPasswords: Record<string, string> = {
+        'admin@digipos-platform.com': 'SuperAdminPass2026!',
+        'jamal.digital@supplier.sa': 'SupplierPass2026!',
+        'pos.alamal@digipos.sa': 'PosClientPass2026!'
+      };
+
+      if (demoPasswords[cleanEmail]) {
+        if (demoPasswords[cleanEmail] === password.trim()) {
+          isPasswordValid = true;
+        }
+      } else {
+        try {
+          await signInWithEmailAndPassword(auth, cleanEmail, password.trim());
+          isPasswordValid = true;
+        } catch (authErr: unknown) {
+          const fbErr = authErr as { code?: string; message?: string };
+          console.warn('Firebase Auth sign-in verification check:', fbErr?.code);
+          if (fbErr?.code === 'auth/wrong-password' || fbErr?.code === 'auth/invalid-credential') {
+            showToast({
+              type: 'error',
+              title: 'كلمة المرور غير صحيحة',
+              description: 'كلمة المرور المدخلة غير صحيحة. يرجى التأكد من كتابة كلمة المرور بالشكل السليم.'
+            });
+            return {
+              success: false,
+              error: 'كلمة المرور المدخلة غير صحيحة. يرجى إعادة إدخالها والمحاولة مجدداً.'
+            };
+          }
+          // If not in Firebase Auth, check if it's registered locally or valid length
+          const posExists = posClients.some(p => p.email?.toLowerCase() === cleanEmail);
+          const supExists = suppliers.some(s => s.email?.toLowerCase() === cleanEmail);
+          if (!posExists && !supExists && !isSuperAdminEmail) {
+            showToast({
+              type: 'error',
+              title: 'الحساب غير مسجل',
+              description: 'لم يتم العثور على حساب بهذا البريد في قاعدة البيانات. يمكنك إنشاء حساب جديد عبر تبويب "إنشاء حساب جديد".'
+            });
+            return {
+              success: false,
+              error: 'الحساب غير مسجل في قاعدة البيانات. يرجى إنشاء حساب جديد.'
+            };
+          }
+          if (password.trim().length >= 6) {
+            isPasswordValid = true;
+          }
+        }
+      }
+
+      if (!isPasswordValid) {
+        showToast({
+          type: 'error',
+          title: 'كلمة المرور غير صحيحة',
+          description: 'كلمة المرور المدخلة غير صحيحة. يرجى التأكد من صحة البيانات والمحاولة مجدداً.'
+        });
+        return {
+          success: false,
+          error: 'كلمة المرور المدخلة غير صحيحة. يرجى إعادة إدخالها.'
+        };
+      }
+
+      if (matchedSup) {
+        userRole = 'supplier';
+        userName = matchedSup.name;
+        associatedId = matchedSup.id;
+        setCurrentSupplierId(matchedSup.id);
+        setIsSupplierSelectionRequired(false);
+        setActiveNavTab('catalogs');
+      } else if (isSuperAdminEmail) {
+        userRole = 'super_admin';
+        userName = superAdmin.name;
+        associatedId = 'admin';
+        setIsSupplierSelectionRequired(false);
+        setActiveNavTab('overview');
+      } else {
+        userRole = 'pos_client';
+        setActiveNavTab('store');
+        setIsSupplierSelectionRequired(false);
+        const matchingPosRecords = posClients.filter(p => p.email?.toLowerCase() === cleanEmail);
+
+        if (matchingPosRecords.length > 0) {
+          userName = matchingPosRecords[0].ownerName;
+          associatedId = matchingPosRecords[0].id;
+
+          const registeredSupIds = Array.from(new Set(matchingPosRecords.map(p => p.supplierId)));
+          const matchedSuppliers = suppliers.filter(s => registeredSupIds.includes(s.id));
+
+          if (matchedSuppliers.length >= 1) {
+            setCurrentSupplierId(matchedSuppliers[0].id);
+            const clientRecord = matchingPosRecords.find(p => p.supplierId === matchedSuppliers[0].id) || matchingPosRecords[0];
+            setCurrentPosId(clientRecord.id);
+          }
+        } else {
+          const fallbackPos = posClients[0];
+          userName = fallbackPos.ownerName;
+          associatedId = fallbackPos.id;
+          setCurrentPosId(fallbackPos.id);
+        }
+      }
+    }
+
+    const authUser: AuthUser = {
+      id: matchedEmployee ? matchedEmployee.id : `usr-${Date.now().toString().slice(-6)}`,
+      email: cleanEmail,
+      name: userName,
+      role: userRole,
+      associatedId,
+      supplierId: matchedEmployeeSupplier ? matchedEmployeeSupplier.id : undefined,
+      employeeId: matchedEmployee ? matchedEmployee.id : undefined,
+      roleTitle: matchedEmployee ? matchedEmployee.roleTitle : undefined,
+      permissions: matchedEmployee ? matchedEmployee.permissions : undefined
+    };
+
+    // Clear used OTP (single-use constraint)
+    setActiveOtps(prev => {
+      const copy = { ...prev };
+      delete copy[cleanEmail];
+      return copy;
+    });
+
+    setIsSupplierSelectionRequired(false);
+    setCurrentUser(authUser);
+    setRole(userRole);
+    if (userRole !== 'pos_client') {
+      triggerConfetti();
+    }
+
+    const roleLabelAr = userRole === 'employee' 
+      ? `موظف في متجر ${matchedEmployeeSupplier?.name || 'المورد'}` 
+      : userRole === 'supplier' 
+      ? 'المورد' 
+      : userRole === 'super_admin' 
+      ? 'مدير التطبيق' 
+      : 'العميل (نقطة البيع)';
+
+    showToast({
+      type: 'success',
+      title: 'تم الاتصال بقاعدة البيانات وتسجيل الدخول بنجاح!',
+      description: userRole === 'employee'
+        ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (موظف في متجر ${matchedEmployeeSupplier?.name}). تم نقلك لواجهة المورد وفق صلاحياتك.`
+        : `تم التحقق بنجاح من قاعدة البيانات ومزامنة الحساب. مرحباً بك يا ${userName}، تم الانتقال فوراً إلى واجهة ${roleLabelAr}.`
+    });
+
+    return { success: true };
+  };
+
+  const registerAccount = async (params: {
+    name: string;
+    email: string;
+    password: string;
+    role: UserRole;
+    phone?: string;
+    tradeName?: string;
+    supplierId?: string;
+  }) => {
+    const conn = await testConnection();
+    if (!conn.success) {
+      setIsFirestoreConnected(false);
+      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
+      showToast({
+        type: 'error',
+        title: 'فشل الاتصال بقاعدة البيانات',
+        description: `تعذر إنشاء الحساب لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
+      });
+      return { success: false, error: errMsg };
+    }
+    setIsFirestoreConnected(true);
+    const { name, email, role: chosenRole, phone, tradeName, supplierId } = params;
+    const cleanEmail = email.trim().toLowerCase();
+
+    isRegisteringRef.current = true;
+    try {
+      // 1. Create User in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, cleanEmail, params.password);
+      const fbUser = userCredential.user;
+
+      let associatedId = '';
+      let newPos: POSClient | undefined;
+      let newSup: Supplier | undefined;
+
+      // 2. Prepare entity and save to Firestore
+      if (chosenRole === 'pos_client') {
+        const targetSupplierId = supplierId?.trim() || supplier.id;
+        const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
+        newPos = {
+          id: `pos-${fbUser.uid}`,
+          posCode: newPosCode,
+          tradeName: tradeName || `متجر ${name}`,
+          ownerName: name,
+          phone: phone || '+966 55 000 0000',
+          country: 'المملكة العربية السعودية',
+          city: 'الرياض',
+          supplierId: targetSupplierId,
+          tier: 'regular',
+          walletBalance: 0,
+          totalSpent: 0,
+          ordersCount: 0,
+          createdAt: new Date().toISOString().substring(0, 10),
+          qrCodeValue: `DIGIPOS:${newPosCode}`
+        };
+        associatedId = newPos.id;
+        await firestoreSync.savePosClient(newPos);
+        setPosClients(prev => [newPos!, ...prev.filter(p => p.id !== newPos!.id)]);
+      } else if (chosenRole === 'supplier') {
+        newSup = {
+          id: `sup-${fbUser.uid}`,
+          name,
+          storeName: tradeName || `مؤسسة ${name} للخدمات`,
+          phone: phone || '+966 50 000 0000',
+          email: cleanEmail,
+          feePercentage: 1.0,
+          fixedFeeAmount: 0,
+          feeType: 'percentage',
+          walletBalance: 0,
+          bankAccountDetails: {
+            bankName: 'مصرف الراجحي',
+            accountHolder: name,
+            iban: 'SA4480000123608010123456',
+            accountNumber: '123608010123456'
+          },
+          createdAt: new Date().toISOString().substring(0, 10)
+        };
+        associatedId = newSup.id;
+        await firestoreSync.saveSupplier(newSup);
+        setSuppliers(prev => [newSup!, ...prev.filter(s => s.id !== newSup!.id)]);
+      }
+
+      // 3. Save User record
+      const authUser: AuthUser = {
+        id: fbUser.uid,
+        email: cleanEmail,
+        name,
+        role: chosenRole,
+        phone,
+        associatedId
+      };
+      await firestoreSync.saveUser(authUser);
+
+      // Force sign-out and clear state so the user MUST log in manually
+      await fbSignOut(auth);
+      setCurrentUser(null);
+      localStorage.removeItem('digipos_auth_user');
+
+      showToast({
+        type: 'success',
+        title: 'تم إنشاء وتوثيق الحساب بنجاح!',
+        description: `أهلاً بك يا ${name}، تم إنشاء حسابك وحفظه في قاعدة البيانات. يرجى تسجيل الدخول.`
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('Registration failed:', err);
+      let userFriendlyMsg = err?.message || 'حدث خطأ أثناء إنشاء الحساب';
+      if (err?.code === 'auth/email-already-in-use' || userFriendlyMsg.includes('email-already-in-use')) {
+        userFriendlyMsg = 'هذا البريد الإلكتروني مسجل بالفعل لدى المنصة! يمكنك تسجيل الدخول بدلاً من إنشاء حساب جديد.';
+        showToast({
+          type: 'error',
+          title: 'البريد الإلكتروني مسجل بالفعل',
+          description: 'هذا البريد الإلكتروني لديه حساب مفعل في المنصة، يرجى الانتقال لوجهة تسجيل الدخول كعميل أو مورد.'
+        });
+      } else {
+        showToast({
+          type: 'error',
+          title: 'فشل إنشاء الحساب',
+          description: userFriendlyMsg
+        });
+      }
+      return { success: false, error: userFriendlyMsg };
+    } finally {
+      isRegisteringRef.current = false;
+    }
+  };
+
+  // Built-in Firebase Auth Password Reset Flow
+  const requestPasswordReset = async (email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      return {
+        success: false,
+        message: 'يرجى إدخال البريد الإلكتروني أولاً.'
+      };
+    }
+
+    const redirectUrl =
+      typeof window !== 'undefined' ? `${window.location.origin}/?mode=resetPassword` : undefined;
+
+    try {
+      if (redirectUrl) {
+        await sendPasswordResetEmail(auth, cleanEmail, {
+          url: redirectUrl,
+          handleCodeInApp: true
+        });
+      } else {
+        await sendPasswordResetEmail(auth, cleanEmail);
+      }
+
+      const successMsg =
+        'تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني بنجاح. يرجى فحص صندوق الوارد أو الرسائل غير المرغوب فيها.';
+      showToast({
+        type: 'success',
+        title: 'تم إرسال رابط إعادة التعيين',
+        description: successMsg
+      });
+      return {
+        success: true,
+        message: successMsg
+      };
+    } catch (error: unknown) {
+      const mapped = mapPasswordResetErrorAr(error, 'send');
+      showToast({
+        type: 'error',
+        title: 'تعذر إرسال رابط إعادة التعيين',
+        description: mapped.message
+      });
+      return {
+        success: false,
+        message: mapped.message
+      };
+    }
+  };
+
+  const verifyResetCode = async (oobCode: string) => {
+    const cleanCode = oobCode.trim();
+    if (!cleanCode) {
+      return {
+        valid: false,
+        error: 'رابط إعادة تعيين كلمة المرور غير صالح أو منتهي الصلاحية.'
+      };
+    }
+    try {
+      const email = await verifyPasswordResetCode(auth, cleanCode);
+      return { valid: true, email };
+    } catch (error: unknown) {
+      const mapped = mapPasswordResetErrorAr(error, 'verify_code');
+      return { valid: false, error: mapped.message };
+    }
+  };
+
+  const completePasswordReset = async (
+    oobCode: string,
+    newPassword: string,
+    confirmPassword: string
+  ) => {
+    const validation = validateResetPasswordInput(newPassword, confirmPassword);
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
+    }
+
+    try {
+      await confirmPasswordReset(auth, oobCode.trim(), newPassword);
+      showToast({
+        type: 'success',
+        title: 'تم تغيير كلمة المرور بنجاح',
+        description: 'يمكنك الآن تسجيل الدخول باستخدام كلمة المرور الجديدة.'
+      });
+      return { success: true };
+    } catch (error: unknown) {
+      const mapped = mapPasswordResetErrorAr(error, 'confirm');
+      return {
+        success: false,
+        error: mapped.message,
+        isExpiredOrInvalidCode: mapped.isExpiredOrInvalidCode
+      };
+    }
+  };
+
+  const logout = () => {
+    fbSignOut(auth).catch(console.error);
+    setCurrentUser(null);
+    setIsSupplierSelectionRequired(false);
+    showToast({
+      type: 'info',
+      title: 'تم تسجيل الخروج',
+      description: 'نراك قريباً في منصة DNexusD'
+    });
+  };
+
+  const currentPos = posClients.find(p => p.id === currentPosId) || posClients[0];
+
+  const currentPosSupplier = React.useMemo(() => {
+    return suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
+  }, [suppliers, currentPos?.supplierId, supplier]);
+
+  const supplierNotifications = React.useMemo(() => {
+    return notifications.filter(
+      n =>
+        (n.targetRole === 'supplier' || (!n.targetRole && !n.posId)) &&
+        (!n.supplierId || n.supplierId === supplier?.id)
+    );
+  }, [notifications, supplier?.id]);
+
+  const clientNotifications = React.useMemo(() => {
+    return notifications.filter(
+      n =>
+        (n.targetRole === 'pos' || (!n.targetRole && n.posId)) &&
+        (!n.posId || n.posId === currentPos?.id)
+    );
+  }, [notifications, currentPos?.id]);
+
+  const unreadSupplierNotificationsCount = React.useMemo(() => {
+    return supplierNotifications.filter(n => !n.isRead).length;
+  }, [supplierNotifications]);
+
+  const unreadPosNotificationsCount = React.useMemo(() => {
+    return clientNotifications.filter(n => !n.isRead).length;
+  }, [clientNotifications]);
+
+  const unreadNotificationsCount = React.useMemo(() => {
+    return role === 'supplier'
+      ? unreadSupplierNotificationsCount
+      : unreadPosNotificationsCount;
+  }, [role, unreadSupplierNotificationsCount, unreadPosNotificationsCount]);
+
+  const triggerConfetti = () => {
+    try {
+      confetti({
+        particleCount: 75,
+        spread: 60,
+        origin: { y: 0.7 }
+      });
+    } catch {
+      // safe fallback
+    }
+  };
+
+  const showToast = (toast: Omit<ToastMessage, 'id'>) => {
+    const id = Date.now().toString() + Math.random().toString(36).substring(2, 5);
+    setToasts(prev => [...prev, { ...toast, id }]);
+    setTimeout(() => {
+      removeToast(id);
+    }, 4500);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
+
+  // Fee calculation supporting percentage, fixed amount, or both
+  const calculateFee = (amount: number, targetSup?: Supplier) => {
+    const activeSup = targetSup || supplier;
+    return calculateBaseSupplierFee(amount, activeSup);
+  };
+
+  // Execute purchase
+  const executePurchase = async (params: {
+    service: DigitalService;
+    pkg: ServicePackage;
+    deliveryMethod: DeliveryMethod;
+    deliveryDetails: {
+      playerId?: string;
+      playerNickname?: string;
+      accountEmail?: string;
+      accountPassword?: string;
+      verificationCodeEntered?: string;
+      voucherCode?: string;
+    };
+    paymentMethod: 'wallet' | 'visa';
+    customerName?: string;
+    customerPhone?: string;
+    resalePrice?: number;
+  }) => {
+    const { service, pkg, deliveryMethod, deliveryDetails, paymentMethod, customerName, customerPhone, resalePrice } = params;
+    
+    // 1. Resolve catalog and compute pricing (including 0.5 SAR zero-price floor & Free Gifts Catalog admin-fee-% rule)
+    const serviceCatalog = catalogs.find(c => c.id === service.catalogId);
+    const activeOrderSupplier = currentPosSupplier || supplier;
+    const pricing = calculateServicePurchasePricing({
+      pkg,
+      clientTier: currentPos.tier,
+      clientCanViewGifts: Boolean(currentPos.canViewGifts),
+      catalog: serviceCatalog,
+      supplier: activeOrderSupplier,
+      superAdmin
+    });
+
+    const unitPrice = pricing.unitPrice;
+    const feeAmount = pricing.feeAmount;
+    const totalDeduction = pricing.totalAmount;
+
+    // 3. Balance verification if paying via wallet
+    if (paymentMethod === 'wallet') {
+      if (currentPos.walletBalance < totalDeduction) {
+        showToast({
+          type: 'error',
+          title: 'الرصيد غير كافٍ',
+          description: `الرصيد غير كافٍ! رصيد محفظتك (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام العملية (${totalDeduction.toFixed(2)} ر.س شامل رسوم المنصة). يرجى إعادة شحن المحفظة.`
+        });
+        return { success: false, error: 'insufficient_balance' };
+      }
+    }
+
+    // 4. Handle voucher stock code assignment
+    let assignedVoucher = deliveryDetails.voucherCode;
+    if (deliveryMethod === 'voucher_code' && !assignedVoucher) {
+      if (pkg.vouchers && pkg.vouchers.length > 0) {
+        assignedVoucher = pkg.vouchers[0];
+        setServices(prev => prev.map(s => {
+          if (s.id !== service.id) return s;
+          return {
+            ...s,
+            packages: s.packages.map(p => {
+              if (p.id !== pkg.id) return p;
+              return {
+                ...p,
+                vouchers: (p.vouchers || []).slice(1),
+                availableStock: Math.max(0, (p.availableStock || 1) - 1)
+              };
+            })
+          };
+        }));
+      } else {
+        assignedVoucher = `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
+      }
+    }
+
+    const orderId = `ord-${Date.now().toString().slice(-6)}`;
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+
+    // If delivery is Player ID, dispatch order with the ID to the "الالمورد" (supplier) to complete via in-game charge
+    const initialStatus = deliveryMethod === 'player_id' 
+      ? 'pending_supplier' 
+      : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
+
+    const newOrder: Order = {
+      id: orderId,
+      date: formattedDate,
+      posId: currentPos.id,
+      posCode: currentPos.posCode,
+      posName: currentPos.tradeName,
+      supplierId: supplier.id,
+      serviceId: service.id,
+      serviceName: service.nameAr,
+      packageId: pkg.id,
+      packageName: pkg.name,
+      deliveryMethod,
+      deliveryDetails: {
+        ...deliveryDetails,
+        voucherCode: assignedVoucher,
+        inGameChargeStatus: deliveryMethod === 'player_id' ? 'waiting_charge' : undefined
+      },
+      costPrice: unitPrice,
+      salePriceToCustomer: resalePrice || totalDeduction * 1.15,
+      feeAmount,
+      totalDeducted: totalDeduction,
+      paymentMethod,
+      status: initialStatus,
+      customerName: customerName || 'عميل مباشر',
+      customerPhone: customerPhone || '',
+      supplierNotes: deliveryMethod === 'player_id' 
+        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId || ''}) مرسل للمُنَزِّل للشحن من داخل اللعبة`
+        : undefined
+    };
+
+    // Update balances
+    if (paymentMethod === 'wallet') {
+      setPosClients(prev => prev.map(p => {
+        if (p.id !== currentPos.id) return p;
+        return {
+          ...p,
+          walletBalance: parseFloat((p.walletBalance - totalDeduction).toFixed(2)),
+          totalSpent: parseFloat((p.totalSpent + unitPrice).toFixed(2)),
+          ordersCount: p.ordersCount + 1
+        };
+      }));
+    } else {
+      setPosClients(prev => prev.map(p => {
+        if (p.id !== currentPos.id) return p;
+        return {
+          ...p,
+          totalSpent: parseFloat((p.totalSpent + unitPrice).toFixed(2)),
+          ordersCount: p.ordersCount + 1
+        };
+      }));
+    }
+
+    // Add fee to Super Admin's wallet
+    setSuperAdmin(prev => ({
+      ...prev,
+      walletBalance: parseFloat((prev.walletBalance + feeAmount).toFixed(2))
+    }));
+
+    // Update Supplier revenue/balance
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplier.id) return s;
+      return {
+        ...s,
+        walletBalance: parseFloat((s.walletBalance + unitPrice).toFixed(2))
+      };
+    }));
+
+    // Add to Orders
+    setOrders(prev => [newOrder, ...prev]);
+
+    // Record Accounting Entries for POS client
+    const newAccountingEntries: AccountingEntry[] = [];
+    const balanceAfterPurchase = paymentMethod === 'wallet' 
+      ? parseFloat((currentPos.walletBalance - unitPrice).toFixed(2)) 
+      : currentPos.walletBalance;
+
+    const purchaseTag = pricing.isFreeGiftApplied
+      ? ` [هدية مجانية من كتالوج الهدايا المجانية - السعر الأصلي للرتبة: ${pricing.originalTierPrice.toFixed(2)} ر.س]`
+      : pricing.isZeroPriceFloorApplied
+      ? ` [قيمة صفرية من المورد - حد أدنى للعميل 0.50 ر.س]`
+      : '';
+
+    newAccountingEntries.push({
+      id: `acc-${Date.now()}-1`,
+      date: formattedDate,
+      type: 'purchase',
+      referenceId: orderId,
+      posId: currentPos.id,
+      supplierId: supplier.id,
+      description: (deliveryMethod === 'player_id'
+        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId}): ${service.nameAr} - ${pkg.name} (${currentPos.tier}) - أُرسل للمُنَزِّل للشحن من اللعبة`
+        : `شراء خدمة: ${service.nameAr} - ${pkg.name} (${currentPos.tier}) من المورد ${supplier.name}`) + purchaseTag,
+      debit: unitPrice,
+      credit: 0,
+      balanceAfter: balanceAfterPurchase,
+      serviceName: service.nameAr,
+      customerName: customerName || 'عميل مباشر'
+    });
+
+    if (paymentMethod === 'wallet' && feeAmount > 0) {
+      const balanceAfterFee = parseFloat((balanceAfterPurchase - feeAmount).toFixed(2));
+      newAccountingEntries.push({
+        id: `acc-${Date.now()}-2`,
+        date: formattedDate,
+        type: 'fee',
+        referenceId: orderId,
+        posId: currentPos.id,
+        supplierId: supplier.id,
+        description: pricing.isFreeGiftApplied
+          ? `رسوم تطبيق (${pricing.appFeePercentageApplied}% من السعر الأصلي لرتبة ${currentPos.tier}: ${pricing.originalTierPrice.toFixed(2)} ر.س) على هدية مجانية (${feeAmount.toFixed(2)} ر.س)`
+          : pricing.isZeroPriceFloorApplied
+          ? `رسوم الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س)`
+          : `رسوم منصة تطبيق على عملية الشراء (${feeAmount.toFixed(2)} ر.س)`,
+        debit: feeAmount,
+        credit: 0,
+        balanceAfter: balanceAfterFee
+      });
+    }
+
+    if (resalePrice && resalePrice > unitPrice) {
+      newAccountingEntries.push({
+        id: `acc-${Date.now()}-3`,
+        date: formattedDate,
+        type: 'sale',
+        referenceId: orderId,
+        posId: currentPos.id,
+        supplierId: supplier.id,
+        description: `بيع للزبون (${customerName || 'مباشر'}) بقيمة ${resalePrice.toFixed(2)} ر.س (هامش ربح: ${(resalePrice - unitPrice).toFixed(2)} ر.س)`,
+        debit: 0,
+        credit: resalePrice,
+        balanceAfter: balanceAfterPurchase,
+        serviceName: service.nameAr,
+        customerName: customerName || 'عميل مباشر'
+      });
+    }
+
+    setAccountingEntries(prev => [...newAccountingEntries, ...prev]);
+
+    // Record entry in Admin Accounting Statement for collected platform fee
+    if (feeAmount > 0) {
+      const adminBalAfter = parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2));
+      setAdminAccountingEntries(prev => [
+        {
+          id: `adm-acc-${Date.now()}-fee`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: orderId,
+          supplierId: supplier.id,
+          supplierName: `${supplier.name} (${supplier.storeName})`,
+          serviceId: service.id,
+          serviceName: service.nameAr,
+          posId: currentPos.id,
+          posCode: currentPos.posCode,
+          posName: currentPos.tradeName,
+          description: pricing.isFreeGiftApplied
+            ? `تحصيل رسوم هدية مجانية (${pricing.appFeePercentageApplied}% من ${pricing.originalTierPrice.toFixed(2)} ر.س = ${feeAmount.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+            : pricing.isZeroPriceFloorApplied
+            ? `تحصيل الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+            : `تحصيل رسوم منصة (${feeAmount.toFixed(2)} ر.س) على عملية شراء: ${service.nameAr} - ${pkg.name}`,
+          grossAmount: pricing.isFreeGiftApplied ? pricing.originalTierPrice : unitPrice,
+          feeAmount: feeAmount,
+          debit: 0,
+          credit: feeAmount,
+          balanceAfter: adminBalAfter,
+          notes: `تم الخصم من محفظة العميل (${currentPos.tradeName}) وتحويل الرسوم لمحفظة الإدارة`
+        },
+        ...prev
+      ]);
+    }
+
+    // Persist to Firebase Firestore
+    firestoreSync.saveOrder(newOrder).catch(console.error);
+    firestoreSync.savePosClient({
+      ...currentPos,
+      walletBalance: paymentMethod === 'wallet' ? parseFloat((currentPos.walletBalance - totalDeduction).toFixed(2)) : currentPos.walletBalance,
+      totalSpent: parseFloat((currentPos.totalSpent + unitPrice).toFixed(2)),
+      ordersCount: currentPos.ordersCount + 1
+    }).catch(console.error);
+    firestoreSync.saveSupplier({
+      ...supplier,
+      walletBalance: parseFloat((supplier.walletBalance + unitPrice).toFixed(2))
+    }).catch(console.error);
+    if (feeAmount > 0) {
+      firestoreSync.saveSuperAdmin({
+        ...superAdmin,
+        walletBalance: parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2))
+      }).catch(console.error);
+    }
+    for (const ent of newAccountingEntries) {
+      firestoreSync.saveAccountingEntry(ent).catch(console.error);
+    }
+
+    triggerConfetti();
+
+    // Notify the supplier of the new purchase / game top-up order
+    addNotification({
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      posId: currentPos.id,
+      posName: currentPos.tradeName,
+      posCode: currentPos.posCode,
+      targetRole: 'supplier',
+      title:
+        deliveryMethod === 'player_id'
+          ? `طلب شحن أيدي جديد باللعبة (${service.nameAr}) 🎮`
+          : deliveryMethod === 'account_login'
+          ? `طلب شحن عبر الحساب (${service.nameAr}) 🔐`
+          : `طلب شراء كود قسيمة جديد (${service.nameAr}) ⚡`,
+      message:
+        deliveryMethod === 'player_id'
+          ? `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن للأيدي (${deliveryDetails.playerId}) لباقة ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`
+          : deliveryMethod === 'account_login'
+          ? `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن حساب (${deliveryDetails.accountEmail || 'حساب العميل'}) لباقة ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`
+          : `قام العميل ${currentPos.tradeName} (${currentPos.posCode}) بشراء ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`,
+      type: 'order_status',
+      orderId,
+      amount: unitPrice,
+      actionTab:
+        deliveryMethod === 'player_id'
+          ? 'pending_orders'
+          : deliveryMethod === 'account_login'
+          ? 'account_orders'
+          : 'catalogs'
+    });
+
+    if (deliveryMethod === 'player_id') {
+      showToast({
+        type: 'info',
+        title: 'تم إرسال الطلب مع الأيدي إلى المورد',
+        description: `تم إرسال الأيدي (${deliveryDetails.playerId}) للمُنَزِّل بنجاح ليكمل الشحن من داخل اللعبة. سيتم إشعارك فور اكتمال الشحن.`
+      });
+    } else {
+      showToast({
+        type: 'success',
+        title: 'تمت العملية بنجاح!',
+        description: `تم شحن وتسليم ${service.nameAr} وخصم ${totalDeduction.toFixed(2)} ر.س (شامل الرسوم).`
+      });
+    }
+
+    return { 
+      success: true, 
+      orderId, 
+      voucherCode: assignedVoucher, 
+      isPendingSupplier: initialStatus === 'pending_supplier' 
+    };
+  };
+
+  // Transfer balance between POS clients via Code or QR
+  const executeBalanceTransfer = async (params: { targetPosCode: string; amount: number }) => {
+    const { targetPosCode, amount } = params;
+    const target = posClients.find(p => p.posCode.trim().toUpperCase() === targetPosCode.trim().toUpperCase());
+    
+    if (!target) {
+      showToast({
+        type: 'error',
+        title: 'المعرف أو رمز QR غير مسجل',
+        description: `لم يتم العثور على نقطة بيع بهذا المعرف (${targetPosCode}). تأكد من صيغة المعرف (مثال: RYD-10492).`
+      });
+      return { success: false, error: 'target_not_found' };
+    }
+
+    if (target.id === currentPos.id) {
+      showToast({
+        type: 'error',
+        title: 'عملية غير صالحة',
+        description: 'لا يمكنك تحويل رصيد إلى محفظتك الخاصة.'
+      });
+      return { success: false, error: 'self_transfer' };
+    }
+
+    const feeAmount = calculateFee(amount, supplier);
+    const totalDeducted = amount + feeAmount;
+
+    if (currentPos.walletBalance < totalDeducted) {
+      showToast({
+        type: 'error',
+        title: 'الرصيد غير كافٍ',
+        description: `الرصيد غير كافٍ! رصيدك الحالي (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي للتحويل مع رسوم المنصة (${totalDeducted.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
+      });
+      return { success: false, error: 'insufficient_balance' };
+    }
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const transferId = `trf-${Date.now().toString().slice(-6)}`;
+
+    // Deduct from sender, add to target
+    setPosClients(prev => prev.map(p => {
+      if (p.id === currentPos.id) {
+        return {
+          ...p,
+          walletBalance: parseFloat((p.walletBalance - totalDeducted).toFixed(2))
+        };
+      }
+      if (p.id === target.id) {
+        return {
+          ...p,
+          walletBalance: parseFloat((p.walletBalance + amount).toFixed(2))
+        };
+      }
+      return p;
+    }));
+
+    // Add fee to admin
+    setSuperAdmin(prev => ({
+      ...prev,
+      walletBalance: parseFloat((prev.walletBalance + feeAmount).toFixed(2))
+    }));
+
+    // Accounting entries for sender & receiver
+    setAccountingEntries(prev => [
+      {
+        id: `acc-${Date.now()}-trf-out`,
+        date: formattedDate,
+        type: 'transfer_out',
+        referenceId: transferId,
+        posId: currentPos.id,
+        supplierId: supplier.id,
+        description: `تحويل رصيد إلى نقطة البيع (${target.tradeName} - ${target.posCode}) عبر المعرف/QR`,
+        debit: amount,
+        credit: 0,
+        balanceAfter: parseFloat((currentPos.walletBalance - amount).toFixed(2))
+      },
+      {
+        id: `acc-${Date.now()}-trf-fee`,
+        date: formattedDate,
+        type: 'fee',
+        referenceId: transferId,
+        posId: currentPos.id,
+        supplierId: supplier.id,
+        description: `رسوم منصة تطبيق (${feeAmount.toFixed(2)} ر.س) على تحويل الرصيد`,
+        debit: feeAmount,
+        credit: 0,
+        balanceAfter: parseFloat((currentPos.walletBalance - totalDeducted).toFixed(2))
+      },
+      {
+        id: `acc-${Date.now()}-trf-in`,
+        date: formattedDate,
+        type: 'transfer_in',
+        referenceId: transferId,
+        posId: target.id,
+        supplierId: supplier.id,
+        description: `استلام تحويل رصيد من (${currentPos.tradeName} - ${currentPos.posCode})`,
+        debit: 0,
+        credit: amount,
+        balanceAfter: parseFloat((target.walletBalance + amount).toFixed(2))
+      },
+      ...prev
+    ]);
+
+    if (feeAmount > 0) {
+      const adminBalAfter = parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2));
+      setAdminAccountingEntries(prev => [
+        {
+          id: `adm-acc-${Date.now()}-trf`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: transferId,
+          supplierId: supplier.id,
+          supplierName: `${supplier.name} (${supplier.storeName})`,
+          posId: currentPos.id,
+          posCode: currentPos.posCode,
+          posName: currentPos.tradeName,
+          description: `تحصيل رسوم تحويل رصيد بين الوكلاء (${feeAmount.toFixed(2)} ر.س) من ${currentPos.posCode} إلى ${target.posCode}`,
+          grossAmount: amount,
+          feeAmount: feeAmount,
+          debit: 0,
+          credit: feeAmount,
+          balanceAfter: adminBalAfter,
+          notes: `تحويل بقيمة ${amount.toFixed(2)} ر.س بين الوكيلين`
+        },
+        ...prev
+      ]);
+    }
+
+    // Save balance transfer and updated balances in Firestore
+    firestoreSync.saveTransfer({
+      id: transferId,
+      date: formattedDate,
+      fromPosId: currentPos.id,
+      fromPosName: currentPos.tradeName,
+      fromPosCode: currentPos.posCode,
+      toPosCode: target.posCode,
+      toPosName: target.tradeName,
+      amount,
+      feeAmount,
+      totalDeducted,
+      status: 'completed'
+    }).catch(console.error);
+
+    firestoreSync.savePosClient({
+      ...currentPos,
+      walletBalance: parseFloat((currentPos.walletBalance - totalDeducted).toFixed(2))
+    }).catch(console.error);
+
+    firestoreSync.savePosClient({
+      ...target,
+      walletBalance: parseFloat((target.walletBalance + amount).toFixed(2))
+    }).catch(console.error);
+
+    if (feeAmount > 0) {
+      firestoreSync.saveSuperAdmin({
+        ...superAdmin,
+        walletBalance: parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2))
+      }).catch(console.error);
+    }
+
+    triggerConfetti();
+    addNotification({
+      posId: target.id,
+      supplierId: supplier.id,
+      supplierName: currentPos.tradeName,
+      title: 'تحويل رصيد وارد',
+      message: `استلمت تحويل رصيد بقيمة ${amount.toFixed(2)} ر.س من (${currentPos.tradeName} - ${currentPos.posCode}).`,
+      type: 'transfer'
+    });
+    showToast({
+      type: 'success',
+      title: 'تم تحويل الرصيد وحفظه في القواعد الثلاث',
+      description: `تم إرسال ${amount.toFixed(2)} ر.س إلى ${target.tradeName} (${target.posCode}) ورسوم المنصة ${feeAmount.toFixed(2)} ر.س وحفظ العملية في كافة القواعد المرتبطة.`
+    });
+
+    return { success: true };
+  };
+
+  // Manage supplier bank accounts & POS client transfer-receiving delegations
+  const syncPosTransferPrivilegesFromAccounts = (
+    nextAccounts: SupplierBankAccount[],
+    affectedPosIds: string[]
+  ) => {
+    if (affectedPosIds.length === 0) return;
+    const uniqueIds = Array.from(new Set(affectedPosIds));
+    setPosClients(prev =>
+      prev.map(pos => {
+        if (!uniqueIds.includes(pos.id)) return pos;
+        const hasPrivilege = nextAccounts.some(acc => isAccountAssignedToPos(acc, pos));
+        const updatedPos = { ...pos, canReceiveSupplierTransfers: hasPrivilege };
+        firestoreSync.savePosClient(updatedPos).catch(console.error);
+        return updatedPos;
+      })
+    );
+  };
+
+  const saveSupplierBankAccount = (input: {
+    id?: string;
+    bankName: string;
+    accountNumber: string;
+    iban?: string;
+    country: string;
+    accountHolderName: string;
+    accountHolderEmail: string;
+    accountHolderPhone?: string;
+    delegatedPosId?: string;
+    canReceiveSupplierTransfers: boolean;
+    isPrimary?: boolean;
+    isActive?: boolean;
+    notes?: string;
+  }): { success: boolean; error?: string; account?: SupplierBankAccount } => {
+    const validation = validateBankAccountInput(input);
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'بيانات الحساب البنكي غير مكتملة',
+        description: validation.error || 'يرجى التحقق من الحقول المطلوبة.'
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const nowDate = new Date().toISOString().substring(0, 10);
+    const nowTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const existing = input.id ? supplierBankAccounts.find(a => a.id === input.id) : undefined;
+    const targetSupplierId = existing?.supplierId || supplier.id;
+    const accountId = existing?.id || `bank-${Date.now().toString().slice(-6)}`;
+
+    const cleanEmail = normalizeEmail(input.accountHolderEmail);
+    const resolvedPos = resolveBankAccountReceiverPos(
+      {
+        delegatedPosId: input.delegatedPosId,
+        accountHolderEmail: cleanEmail,
+        canReceiveSupplierTransfers: input.canReceiveSupplierTransfers,
+        supplierId: targetSupplierId
+      },
+      posClients
+    );
+
+    const savedAccount: SupplierBankAccount = {
+      id: accountId,
+      supplierId: targetSupplierId,
+      bankName: input.bankName.trim(),
+      accountNumber: input.accountNumber.trim(),
+      iban: input.iban?.trim().toUpperCase() || undefined,
+      country: input.country.trim(),
+      accountHolderName: input.accountHolderName.trim(),
+      accountHolderEmail: cleanEmail,
+      accountHolderPhone: input.accountHolderPhone?.trim() || undefined,
+      delegatedPosId: resolvedPos?.id || (input.delegatedPosId || undefined),
+      delegatedPosName: resolvedPos?.tradeName || undefined,
+      delegatedPosCode: resolvedPos?.posCode || undefined,
+      canReceiveSupplierTransfers: input.canReceiveSupplierTransfers,
+      isPrimary: input.isPrimary ?? existing?.isPrimary ?? false,
+      isActive: input.isActive ?? existing?.isActive ?? true,
+      notes: input.notes?.trim() || undefined,
+      createdAt: existing?.createdAt || nowDate,
+      updatedAt: nowTimestamp
+    };
+
+    const nextAccounts = existing
+      ? supplierBankAccounts.map(a => (a.id === accountId ? savedAccount : a))
+      : [savedAccount, ...supplierBankAccounts];
+
+    setSupplierBankAccounts(nextAccounts);
+    firestoreSync.saveSupplierBankAccount(savedAccount).catch(console.error);
+
+    if (savedAccount.isPrimary) {
+      const targetSup = suppliers.find(s => s.id === targetSupplierId);
+      if (targetSup) {
+        const updatedSup: Supplier = {
+          ...targetSup,
+          bankAccountDetails: {
+            bankName: savedAccount.bankName,
+            accountHolder: savedAccount.accountHolderName,
+            iban: savedAccount.iban || targetSup.bankAccountDetails.iban,
+            accountNumber: savedAccount.accountNumber
+          }
+        };
+        setSuppliers(prev => prev.map(s => (s.id === targetSup.id ? updatedSup : s)));
+        firestoreSync.saveSupplier(updatedSup).catch(console.error);
+      }
+    }
+
+    const affectedIds: string[] = [];
+    if (existing?.delegatedPosId) affectedIds.push(existing.delegatedPosId);
+    if (resolvedPos?.id) affectedIds.push(resolvedPos.id);
+    if (existing?.accountHolderEmail) {
+      const prevEmailMatch = posClients.find(
+        p => p.supplierId === targetSupplierId && normalizeEmail(p.email) === normalizeEmail(existing.accountHolderEmail)
+      );
+      if (prevEmailMatch) affectedIds.push(prevEmailMatch.id);
+    }
+    const newEmailMatch = posClients.find(
+      p => p.supplierId === targetSupplierId && normalizeEmail(p.email) === cleanEmail
+    );
+    if (newEmailMatch) affectedIds.push(newEmailMatch.id);
+
+    syncPosTransferPrivilegesFromAccounts(nextAccounts, affectedIds);
+
+    if (savedAccount.canReceiveSupplierTransfers && resolvedPos) {
+      addNotification({
+        posId: resolvedPos.id,
+        supplierId: targetSupplierId,
+        supplierName: supplier.name,
+        title: 'تم منحك ميزة استلام ومراجعة حوالات المورد',
+        message: `منحك المورد ${supplier.storeName} صلاحية استلام ومراجعة حوالات الشحن الواردة لحساب (${savedAccount.bankName} - ${savedAccount.country}). ظهرت الآن واجهة "استلام ومراجعة حوالات المورد" في لوحتك.`,
+        type: 'announcement'
+      });
+    }
+
+    showToast({
+      type: 'success',
+      title: existing ? 'تم تحديث بيانات الحساب البنكي بنجاح' : 'تمت إضافة الحساب البنكي بنجاح',
+      description: savedAccount.canReceiveSupplierTransfers && resolvedPos
+        ? `تم ربط الحساب بنقطة البيع (${resolvedPos.tradeName}) ومنحها ميزة استلام ومراجعة حوالات المورد.`
+        : `تم حفظ حساب (${savedAccount.bankName} · ${savedAccount.country}) باسم ${savedAccount.accountHolderName}.`
+    });
+
+    return { success: true, account: savedAccount };
+  };
+
+  const toggleBankAccountTransferPrivilege = (accountId: string, enabled: boolean) => {
+    const targetAcc = supplierBankAccounts.find(a => a.id === accountId);
+    if (!targetAcc) return;
+
+    const resolvedPos = resolveBankAccountReceiverPos(
+      { ...targetAcc, canReceiveSupplierTransfers: true },
+      posClients
+    );
+
+    const updatedAcc: SupplierBankAccount = {
+      ...targetAcc,
+      canReceiveSupplierTransfers: enabled,
+      delegatedPosId: enabled ? (resolvedPos?.id || targetAcc.delegatedPosId) : targetAcc.delegatedPosId,
+      delegatedPosName: enabled ? (resolvedPos?.tradeName || targetAcc.delegatedPosName) : targetAcc.delegatedPosName,
+      delegatedPosCode: enabled ? (resolvedPos?.posCode || targetAcc.delegatedPosCode) : targetAcc.delegatedPosCode,
+      updatedAt: new Date().toISOString().replace('T', ' ').substring(0, 16)
+    };
+
+    const nextAccounts = supplierBankAccounts.map(a => (a.id === accountId ? updatedAcc : a));
+    setSupplierBankAccounts(nextAccounts);
+    firestoreSync.saveSupplierBankAccount(updatedAcc).catch(console.error);
+
+    const affectedIds: string[] = [];
+    if (updatedAcc.delegatedPosId) affectedIds.push(updatedAcc.delegatedPosId);
+    if (resolvedPos?.id) affectedIds.push(resolvedPos.id);
+    syncPosTransferPrivilegesFromAccounts(nextAccounts, affectedIds);
+
+    if (enabled && resolvedPos) {
+      addNotification({
+        posId: resolvedPos.id,
+        supplierId: targetAcc.supplierId,
+        supplierName: supplier.name,
+        title: 'تفعيل ميزة استلام حوالات المورد',
+        message: `تم تفعيل صلاحية "استلام ومراجعة حوالات المورد" لحسابك (${updatedAcc.bankName}) لدى ${supplier.storeName}.`,
+        type: 'announcement'
+      });
+    }
+
+    showToast({
+      type: enabled ? 'success' : 'info',
+      title: enabled ? 'تم منح ميزة استلام الحوالات بنجاح' : 'تم إيقاف ميزة استلام الحوالات لهذا الحساب',
+      description: resolvedPos
+        ? `${enabled ? 'تظهر الآن' : 'تم إخفاء'} واجهة "استلام ومراجعة حوالات المورد" لدى نقطة البيع (${resolvedPos.tradeName}).`
+        : `تم تحديث صلاحية الحساب البنكي (${updatedAcc.bankName}).`
+    });
+  };
+
+  const deleteSupplierBankAccount = (accountId: string) => {
+    const targetAcc = supplierBankAccounts.find(a => a.id === accountId);
+    if (!targetAcc) return;
+
+    const nextAccounts = supplierBankAccounts.filter(a => a.id !== accountId);
+    setSupplierBankAccounts(nextAccounts);
+    firestoreSync.deleteSupplierBankAccount(accountId).catch(console.error);
+
+    const affectedIds: string[] = [];
+    if (targetAcc.delegatedPosId) affectedIds.push(targetAcc.delegatedPosId);
+    const emailMatch = posClients.find(
+      p => p.supplierId === targetAcc.supplierId && normalizeEmail(p.email) === normalizeEmail(targetAcc.accountHolderEmail)
+    );
+    if (emailMatch) affectedIds.push(emailMatch.id);
+    syncPosTransferPrivilegesFromAccounts(nextAccounts, affectedIds);
+
+    showToast({
+      type: 'info',
+      title: 'تم حذف الحساب البنكي',
+      description: `تم حذف حساب (${targetAcc.bankName} - ${targetAcc.accountHolderName}) من قائمة الحسابات.`
+    });
+  };
+
+  const confirmDepositReceiptByReceiver = (
+    depositId: string,
+    decision: 'confirmed' | 'rejected',
+    note?: string
+  ) => {
+    const dep = depositRequests.find(d => d.id === depositId);
+    if (!dep) return;
+
+    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const receiverName = currentPos.tradeName || dep.receiverPosName || dep.targetAccountHolderName || 'نقطة البيع المخوّلة';
+    const defaultNote =
+      decision === 'confirmed'
+        ? `تم تأكيد استلام الحوالة رقم (${dep.transferNumber}) في الحساب البنكي (${dep.targetBankName || dep.bankName})`
+        : `لم يتم استلام الحوالة رقم (${dep.transferNumber}) في الحساب البنكي (${dep.targetBankName || dep.bankName})`;
+
+    const updatedDep: DepositRequest = {
+      ...dep,
+      receiverConfirmationStatus: decision as ReceiverConfirmationStatus,
+      receiverConfirmedAt: nowStr,
+      receiverConfirmedByName: receiverName,
+      receiverConfirmationNote: note?.trim() || defaultNote
+    };
+
+    setDepositRequests(prev => prev.map(d => (d.id === depositId ? updatedDep : d)));
+    firestoreSync.saveDepositRequest(updatedDep).catch(console.error);
+
+    const targetSup = suppliers.find(s => s.id === dep.supplierId) || supplier;
+    addNotification({
+      posId: dep.posId,
+      posName: dep.posName,
+      posCode: dep.posCode,
+      supplierId: targetSup.id,
+      supplierName: receiverName,
+      targetRole: 'pos',
+      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة من مستلم المورد' : 'تنبيه: أفاد مستلم الحوالة بعدم استلامها',
+      message:
+        decision === 'confirmed'
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س، وأصبح الإشعار ظاهراً لدى المورد في نفس طلب الشحن.`
+          : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س. السبب: ${updatedDep.receiverConfirmationNote}`,
+      type: 'deposit'
+    });
+
+    // Also notify the supplier directly
+    addNotification({
+      supplierId: targetSup.id,
+      supplierName: receiverName,
+      posId: dep.posId,
+      posName: dep.posName,
+      posCode: dep.posCode,
+      targetRole: 'supplier',
+      title: decision === 'confirmed' ? 'تأكيد استلام حوالة من المخوّل ✅' : 'تنبيه: عدم استلام حوالة من المخوّل ❌',
+      message:
+        decision === 'confirmed'
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س للعميل ${dep.posName} في الحساب (${dep.targetBankName || dep.bankName}).`
+          : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س للعميل ${dep.posName}. الملاحظة: ${updatedDep.receiverConfirmationNote}`,
+      type: 'receiver_confirmation',
+      depositId: dep.id,
+      amount: dep.amount,
+      actionTab: 'deposits'
+    });
+
+    showToast({
+      type: decision === 'confirmed' ? 'success' : 'error',
+      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة وإشعار المورد' : 'تم تسجيل عدم استلام الحوالة وإشعار المورد',
+      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المورد (${targetSup.name}) داخل نفس طلب الشحن #${dep.id}.`
+    });
+  };
+
+  // Submit deposit request (supports Cash/Bank Deposit AND Loan/Advance Credit Request)
+  const submitDepositRequest = (params: {
+    amount: number;
+    requestType?: 'cash' | 'loan';
+    transferNumber?: string;
+    transferSenderName?: string;
+    bankName?: string;
+    targetBankAccountId?: string;
+    loanReason?: string;
+    transferReceiptImage?: string;
+    transferReceiptFileName?: string;
+  }) => {
+    const isLoan = params.requestType === 'loan';
+    const depositId = isLoan ? `dep-loan-${Date.now().toString().slice(-6)}` : `dep-${Date.now().toString().slice(-6)}`;
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const targetSupplier = suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
+
+    const availableAccounts = getActiveBankAccountsForDeposit(supplierBankAccounts, targetSupplier);
+    const selectedAccount = !isLoan
+      ? (params.targetBankAccountId
+          ? availableAccounts.find(a => a.id === params.targetBankAccountId) || availableAccounts[0]
+          : availableAccounts[0])
+      : undefined;
+
+    const resolvedReceiverPos =
+      selectedAccount && selectedAccount.canReceiveSupplierTransfers
+        ? resolveBankAccountReceiverPos(selectedAccount, posClients)
+        : undefined;
+
+    const isDelegatedTransfer = Boolean(selectedAccount?.canReceiveSupplierTransfers && (resolvedReceiverPos || selectedAccount?.delegatedPosId));
+
+    const newDep: DepositRequest = {
+      id: depositId,
+      posId: currentPos.id,
+      posName: currentPos.tradeName,
+      posCode: currentPos.posCode,
+      supplierId: targetSupplier.id,
+      amount: params.amount,
+      requestType: params.requestType || 'cash',
+      transferNumber: isLoan
+        ? `LOAN-ADVANCE-${Date.now().toString().slice(-4)}`
+        : (params.transferNumber || `TRX-${Date.now().toString().slice(-6)}`),
+      transferSenderName: isLoan
+        ? `طلب سلفة من العميل (${currentPos.ownerName})`
+        : (params.transferSenderName || currentPos.ownerName),
+      bankName: isLoan
+        ? 'سلفة / رصيد آجل (بدون تحويل بنكي)'
+        : (params.bankName || selectedAccount?.bankName || 'مصرف الراجحي'),
+      date: formattedDate,
+      status: 'pending',
+      loanReason: params.loanReason || (isLoan ? 'طلب سلفة رصيد آجل عاجل' : undefined),
+      loanRepaidStatus: isLoan ? 'unpaid' : undefined,
+      transferReceiptImage: !isLoan ? params.transferReceiptImage : undefined,
+      transferReceiptFileName: !isLoan ? params.transferReceiptFileName : undefined,
+      targetBankAccountId: selectedAccount?.id,
+      targetBankName: selectedAccount?.bankName,
+      targetBankAccountNumber: selectedAccount?.accountNumber,
+      targetIban: selectedAccount?.iban,
+      targetBankAccountCountry: selectedAccount?.country,
+      targetAccountHolderName: selectedAccount?.accountHolderName,
+      targetAccountHolderEmail: selectedAccount?.accountHolderEmail,
+      receiverPosId: isDelegatedTransfer ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
+      receiverPosName: isDelegatedTransfer ? (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName) : undefined,
+      receiverPosCode: isDelegatedTransfer ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
+      receiverPosEmail: isDelegatedTransfer ? (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail) : undefined,
+      receiverConfirmationStatus: isDelegatedTransfer ? 'pending' : undefined,
+      notes: isLoan
+        ? `طلب سلفة رصيد آجل بانتظار موافقة المورد ${targetSupplier.name} بدون مرفقات بنكية`
+        : isDelegatedTransfer
+        ? `طلب إيداع إلى حساب نقطة البيع المخوّلة (${resolvedReceiverPos?.tradeName || selectedAccount?.accountHolderName}) بانتظار تأكيد الاستلام وموافقة المورد ${targetSupplier.name}`
+        : `طلب إيداع كاش جديد بانتظار مراجعة وتأكيد المورد ${targetSupplier.name}`
+    };
+
+    setDepositRequests(prev => [newDep, ...prev]);
+
+    // Save Deposit / Loan request to Firestore
+    firestoreSync.saveDepositRequest(newDep).catch(console.error);
+
+    if (isDelegatedTransfer && newDep.receiverPosId) {
+      addNotification({
+        posId: newDep.receiverPosId,
+        supplierId: targetSupplier.id,
+        supplierName: currentPos.tradeName,
+        title: 'حوالة جديدة بانتظار تأكيد الاستلام',
+        message: `أرسل العميل (${currentPos.tradeName}) طلب شحن بمبلغ ${params.amount.toFixed(2)} ر.س وأشار إلى أن الإيداع تم لحسابك (${selectedAccount?.bankName}). يرجى مراجعة الطلب وتأكيد استلام الحوالة أو عدم استلامها.`,
+        type: 'deposit'
+      });
+    }
+
+    // Notify supplier of deposit or loan request
+    if (isLoan) {
+      addNotification({
+        supplierId: targetSupplier.id,
+        supplierName: targetSupplier.name,
+        posId: currentPos.id,
+        posName: currentPos.tradeName,
+        posCode: currentPos.posCode,
+        targetRole: 'supplier',
+        title: 'طلب سلفة رصيد آجل جديد 💰',
+        message: `طلب العميل ${currentPos.tradeName} (${currentPos.posCode}) سلفة رصيد آجل بمبلغ ${params.amount.toFixed(2)} ر.س. السبب: ${params.loanReason || 'طلب سلفة رصيد عاجل'}.`,
+        type: 'loan',
+        depositId,
+        amount: params.amount,
+        actionTab: 'loans'
+      });
+    } else {
+      addNotification({
+        supplierId: targetSupplier.id,
+        supplierName: targetSupplier.name,
+        posId: currentPos.id,
+        posName: currentPos.tradeName,
+        posCode: currentPos.posCode,
+        targetRole: 'supplier',
+        title: isDelegatedTransfer
+          ? 'طلب إيداع لحساب مخوّل بانتظار التأكيد 🏦'
+          : 'طلب إيداع بنكي جديد بانتظار المطابقة 🏦',
+        message: `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن بمبلغ ${params.amount.toFixed(2)} ر.س (حوالة: ${newDep.transferNumber} على ${selectedAccount?.bankName || 'حساب المورد'}) مع صورة الإيصال المرفقة.`,
+        type: 'deposit',
+        depositId,
+        amount: params.amount,
+        actionTab: 'deposits'
+      });
+    }
+
+    if (isLoan) {
+      showToast({
+        type: 'info',
+        title: 'تم إرسال طلب السلفة للمورد بنجاح',
+        description: `تم إرسال طلب سلفة بقيمة ${params.amount.toFixed(2)} ر.س إلى المورد ${targetSupplier.name} بدون الحاجة لمرفقات بنكية. سيصلك الرصيد فور الموافقة.`
+      });
+    } else if (isDelegatedTransfer) {
+      showToast({
+        type: 'info',
+        title: 'تم إرسال طلب الشحن للمورد ونقطة البيع المخوّلة',
+        description: `تم إرسال الطلب إلى المورد ${targetSupplier.name} وإلى نقطة البيع المخوّلة (${newDep.receiverPosName}) لتأكيد استلام الحوالة على حساب (${selectedAccount?.bankName}).`
+      });
+    } else {
+      showToast({
+        type: 'info',
+        title: 'تم إرسال طلب الشحن بنجاح',
+        description: `تم تقديم طلب شحن الرصيد المسبق للمورد ${targetSupplier.name} وسيقوم بمطابقة رقم الحوالة واعتمادها.`
+      });
+    }
+  };
+
+  // Approve deposit request by supplier (handles cash deposits and loan approvals)
+  const approveDepositRequest = (depositId: string) => {
+    const dep = depositRequests.find(d => d.id === depositId);
+    if (!dep || dep.status !== 'pending') return;
+
+    const isLoan = dep.requestType === 'loan';
+    const approvedNotes = isLoan
+      ? 'تمت الموافقة على طلب السلفة وقيد الرصيد الآجل في المحفظة'
+      : 'تمت الموافقة ومطابقة الحوالة البنكية بنجاح';
+
+    const updatedDep: DepositRequest = { ...dep, status: 'approved', notes: approvedNotes };
+    setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedDep : d));
+
+    const targetPos = posClients.find(p => p.id === dep.posId);
+    const newBal = targetPos ? parseFloat((targetPos.walletBalance + dep.amount).toFixed(2)) : dep.amount;
+
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== dep.posId) return p;
+      return {
+        ...p,
+        walletBalance: newBal
+      };
+    }));
+
+    if (targetPos) {
+      firestoreSync.savePosClient({
+        ...targetPos,
+        walletBalance: newBal
+      }).catch(console.error);
+    }
+    firestoreSync.saveDepositRequest(updatedDep).catch(console.error);
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+
+    const depAccEntry: AccountingEntry = {
+      id: `acc-${Date.now()}-dep`,
+      date: formattedDate,
+      type: 'deposit',
+      referenceId: dep.id,
+      posId: dep.posId,
+      supplierId: supplier.id,
+      description: isLoan
+        ? `إيداع سلفة رصيد آجل معتمدة من المورد (${supplier.name}) ${dep.loanReason ? `[سبب السلفة: ${dep.loanReason}]` : ''}`
+        : `إيداع رصيد مسبق في المحفظة عبر حوالة بنكية (${dep.bankName} - رقم الحوالة: ${dep.transferNumber})`,
+      debit: 0,
+      credit: dep.amount,
+      balanceAfter: newBal
+    };
+    setAccountingEntries(prev => [depAccEntry, ...prev]);
+    firestoreSync.saveAccountingEntry(depAccEntry).catch(console.error);
+
+    // Record in Admin accounting log
+    setAdminAccountingEntries(prev => [
+      {
+        id: `adm-acc-${Date.now()}-dep`,
+        date: formattedDate,
+        type: 'deposit_received',
+        referenceId: dep.id,
+        supplierId: dep.supplierId,
+        supplierName: `${supplier.name} (${supplier.storeName})`,
+        posId: dep.posId,
+        posCode: dep.posCode,
+        posName: dep.posName,
+        description: isLoan
+          ? `موافقة المورد على طلب سلفة رصيد آجل بقيمة ${dep.amount.toFixed(2)} ر.س لنقطة البيع ${dep.posName}`
+          : `إشعار إيداع رصيد مسبق معتمد بقيمة ${dep.amount.toFixed(2)} ر.س (${dep.bankName} - حوالة ${dep.transferNumber})`,
+        grossAmount: dep.amount,
+        feeAmount: 0,
+        debit: 0,
+        credit: 0,
+        balanceAfter: superAdmin.walletBalance,
+        notes: `معتمد من المورد ${supplier.name} لنقطة البيع ${dep.posName}`
+      },
+      ...prev
+    ]);
+
+    triggerConfetti();
+    addNotification({
+      posId: dep.posId,
+      supplierId: dep.supplierId,
+      supplierName: supplier.name,
+      title: isLoan ? 'تمت الموافقة على طلب السلفة' : 'تم شحن المحفظة بنجاح',
+      message: isLoan
+        ? `وافق المورد ${supplier.name} على طلب السلفة بقيمة ${dep.amount.toFixed(2)} ر.س وقيدها في محفظتك.`
+        : `تم اعتماد إيداع ${dep.amount.toFixed(2)} ر.س في محفظتك من المورد ${supplier.name}.`,
+      type: 'deposit'
+    });
+    showToast({
+      type: 'success',
+      title: isLoan ? 'تم اعتماد السلفة وقيد الرصيد بنجاح' : 'تم اعتماد طلب الإيداع وحفظه في القواعد الثلاث',
+      description: isLoan
+        ? `تم إضافة رصيد سلفة بقيمة ${dep.amount.toFixed(2)} ر.س لمحفظة ${dep.posName} وتسجيلها في القيود المالية وقواعد البيانات.`
+        : `تم شحن رصيد ${dep.amount.toFixed(2)} ر.س لمحفظة ${dep.posName} وتوثيقه في كافة القواعد المرتبطة.`
+    });
+  };
+
+  const markLoanAsRepaid = (depositId: string) => {
+    const dep = depositRequests.find(d => d.id === depositId);
+    if (!dep || dep.requestType !== 'loan' || dep.status !== 'approved') return;
+
+    const remaining = getLoanRemainingAmount(dep);
+    if (remaining <= 0) return;
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const targetSupplier = suppliers.find(s => s.id === dep.supplierId) || supplier;
+
+    const paymentRecord: LoanPaymentRecord = {
+      id: `lpay-${Date.now().toString().slice(-6)}`,
+      amount: remaining,
+      date: formattedDate,
+      method: 'bank_transfer',
+      notes: `تسديد مباشر موثق من المورد (${targetSupplier.name})`,
+      approvedBy: targetSupplier.name
+    };
+
+    const { updatedLoan } = applyLoanPaymentToLoan(dep, paymentRecord, targetSupplier.name);
+
+    setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedLoan : d));
+    firestoreSync.saveDepositRequest(updatedLoan).catch(console.error);
+
+    const repaidAccEntry: AccountingEntry = {
+      id: `acc-${Date.now()}-repaid`,
+      date: formattedDate,
+      type: 'deposit',
+      referenceId: dep.id,
+      posId: dep.posId,
+      supplierId: targetSupplier.id,
+      description: `توثيق تسديد سلفة مستحقة بالكامل بمبلغ ${remaining.toFixed(2)} ر.س للمورد (${targetSupplier.name})`,
+      debit: 0,
+      credit: 0,
+      balanceAfter: posClients.find(p => p.id === dep.posId)?.walletBalance || 0
+    };
+    setAccountingEntries(prev => [repaidAccEntry, ...prev]);
+    firestoreSync.saveAccountingEntry(repaidAccEntry).catch(console.error);
+
+    addNotification({
+      posId: dep.posId,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      title: 'تم توثيق سداد السلفة بالكامل',
+      message: `تم توثيق سداد السلفة رقم #${dep.id} بمبلغ ${remaining.toFixed(2)} ر.س بالكامل لدى المورد ${targetSupplier.name}.`,
+      type: 'deposit'
+    });
+
+    showToast({
+      type: 'success',
+      title: 'تم تسجيل تسديد السلفة بنجاح',
+      description: `تم توثيق تسديد سلفة العميل ${dep.posName} بمبلغ ${remaining.toFixed(2)} ر.س بنجاح.`
+    });
+  };
+
+  const payLoanFromWallet = async (
+    loanId: string,
+    rawAmount: number
+  ): Promise<{ success: boolean; error?: string; receipt?: WalletLoanRepaymentReceipt }> => {
+    const loan = depositRequests.find(d => d.id === loanId);
+    if (!loan) {
+      return { success: false, error: 'لم يتم العثور على السلفة المطلوبة.' };
+    }
+
+    const targetPos = posClients.find(p => p.id === loan.posId) || currentPos;
+    const targetSupplier = suppliers.find(s => s.id === loan.supplierId) || supplier;
+
+    const validation = validateWalletRepayment(loan, rawAmount, targetPos.walletBalance);
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: validation.code === 'insufficient_balance' ? 'الرصيد غير كافٍ في المحفظة' : 'تعذر تنفيذ السداد',
+        description: validation.error || 'تعذر إتمام السداد من المحفظة.'
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const paymentId = `lpay-${Date.now().toString().slice(-6)}`;
+    const paidBefore = getLoanPaidAmount(loan);
+    const clientBalanceBefore = roundCurrency(targetPos.walletBalance);
+    const supplierBalanceBefore = roundCurrency(targetSupplier.walletBalance);
+
+    const paymentRecord: LoanPaymentRecord = {
+      id: paymentId,
+      amount: validation.amount,
+      date: formattedDate,
+      method: 'wallet',
+      notes: `سداد مباشر من محفظة العميل (${targetPos.tradeName}) إلى حافظة المورد (${targetSupplier.name})`
+    };
+
+    const { updatedLoan, appliedAmount, newPaidAmount, newRemainingAmount, newState } = applyLoanPaymentToLoan(
+      loan,
+      paymentRecord,
+      targetSupplier.name
+    );
+
+    const newPosWalletBalance = roundCurrency(clientBalanceBefore - appliedAmount);
+    const newSupplierWalletBalance = roundCurrency(supplierBalanceBefore + appliedAmount);
+
+    const receipt = buildWalletLoanRepaymentReceipt({
+      loan,
+      paymentId,
+      date: formattedDate,
+      appliedAmount,
+      paidBefore,
+      paidAfter: newPaidAmount,
+      remainingAfter: newRemainingAmount,
+      newState,
+      clientId: targetPos.id,
+      clientName: targetPos.tradeName,
+      clientPosCode: targetPos.posCode,
+      clientBalanceBefore,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      supplierStoreName: targetSupplier.storeName,
+      supplierBalanceBefore,
+    });
+
+    setPosClients(prev =>
+      prev.map(p => (p.id === targetPos.id ? { ...p, walletBalance: newPosWalletBalance } : p))
+    );
+    setSuppliers(prev =>
+      prev.map(s => (s.id === targetSupplier.id ? { ...s, walletBalance: newSupplierWalletBalance } : s))
+    );
+    setDepositRequests(prev => prev.map(d => (d.id === loanId ? updatedLoan : d)));
+
+    firestoreSync.savePosClient({ ...targetPos, walletBalance: newPosWalletBalance }).catch(console.error);
+    firestoreSync.saveSupplier({ ...targetSupplier, walletBalance: newSupplierWalletBalance }).catch(console.error);
+    firestoreSync.saveDepositRequest(updatedLoan).catch(console.error);
+
+    const isFull = newState === 'repaid';
+    const accEntry: AccountingEntry = {
+      id: `acc-${Date.now()}-lpay`,
+      date: formattedDate,
+      type: 'transfer_out',
+      referenceId: loan.id,
+      posId: targetPos.id,
+      supplierId: targetSupplier.id,
+      description: `سداد ${isFull ? 'كامل' : 'جزئي'} للسلفة #${loan.id} من محفظة العميل إلى حافظة المورد (${targetSupplier.name}) بمبلغ ${appliedAmount.toFixed(2)} ر.س · المتبقي: ${newRemainingAmount.toFixed(2)} ر.س`,
+      debit: appliedAmount,
+      credit: 0,
+      balanceAfter: newPosWalletBalance
+    };
+    setAccountingEntries(prev => [accEntry, ...prev]);
+    firestoreSync.saveAccountingEntry(accEntry).catch(console.error);
+
+    const admEntry: AdminAccountingEntry = {
+      id: `adm-acc-${Date.now()}-lpay`,
+      date: formattedDate,
+      type: 'agent_transfer',
+      referenceId: loan.id,
+      supplierId: targetSupplier.id,
+      supplierName: `${targetSupplier.name} (${targetSupplier.storeName})`,
+      posId: targetPos.id,
+      posCode: targetPos.posCode,
+      posName: targetPos.tradeName,
+      description: `سداد سلفة مباشر من المحفظة #${loan.id} بمبلغ ${appliedAmount.toFixed(2)} ر.س (${isFull ? 'مسددة بالكامل' : 'مسددة جزئياً'})`,
+      grossAmount: appliedAmount,
+      feeAmount: 0,
+      debit: 0,
+      credit: 0,
+      balanceAfter: superAdmin.walletBalance
+    };
+    setAdminAccountingEntries(prev => [admEntry, ...prev]);
+    firestoreSync.saveAdminAccountingEntry(admEntry).catch(console.error);
+
+    if (isFull) {
+      triggerConfetti();
+    }
+
+    addNotification({
+      posId: targetPos.id,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      targetRole: 'pos',
+      title: isFull ? 'تم سداد السلفة بالكامل من المحفظة' : 'تم سداد دفعة من السلفة من المحفظة',
+      message: isFull
+        ? `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المورد ${targetSupplier.name}، وتم إغلاق السلفة #${loan.id} كمسددة بالكامل.`
+        : `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المورد ${targetSupplier.name}. رصيد محفظتك الجديد: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`,
+      type: 'transfer'
+    });
+
+    // Notify supplier of direct wallet repayment
+    addNotification({
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      posId: targetPos.id,
+      posName: targetPos.tradeName,
+      posCode: targetPos.posCode,
+      targetRole: 'supplier',
+      title: isFull ? 'سداد سلفة بالكامل من محفظة العميل 💰' : 'سداد دفعة سلفة من محفظة العميل 💰',
+      message: `قام العميل ${targetPos.tradeName} (${targetPos.posCode}) بسداد ${appliedAmount.toFixed(2)} ر.س من رصيد محفظته عن السلفة #${loan.id}. أودع المبلغ في محفظتك المتاحة وأصبح المتبقي: ${newRemainingAmount.toFixed(2)} ر.س.`,
+      type: 'loan_repayment',
+      loanId: loan.id,
+      amount: appliedAmount,
+      actionTab: 'loans'
+    });
+
+    showToast({
+      type: 'success',
+      title: isFull ? 'تم سداد السلفة بالكامل بنجاح' : 'تم سداد الدفعة من السلفة بنجاح',
+      description: `تم خصم ${appliedAmount.toFixed(2)} ر.س من محفظة العميل (${targetPos.tradeName}) وإضافتها إلى محفظة المورد ${targetSupplier.name}. رصيدك الحالي: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`
+    });
+
+    return { success: true, receipt };
+  };
+
+  const confirmLoanRepaymentReceiptByReceiver = (
+    requestId: string,
+    decision: 'confirmed' | 'rejected',
+    note?: string
+  ) => {
+    const req = loanRepaymentRequests.find(r => r.id === requestId);
+    if (!req) return;
+
+    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const receiverName =
+      currentPos.tradeName || req.receiverPosName || req.targetAccountHolderName || 'نقطة البيع المخوّلة';
+    const defaultNote =
+      decision === 'confirmed'
+        ? `تم تأكيد استلام حوالة سداد السلفة رقم (${req.transferNumber}) في الحساب البنكي (${req.targetBankName || req.bankName})`
+        : `لم يتم استلام حوالة سداد السلفة رقم (${req.transferNumber}) في الحساب البنكي (${req.targetBankName || req.bankName})`;
+
+    const updatedReq: LoanRepaymentRequest = {
+      ...req,
+      receiverConfirmationStatus: decision as ReceiverConfirmationStatus,
+      receiverConfirmedAt: nowStr,
+      receiverConfirmedByName: receiverName,
+      receiverConfirmationNote: note?.trim() || defaultNote
+    };
+
+    setLoanRepaymentRequests(prev => prev.map(r => (r.id === requestId ? updatedReq : r)));
+    firestoreSync.saveLoanRepaymentRequest(updatedReq).catch(console.error);
+
+    const targetSup = suppliers.find(s => s.id === req.supplierId) || supplier;
+    addNotification({
+      posId: req.posId,
+      posName: req.posName,
+      posCode: req.posCode,
+      supplierId: targetSup.id,
+      supplierName: receiverName,
+      targetRole: 'pos',
+      title:
+        decision === 'confirmed'
+          ? 'تم تأكيد استلام حوالة سداد السلفة من مستلم المورد'
+          : 'تنبيه: أفاد مستلم الحوالة بعدم استلام حوالة سداد السلفة',
+      message:
+        decision === 'confirmed'
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س، وأصبح التأكيد ظاهراً لدى المورد لاعتماد خصم السلفة.`
+          : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س. السبب: ${updatedReq.receiverConfirmationNote}`,
+      type: 'deposit'
+    });
+
+    // Notify the supplier directly
+    addNotification({
+      supplierId: targetSup.id,
+      supplierName: receiverName,
+      posId: req.posId,
+      posName: req.posName,
+      posCode: req.posCode,
+      targetRole: 'supplier',
+      title: decision === 'confirmed' ? 'تأكيد استلام حوالة سداد سلفة من المخوّل ✅' : 'تنبيه: عدم استلام حوالة سداد سلفة من المخوّل ❌',
+      message:
+        decision === 'confirmed'
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س للعميل ${req.posName}.`
+          : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س للعميل ${req.posName}. السبب: ${updatedReq.receiverConfirmationNote}`,
+      type: 'receiver_confirmation',
+      loanId: req.loanId,
+      repaymentRequestId: req.id,
+      amount: req.amount,
+      actionTab: 'loans'
+    });
+
+    showToast({
+      type: decision === 'confirmed' ? 'success' : 'error',
+      title:
+        decision === 'confirmed'
+          ? 'تم تأكيد استلام حوالة السداد وإشعار المورد'
+          : 'تم تسجيل عدم استلام حوالة السداد وإشعار المورد',
+      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المورد (${targetSup.name}) داخل سجل مراجعة سداد السلف.`
+    });
+  };
+
+  const submitLoanRepaymentRequest = async (params: {
+    loanId: string;
+    amount: number;
+    transferNumber: string;
+    bankName: string;
+    senderName: string;
+    notes?: string;
+    targetBankAccountId?: string;
+    transferReceiptImage?: string;
+    transferReceiptFileName?: string;
+  }): Promise<{ success: boolean; requestId?: string; request?: LoanRepaymentRequest; error?: string }> => {
+    const loan = depositRequests.find(d => d.id === params.loanId);
+    if (!loan) {
+      return { success: false, error: 'لم يتم العثور على السلفة المحددة.' };
+    }
+
+    const validation = validateBankTransferRepayment(loan, params);
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'بيانات طلب السداد غير مكتملة',
+        description: validation.error || 'يرجى التحقق من البيانات المدخلة.'
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const targetPos = posClients.find(p => p.id === loan.posId) || currentPos;
+    const targetSupplier = suppliers.find(s => s.id === loan.supplierId) || supplier;
+    const availableAccounts = getActiveBankAccountsForDeposit(supplierBankAccounts, targetSupplier);
+    const selectedAccount = params.targetBankAccountId
+      ? availableAccounts.find(a => a.id === params.targetBankAccountId) || availableAccounts[0]
+      : availableAccounts[0];
+
+    const resolvedReceiverPos =
+      selectedAccount && selectedAccount.canReceiveSupplierTransfers
+        ? resolveBankAccountReceiverPos(selectedAccount, posClients)
+        : undefined;
+
+    const isDelegatedTransfer = Boolean(
+      selectedAccount?.canReceiveSupplierTransfers && (resolvedReceiverPos || selectedAccount?.delegatedPosId)
+    );
+
+    const paidBefore = getLoanPaidAmount(loan);
+    const remainingBefore = getLoanRemainingAmount(loan);
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const requestId = `lrep-${Date.now().toString().slice(-6)}`;
+
+    const newRequest: LoanRepaymentRequest = {
+      id: requestId,
+      loanId: loan.id,
+      loanTransferNumber: loan.transferNumber,
+      loanDate: loan.date,
+      loanTotalAmount: loan.amount,
+      loanPaidBefore: paidBefore,
+      loanRemainingBefore: remainingBefore,
+      loanReason: loan.loanReason,
+      posId: targetPos.id,
+      posName: targetPos.tradeName,
+      posCode: targetPos.posCode,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      amount: validation.amount,
+      transferNumber: params.transferNumber.trim(),
+      bankName: params.bankName.trim() || selectedAccount?.bankName || targetSupplier.bankAccountDetails.bankName,
+      senderName: params.senderName.trim(),
+      notes: params.notes?.trim() || undefined,
+      date: formattedDate,
+      status: 'pending',
+      transferReceiptImage: params.transferReceiptImage || undefined,
+      transferReceiptFileName: params.transferReceiptFileName || undefined,
+      targetBankAccountId: selectedAccount?.id,
+      targetBankName: selectedAccount?.bankName,
+      targetBankAccountNumber: selectedAccount?.accountNumber,
+      targetIban: selectedAccount?.iban,
+      targetBankAccountCountry: selectedAccount?.country,
+      targetAccountHolderName: selectedAccount?.accountHolderName,
+      targetAccountHolderEmail: selectedAccount?.accountHolderEmail,
+      receiverPosId: isDelegatedTransfer ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
+      receiverPosName: isDelegatedTransfer
+        ? (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName)
+        : undefined,
+      receiverPosCode: isDelegatedTransfer ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
+      receiverPosEmail: isDelegatedTransfer ? (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail) : undefined,
+      receiverConfirmationStatus: isDelegatedTransfer ? 'pending' : undefined
+    };
+
+    setLoanRepaymentRequests(prev => [newRequest, ...prev]);
+    firestoreSync.saveLoanRepaymentRequest(newRequest).catch(console.error);
+
+    if (isDelegatedTransfer && newRequest.receiverPosId) {
+      addNotification({
+        posId: newRequest.receiverPosId,
+        supplierId: targetSupplier.id,
+        supplierName: targetPos.tradeName,
+        title: 'حوالة سداد سلفة بانتظار تأكيد الاستلام',
+        message: `أرسل العميل (${targetPos.tradeName}) طلب سداد سلفة #${loan.id} بمبلغ ${validation.amount.toFixed(2)} ر.س إلى حسابك المخوّل (${selectedAccount?.bankName}). يرجى مراجعة الإيصال وتأكيد الاستلام.`,
+        type: 'deposit'
+      });
+    }
+
+    addNotification({
+      posId: targetPos.id,
+      posName: targetPos.tradeName,
+      posCode: targetPos.posCode,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      targetRole: 'pos',
+      title: 'تم إرسال طلب سداد سلفة بحوالة بنكية',
+      message: isDelegatedTransfer
+        ? `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} إلى نقطة البيع المخوّلة (${newRequest.receiverPosName}) والمورد ${targetSupplier.name} للمراجعة والاعتماد.`
+        : `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} (حوالة: ${newRequest.transferNumber} · ${newRequest.bankName})، وهو بانتظار مراجعة وموافقة المورد ${targetSupplier.name}.`,
+      type: 'deposit'
+    });
+
+    // Notify supplier of loan repayment request
+    addNotification({
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      posId: targetPos.id,
+      posName: targetPos.tradeName,
+      posCode: targetPos.posCode,
+      targetRole: 'supplier',
+      title: 'طلب سداد سلفة بحوالة بنكية 💳',
+      message: `أرسل العميل ${targetPos.tradeName} (${targetPos.posCode}) طلب سداد سلفة #${loan.id} بمبلغ ${validation.amount.toFixed(2)} ر.س (حوالة: ${newRequest.transferNumber} على ${newRequest.targetBankName || newRequest.bankName}) مع صورة الإيصال المرفقة.`,
+      type: 'loan_repayment',
+      loanId: loan.id,
+      repaymentRequestId: requestId,
+      amount: validation.amount,
+      actionTab: 'loans'
+    });
+
+    showToast({
+      type: 'success',
+      title: isDelegatedTransfer
+        ? 'تم إرسال طلب سداد السلفة للمورد ونقطة البيع المخوّلة'
+        : 'تم إرسال طلب سداد السلفة بنجاح',
+      description: isDelegatedTransfer
+        ? `تم توجيه الطلب إلى المورد ${targetSupplier.name} وإلى المخوّل باستلام الحوالة (${newRequest.receiverPosName}) لمراجعة الإيصال وتأكيد الاستلام.`
+        : `تم إرسال طلب سداد بمبلغ ${validation.amount.toFixed(2)} ر.س عن السلفة #${loan.id} (رقم الحوالة: ${newRequest.transferNumber}) وبانتظار موافقة المورد ${targetSupplier.name}.`
+    });
+
+    return { success: true, requestId, request: newRequest };
+  };
+
+  const approveLoanRepaymentRequest = (requestId: string, overrideAmount?: number) => {
+    const req = loanRepaymentRequests.find(r => r.id === requestId);
+    if (!req || req.status !== 'pending') return;
+
+    const loan = depositRequests.find(d => d.id === req.loanId);
+    if (!loan || loan.status !== 'approved') return;
+
+    const remaining = getLoanRemainingAmount(loan);
+    if (remaining <= 0) {
+      showToast({
+        type: 'info',
+        title: 'السلفة مسددة بالفعل',
+        description: 'تم سداد كامل قيمة هذه السلفة مسبقاً.'
+      });
+      return;
+    }
+
+    const requestedAmount = overrideAmount !== undefined ? roundCurrency(overrideAmount) : req.amount;
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) return;
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const targetSupplier = suppliers.find(s => s.id === loan.supplierId) || supplier;
+    const targetPos = posClients.find(p => p.id === loan.posId);
+
+    const paymentRecord: LoanPaymentRecord = {
+      id: `lpay-${Date.now().toString().slice(-6)}`,
+      amount: requestedAmount,
+      date: formattedDate,
+      method: 'bank_transfer',
+      transferNumber: req.transferNumber,
+      bankName: req.bankName,
+      senderName: req.senderName,
+      notes: req.notes || `موافقة المورد على حوالة سداد سلفة رقم ${req.transferNumber}`,
+      repaymentRequestId: req.id,
+      approvedBy: targetSupplier.name,
+      transferReceiptImage: req.transferReceiptImage,
+      targetBankName: req.targetBankName
+    };
+
+    const { updatedLoan, appliedAmount, newRemainingAmount, newState } = applyLoanPaymentToLoan(
+      loan,
+      paymentRecord,
+      targetSupplier.name
+    );
+
+    const updatedReq: LoanRepaymentRequest = {
+      ...req,
+      status: 'approved',
+      reviewedAt: formattedDate,
+      approvedAmount: appliedAmount
+    };
+
+    setDepositRequests(prev => prev.map(d => (d.id === loan.id ? updatedLoan : d)));
+    setLoanRepaymentRequests(prev => prev.map(r => (r.id === req.id ? updatedReq : r)));
+
+    firestoreSync.saveDepositRequest(updatedLoan).catch(console.error);
+    firestoreSync.saveLoanRepaymentRequest(updatedReq).catch(console.error);
+
+    const isFull = newState === 'repaid';
+    const accEntry: AccountingEntry = {
+      id: `acc-${Date.now()}-lrep`,
+      date: formattedDate,
+      type: 'deposit',
+      referenceId: loan.id,
+      posId: loan.posId,
+      supplierId: targetSupplier.id,
+      description: `اعتماد سداد سلفة #${loan.id} عبر حوالة بنكية (${req.transferNumber}) بمبلغ ${appliedAmount.toFixed(2)} ر.س (${isFull ? 'سداد كامل' : `سداد جزئي · المتبقي: ${newRemainingAmount.toFixed(2)} ر.س`})`,
+      debit: 0,
+      credit: 0,
+      balanceAfter: targetPos?.walletBalance ?? 0
+    };
+    setAccountingEntries(prev => [accEntry, ...prev]);
+    firestoreSync.saveAccountingEntry(accEntry).catch(console.error);
+
+    const admEntry: AdminAccountingEntry = {
+      id: `adm-acc-${Date.now()}-lrep`,
+      date: formattedDate,
+      type: 'deposit_received',
+      referenceId: req.id,
+      supplierId: targetSupplier.id,
+      supplierName: `${targetSupplier.name} (${targetSupplier.storeName})`,
+      posId: loan.posId,
+      posCode: loan.posCode,
+      posName: loan.posName,
+      description: `موافقة المورد على سداد سلفة #${loan.id} بحوالة بنكية ${req.transferNumber} بمبلغ ${appliedAmount.toFixed(2)} ر.س`,
+      grossAmount: appliedAmount,
+      feeAmount: 0,
+      debit: 0,
+      credit: 0,
+      balanceAfter: superAdmin.walletBalance
+    };
+    setAdminAccountingEntries(prev => [admEntry, ...prev]);
+    firestoreSync.saveAdminAccountingEntry(admEntry).catch(console.error);
+
+    if (isFull) {
+      triggerConfetti();
+    }
+
+    addNotification({
+      posId: loan.posId,
+      supplierId: targetSupplier.id,
+      supplierName: targetSupplier.name,
+      title: isFull ? 'تمت الموافقة وإتمام سداد السلفة بالكامل' : 'تمت الموافقة على سداد جزء من السلفة',
+      message: isFull
+        ? `راجع المورد ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) بمبلغ ${appliedAmount.toFixed(2)} ر.س، وأصبحت السلفة #${loan.id} مسددة بالكامل.`
+        : `راجع المورد ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) وخصم ${appliedAmount.toFixed(2)} ر.س من السلفة #${loan.id}. المتبقي: ${newRemainingAmount.toFixed(2)} ر.س.`,
+      type: 'deposit'
+    });
+
+    showToast({
+      type: 'success',
+      title: isFull ? 'تم اعتماد الحوالة وسداد السلفة بالكامل' : 'تم اعتماد الحوالة وخصم الدفعة الجزئية',
+      description: `تم خصم ${appliedAmount.toFixed(2)} ر.س من السلفة #${loan.id} للعميل ${loan.posName}. المتبقي: ${newRemainingAmount.toFixed(2)} ر.س.`
+    });
+  };
+
+  const rejectLoanRepaymentRequest = (requestId: string, reason?: string) => {
+    const req = loanRepaymentRequests.find(r => r.id === requestId);
+    if (!req || req.status !== 'pending') return;
+
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const cleanReason = reason?.trim() || 'لم يتم مطابقة الحوالة البنكية في كشف الحساب';
+
+    const updatedReq: LoanRepaymentRequest = {
+      ...req,
+      status: 'rejected',
+      reviewedAt: formattedDate,
+      rejectionReason: cleanReason
+    };
+
+    setLoanRepaymentRequests(prev => prev.map(r => (r.id === requestId ? updatedReq : r)));
+    firestoreSync.saveLoanRepaymentRequest(updatedReq).catch(console.error);
+
+    addNotification({
+      posId: req.posId,
+      supplierId: req.supplierId,
+      supplierName: req.supplierName,
+      title: 'تم رفض طلب سداد السلفة بالحوالة',
+      message: `تم رفض طلب سداد السلفة #${req.loanId} (حوالة ${req.transferNumber}) من المورد ${req.supplierName}. السبب: ${cleanReason}`,
+      type: 'deposit'
+    });
+
+    showToast({
+      type: 'error',
+      title: 'تم رفض طلب سداد السلفة',
+      description: cleanReason
+    });
+  };
+
+  const rejectDepositRequest = (depositId: string, reason?: string) => {
+    const dep = depositRequests.find(d => d.id === depositId);
+    if (!dep) return;
+    const updatedDep: DepositRequest = { ...dep, status: 'rejected', notes: reason || 'تم رفض الطلب لعدم مطابقة بيانات الحوالة' };
+    setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedDep : d));
+    firestoreSync.saveDepositRequest(updatedDep).catch(console.error);
+    addNotification({
+      posId: dep.posId,
+      supplierId: dep.supplierId,
+      supplierName: supplier.name,
+      title: dep.requestType === 'loan' ? 'رفض طلب السلفة' : 'رفض طلب الإيداع',
+      message: reason || 'تم رفض طلب الإيداع/السلفة من المورد لعدم مطابقة الشروط.',
+      type: 'deposit'
+    });
+    showToast({
+      type: 'error',
+      title: 'تم رفض طلب الشحن',
+      description: reason || 'تم رفض الطلب لعدم مطابقة الحوالة'
+    });
+  };
+
+  // Supplier / المورد completing an order that needed manual fulfillment via Game ID
+  const completeSupplierOrder = (orderId: string, notes?: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (!targetOrder) return;
+    const isPlayerId = targetOrder.deliveryMethod === 'player_id';
+    const defaultNote = isPlayerId
+      ? `تم الشحن بنجاح من داخل اللعبة باستخدام الأيدي (${targetOrder?.deliveryDetails.playerId || ''})`
+      : 'تم إتمام الشحن وتفعيل الخدمة بنجاح من المورد';
+
+    const updatedOrder: Order = {
+      ...targetOrder,
+      status: 'completed',
+      supplierNotes: notes || defaultNote,
+      completedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      deliveryDetails: {
+        ...targetOrder.deliveryDetails,
+        inGameChargeStatus: 'completed_in_game'
+      }
+    };
+
+    setOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+    firestoreSync.saveOrder(updatedOrder).catch(console.error);
+
+    triggerConfetti();
+    addNotification({
+      posId: targetOrder.posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: 'مكتمل: تم تنفيذ طلبك',
+      message: `تم إتمام تنفيذ الطلب #${targetOrder.id} (${targetOrder.serviceName}) بنجاح.`,
+      type: 'order_status',
+      orderId: targetOrder.id
+    });
+    showToast({
+      type: 'success',
+      title: isPlayerId ? 'تم إتمام الشحن من اللعبة بنجاح!' : 'تم إتمام تنفيذ طلب الخدمة',
+      description: isPlayerId
+        ? `تم شحن الأيدي (${targetOrder?.deliveryDetails.playerId}) مباشرة من اللعبة وإشعار العميل باكتمال العملية.`
+        : `تم شحن الطلب #${orderId} وإشعار نقطة البيع باكتمال العملية.`
+    });
+  };
+
+  const rejectSupplierOrder = (orderId: string, reason?: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (!targetOrder) return;
+
+    // Refund customer
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== targetOrder.posId) return p;
+      return {
+        ...p,
+        walletBalance: parseFloat((p.walletBalance + targetOrder.totalDeducted).toFixed(2))
+      };
+    }));
+
+    const clientToRefund = posClients.find(p => p.id === targetOrder.posId);
+    if (clientToRefund) {
+      firestoreSync.savePosClient({
+        ...clientToRefund,
+        walletBalance: parseFloat((clientToRefund.walletBalance + targetOrder.totalDeducted).toFixed(2))
+      }).catch(console.error);
+    }
+
+    const updatedOrder: Order = {
+      ...targetOrder,
+      status: 'failed',
+      supplierNotes: reason || 'تم إلغاء الطلب واسترداد الرصيد لنقطة البيع'
+    };
+    setOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+    firestoreSync.saveOrder(updatedOrder).catch(console.error);
+
+    addNotification({
+      posId: targetOrder.posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: 'إلغاء طلب وإعادة الرصيد',
+      message: `تم إلغاء الطلب #${targetOrder.id} واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س إلى محفظتك. السبب: ${reason || 'تعذر التنفيذ'}`,
+      type: 'order_status',
+      orderId: targetOrder.id
+    });
+
+    showToast({
+      type: 'error',
+      title: 'تم إلغاء الطلب وإعادة الرصيد',
+      description: `تم إلغاء الطلب واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س لمحفظة العميل.`
+    });
+  };
+
+  // Supplier sending OTP / reply message directly to the client
+  const sendSupplierReplyToClient = (orderId: string, message: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+
+    setOrders(prev => prev.map(o => {
+      if (o.id !== orderId) return o;
+      return {
+        ...o,
+        supplierNotes: message,
+        deliveryDetails: {
+          ...o.deliveryDetails,
+          supplierReplyMessage: message,
+          verificationCodeEntered: message
+        }
+      };
+    }));
+
+    if (targetOrder) {
+      addNotification({
+        posId: targetOrder.posId,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        title: 'رسالة جديدة من المورد',
+        message: `أرسل المورد تنبيهاً/رمزاً للطلب #${orderId}: "${message}"`,
+        type: 'order_status',
+        orderId: targetOrder.id
+      });
+    }
+
+    try {
+      localStorage.setItem('digipos_live_supplier_reply', JSON.stringify({
+        orderId,
+        message,
+        timestamp: Date.now()
+      }));
+      window.dispatchEvent(new CustomEvent('digipos_supplier_reply', {
+        detail: { orderId, message }
+      }));
+    } catch (e) {
+      // ignore
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم إرسال الرمز للعميل فوراً!',
+      description: `تم إرسال الرمز "${message}" وسيظهر في شاشة العميل ونقطة البيع مباشرة.`
+    });
+  };
+
+  const confirmClientOtpRead = (orderId: string) => {
+    const targetOrder = orders.find(o => o.id === orderId);
+    if (!targetOrder) return;
+
+    const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const updatedOrder: Order = {
+      ...targetOrder,
+      deliveryDetails: {
+        ...targetOrder.deliveryDetails,
+        clientOtpReadConfirmation: true,
+        clientOtpReadAt: nowStr
+      }
+    };
+
+    setOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
+    firestoreSync.saveOrder(updatedOrder).catch(console.error);
+
+    showToast({
+      type: 'success',
+      title: 'تأكيد قراءة الرمز',
+      description: `تم إشعار المورد بأن العميل قام بقراءة رمز التحقق للطلب #${orderId}.`
+    });
+  };
+
+  // Update POS client tier
+  const updatePosTier = (posId: string, newTier: AccountTier) => {
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      const updated = { ...p, tier: newTier };
+      firestoreSync.savePosClient(updated).catch(console.error);
+      return updated;
+    }));
+    addNotification({
+      posId: posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: 'تحديث رتبة الحساب',
+      message: `تمت ترقية/تعديل رتبة حسابك إلى (${newTier}). تمتع بالأسعار والخصومات الجديدة!`,
+      type: 'tier_upgrade'
+    });
+    showToast({
+      type: 'success',
+      title: 'تم تعديل رتبة نقطة البيع',
+      description: `تمت ترقية/تعديل الرتبة إلى (${newTier}) بنجاح وتطبيق تسعيرات الرتبة فوراً.`
+    });
+  };
+
+  const togglePosLoanPrivilege = (posId: string) => {
+    let newGrantedState = false;
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      newGrantedState = !p.canRequestLoans;
+      const updated = { ...p, canRequestLoans: newGrantedState };
+      firestoreSync.savePosClient(updated).catch(console.error);
+      return updated;
+    }));
+
+    addNotification({
+      posId: posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: newGrantedState ? 'تفعيل ميزة طلب السلف والرصيد الآجل' : 'إلغاء ميزة طلب السلف',
+      message: newGrantedState
+        ? 'منحك المورد صلاحية إرسال طلبات السلف والرصيد الآجل. يمكنك الآن طلب السلف من نافذة شحن الرصيد.'
+        : 'قام المورد بإلغاء صلاحية طلب السلف والرصيد الآجل لحسابك.',
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: newGrantedState ? 'success' : 'info',
+      title: newGrantedState ? 'تم منح ميزة طلب السلفة بنجاح' : 'تم إلغاء ميزة طلب السلفة',
+      description: newGrantedState
+        ? 'أصبح بإمكان نقطة البيع إرسال طلبات السلف والرصيد الآجل للمورد.'
+        : 'تم سحب ميزة طلب السلف من نقطة البيع.'
+    });
+  };
+
+  const togglePosReceiveTransfersPrivilege = (posId: string) => {
+    let newGrantedState = false;
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      newGrantedState = !p.canReceiveSupplierTransfers;
+      const updated = { ...p, canReceiveSupplierTransfers: newGrantedState };
+      firestoreSync.savePosClient(updated).catch(console.error);
+      return updated;
+    }));
+
+    addNotification({
+      posId: posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: newGrantedState ? 'تفعيل ميزة استلام حوالات المورد' : 'إلغاء ميزة استلام حوالات المورد',
+      message: newGrantedState
+        ? 'منحك المورد صلاحية استلام ومراجعة حوالات المورد البنكية وتأكيدها.'
+        : 'قام المورد بإلغاء صلاحية استلام حوالات المورد لحسابك.',
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: newGrantedState ? 'success' : 'info',
+      title: newGrantedState ? 'تم تفعيل ميزة استلام الحوالات بنجاح' : 'تم إلغاء ميزة استلام الحوالات',
+      description: newGrantedState
+        ? 'أصبح العميل مؤهلاً لاستلام ومراجعة حوالات المورد البنكية.'
+        : 'تم سحب ميزة استلام الحوالات من العميل.'
+    });
+  };
+
+  const togglePosBonusPrivilege = (posId: string) => {
+    let newGrantedState = false;
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      newGrantedState = !p.canGetBonus;
+      const updated = { ...p, canGetBonus: newGrantedState };
+      firestoreSync.savePosClient(updated).catch(console.error);
+      return updated;
+    }));
+
+    addNotification({
+      posId: posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: newGrantedState ? 'تفعيل ميزة الحصول على بونص' : 'إلغاء ميزة الحصول على بونص',
+      message: newGrantedState
+        ? 'منحك المورد ميزة الحصول على بونص وعلاوات رصيد إضافية!'
+        : 'قام المورد بإلغاء ميزة الحصول على بونص لحسابك.',
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: newGrantedState ? 'success' : 'info',
+      title: newGrantedState ? 'تم تفعيل ميزة البونص بنجاح' : 'تم إلغاء ميزة البونص',
+      description: newGrantedState
+        ? 'أصبح العميل مؤهلاً للحصول على بونص ومكافآت.'
+        : 'تم سحب ميزة البونص من العميل.'
+    });
+  };
+
+  const togglePosGiftsPrivilege = (posId: string) => {
+    let newGrantedState = false;
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      newGrantedState = !p.canViewGifts;
+      const updated = { ...p, canViewGifts: newGrantedState };
+      firestoreSync.savePosClient(updated).catch(console.error);
+      return updated;
+    }));
+
+    addNotification({
+      posId: posId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: newGrantedState ? 'تفعيل ميزة الهدايا والعروض المجانية' : 'إلغاء ميزة الهدايا والعروض المجانية',
+      message: newGrantedState
+        ? 'منحك المورد ميزة ظهور الهدايا والعروض المجانية الحصرية!'
+        : 'قام المورد بإلغاء ميزة الهدايا والعروض المجانية لحسابك.',
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: newGrantedState ? 'success' : 'info',
+      title: newGrantedState ? 'تم تفعيل ميزة الهدايا والعروض المجانية بنجاح' : 'تم إلغاء ميزة الهدايا',
+      description: newGrantedState
+        ? 'أصبح بإمكان العميل تصفح واستلام الهدايا والعروض المجانية.'
+        : 'تم سحب ميزة الهدايا والعروض المجانية من العميل.'
+    });
+  };
+
+  // Update POS client profile details (logo, tradeName, ownerName, email, phone, servicePhone, country, city)
+  const updatePosProfile = (posId: string, updates: Partial<POSClient>) => {
+    const targetClient = posClients.find(p => p.id === posId) || currentPos;
+    const targetSup = suppliers.find(s => s.id === targetClient.supplierId) || supplier;
+    const updatedClient = { ...targetClient, ...updates };
+
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== posId) return p;
+      return updatedClient;
+    }));
+
+    firestoreSync.savePosClient(updatedClient).catch(console.error);
+
+    if (currentUser && currentUser.associatedId === posId) {
+      const updatedAuthUser: AuthUser = {
+        ...currentUser,
+        name: updates.ownerName || currentUser.name,
+        email: updates.email || currentUser.email,
+        phone: updates.phone || currentUser.phone
+      };
+      setCurrentUser(updatedAuthUser);
+      firestoreSync.saveUser(updatedAuthUser).catch(console.error);
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث البيانات وحفظها في القواعد الثلاث',
+      description: 'تم الحفظ والمزامنة في قاعدة بيانات العميل، وقاعدة بيانات المورد، وقاعدة بيانات مدير التطبيق.'
+    });
+  };
+
+  const updateSupplierProfile = (supplierId: string, updates: Partial<Supplier>) => {
+    const targetSup = suppliers.find(s => s.id === supplierId) || supplier;
+    const updatedSup = { ...targetSup, ...updates };
+
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplierId) return s;
+      return updatedSup;
+    }));
+
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+
+    if (currentUser && currentUser.associatedId === supplierId) {
+      const updatedAuthUser: AuthUser = {
+        ...currentUser,
+        name: updates.name || currentUser.name,
+        email: updates.email || currentUser.email,
+        phone: updates.phone || currentUser.phone
+      };
+      setCurrentUser(updatedAuthUser);
+      firestoreSync.saveUser(updatedAuthUser).catch(console.error);
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث بيانات المورد بنجاح',
+      description: 'تم الحفظ والمزامنة في قاعدة بيانات المورد وقاعدة البيانات المركزية.'
+    });
+  };
+
+  // Create invite link with pre-assigned tier
+  const createInviteLink = (targetTier: AccountTier) => {
+    const code = `${supplier.name.slice(0, 3).toUpperCase()}-${targetTier.toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+    const newLink: InviteLink = {
+      id: `inv-${Date.now()}`,
+      code,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      targetTier,
+      createdAt: new Date().toISOString().substring(0, 10),
+      usedCount: 0,
+      url: `https://digipos.app/join?ref=${code}&tier=${targetTier}&sup=${supplier.id}`
+    };
+    setInviteLinks(prev => [newLink, ...prev]);
+    firestoreSync.saveInviteLink(newLink).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم إنشاء رابط الدعوة',
+      description: `الرابط جاهز مع رتبة (${targetTier}) محددة مسبقاً للعميل عند التسجيل.`
+    });
+    return newLink;
+  };
+
+  // Add catalog
+  const addCatalog = (nameAr: string, descriptionAr: string, icon: string, isFreeGiftsCatalog?: boolean) => {
+    if (role !== 'super_admin' && !platformSettings.allowSuppliersCreateCustomCatalogs) {
+      showToast({
+        type: 'error',
+        title: 'إجراء غير متاح',
+        description: 'إضافة كتالوجات مخصصة معطّلة حالياً من إعدادات مدير التطبيق.'
+      });
+      return;
+    }
+    const newCat: Catalog = {
+      id: `cat-${Date.now()}`,
+      supplierId: supplier.id,
+      nameAr,
+      descriptionAr,
+      icon,
+      serviceCount: 0,
+      isFreeGiftsCatalog: Boolean(isFreeGiftsCatalog)
+    };
+    setCatalogs(prev => [...prev, newCat]);
+    firestoreSync.saveCatalog(newCat).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة الكتالوج',
+      description: `تم إنشاء كتالوج "${nameAr}" بنجاح.`
+    });
+  };
+
+  // Update catalog
+  const updateCatalog = (id: string, updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>) => {
+    const targetCat = catalogs.find(c => c.id === id);
+    if (targetCat && (targetCat.isFixedByAdmin || targetCat.supplierId === 'all') && role !== 'super_admin') {
+      showToast({
+        type: 'error',
+        title: 'كتالوج ثابت من الإدارة',
+        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن تعديله من حساب المورد.'
+      });
+      return;
+    }
+    setCatalogs(prev => prev.map(c => {
+      if (c.id === id) {
+        const updated = { ...c, ...updates };
+        firestoreSync.saveCatalog(updated).catch(console.error);
+        return updated;
+      }
+      return c;
+    }));
+    showToast({
+      type: 'success',
+      title: 'تم تعديل الكتالوج',
+      description: 'تم حفظ تعديلات بيانات الكتالوج بنجاح.'
+    });
+  };
+
+  // Delete catalog
+  const deleteCatalog = (id: string): { success: boolean; error?: string } => {
+    const targetCat = catalogs.find(c => c.id === id);
+    if (targetCat && (targetCat.isFixedByAdmin || targetCat.supplierId === 'all') && role !== 'super_admin') {
+      showToast({
+        type: 'error',
+        title: 'كتالوج ثابت من الإدارة',
+        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن حذفه من حساب المورد.'
+      });
+      return { success: false, error: 'كتالوج ثابت من الإدارة' };
+    }
+    const linkedServices = services.filter(s => s.catalogId === id);
+    if (linkedServices.length > 0) {
+      showToast({
+        type: 'error',
+        title: 'تعذر حذف الكتالوج',
+        description: `الكتالوج يحتوي على ${linkedServices.length} خدمة مرتبطة. قم بنقلها لكتالوج آخر أو حذفها أولاً.`
+      });
+      return { success: false, error: 'يحتوي على خدمات مرتبطة' };
+    }
+    setCatalogs(prev => prev.filter(c => c.id !== id));
+    firestoreSync.deleteCatalog(id).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم حذف الكتالوج',
+      description: 'تم حذف الكتالوج الفارغ بنجاح.'
+    });
+    return { success: true };
+  };
+
+  // Platform Interface Settings, Fixed Catalogs & Dynamic Dropdowns (Super Admin)
+  const updatePlatformInterfaceSettings = (updates: Partial<PlatformInterfaceSettings>) => {
+    const nextSettings: PlatformInterfaceSettings = mergePlatformSettings({
+      ...platformSettings,
+      ...updates,
+      updatedAt: new Date().toISOString()
+    });
+    setPlatformSettings(nextSettings);
+    firestoreSync.savePlatformSettings(nextSettings).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم حفظ إعدادات الواجهات',
+      description: 'تم تطبيق الإعدادات وتحديث واجهات الموردين ونقاط البيع والعملاء بنجاح.'
+    });
+  };
+
+  const addFixedCatalogByAdmin = (input: {
+    nameAr: string;
+    descriptionAr: string;
+    icon: string;
+    isFreeGiftsCatalog?: boolean;
+  }) => {
+    const cleanName = input.nameAr.trim();
+    if (!cleanName) return;
+    const newFixedCat: Catalog = {
+      id: `cat-fixed-${Date.now()}`,
+      supplierId: 'all',
+      nameAr: cleanName,
+      descriptionAr: input.descriptionAr.trim() || 'كتالوج ثابت معتمد من مدير التطبيق لجميع الموردين',
+      icon: input.icon || 'Layers',
+      serviceCount: 0,
+      isFreeGiftsCatalog: Boolean(input.isFreeGiftsCatalog),
+      isFixedByAdmin: true
+    };
+    setCatalogs(prev => [newFixedCat, ...prev]);
+    firestoreSync.saveCatalog(newFixedCat).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة الكتالوج الثابت',
+      description: `سيظهر الكتالوج "${cleanName}" لجميع الموردين بشكل ثابت وغير قابل للتعديل.`
+    });
+  };
+
+  const updateFixedCatalogByAdmin = (
+    id: string,
+    updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>
+  ) => {
+    setCatalogs(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const updated: Catalog = {
+        ...c,
+        ...updates,
+        isFixedByAdmin: true,
+        supplierId: 'all'
+      };
+      firestoreSync.saveCatalog(updated).catch(console.error);
+      return updated;
+    }));
+    showToast({
+      type: 'success',
+      title: 'تم تحديث الكتالوج الثابت',
+      description: 'تم حفظ تعديلات مدير التطبيق على الكتالوج الثابت وتعميمها لجميع الموردين.'
+    });
+  };
+
+  const deleteFixedCatalogByAdmin = (id: string): { success: boolean; error?: string } => {
+    const linkedServices = services.filter(s => s.catalogId === id);
+    if (linkedServices.length > 0) {
+      showToast({
+        type: 'error',
+        title: 'تعذر حذف الكتالوج الثابت',
+        description: `الكتالوج مرتبط بـ ${linkedServices.length} خدمة. يرجى نقل أو حذف الخدمات المرتبطة أولاً.`
+      });
+      return { success: false, error: 'يحتوي على خدمات مرتبطة' };
+    }
+    setCatalogs(prev => prev.filter(c => c.id !== id));
+    firestoreSync.deleteCatalog(id).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم حذف الكتالوج الثابت',
+      description: 'تم حذف الكتالوج الثابت من النظام.'
+    });
+    return { success: true };
+  };
+
+  const addDropdownOption = (
+    listKey: PlatformDropdownListKey,
+    input: { labelAr: string; value?: string }
+  ): { success: boolean; error?: string } => {
+    const cleanLabel = input.labelAr.trim();
+    if (!cleanLabel) {
+      return { success: false, error: 'يرجى كتابة اسم العنصر بالعربية' };
+    }
+    const existingList = platformSettings[listKey] || [];
+    const normalizedVal = normalizeDropdownValue(cleanLabel, input.value);
+
+    if (
+      existingList.some(
+        item =>
+          item.labelAr.trim().toLowerCase() === cleanLabel.toLowerCase() ||
+          item.value.trim().toLowerCase() === normalizedVal.toLowerCase()
+      )
+    ) {
+      showToast({
+        type: 'error',
+        title: 'عنصر مكرر',
+        description: 'هذا الخيار موجود مسبقاً في القائمة المنسدلة.'
+      });
+      return { success: false, error: 'هذا الخيار موجود مسبقاً' };
+    }
+
+    const newItem: DropdownOptionItem = {
+      id: `${listKey}-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      value: normalizedVal,
+      labelAr: cleanLabel,
+      isSystem: false,
+      isActive: true
+    };
+    const nextSettings: PlatformInterfaceSettings = {
+      ...platformSettings,
+      [listKey]: [...existingList, newItem],
+      updatedAt: new Date().toISOString()
+    };
+    setPlatformSettings(nextSettings);
+    firestoreSync.savePlatformSettings(nextSettings).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم تحديث القائمة المنسدلة',
+      description: `تمت إضافة "${cleanLabel}" وتحديث القوائم تلقائياً.`
+    });
+    return { success: true };
+  };
+
+  const updateDropdownOption = (
+    listKey: PlatformDropdownListKey,
+    optionId: string,
+    updates: Partial<Pick<DropdownOptionItem, 'labelAr' | 'value' | 'isActive'>>
+  ) => {
+    const existingList = platformSettings[listKey] || [];
+    const nextList = existingList.map(opt =>
+      opt.id === optionId ? { ...opt, ...updates } : opt
+    );
+    const nextSettings: PlatformInterfaceSettings = {
+      ...platformSettings,
+      [listKey]: nextList,
+      updatedAt: new Date().toISOString()
+    };
+    setPlatformSettings(nextSettings);
+    firestoreSync.savePlatformSettings(nextSettings).catch(console.error);
+  };
+
+  const deleteDropdownOption = (listKey: PlatformDropdownListKey, optionId: string) => {
+    const existingList = platformSettings[listKey] || [];
+    const target = existingList.find(opt => opt.id === optionId);
+    if (target?.isSystem) {
+      // System items are deactivated instead of permanently deleted
+      updateDropdownOption(listKey, optionId, { isActive: !target.isActive });
+      return;
+    }
+    const nextSettings: PlatformInterfaceSettings = {
+      ...platformSettings,
+      [listKey]: existingList.filter(opt => opt.id !== optionId),
+      updatedAt: new Date().toISOString()
+    };
+    setPlatformSettings(nextSettings);
+    firestoreSync.savePlatformSettings(nextSettings).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تم حذف العنصر',
+      description: 'تم حذف العنصر من القائمة المنسدلة.'
+    });
+  };
+
+  // Add service
+  const addService = (serviceData: Omit<DigitalService, 'id' | 'supplierId' | 'isActive'>) => {
+    const newSrv: DigitalService = {
+      ...serviceData,
+      id: `srv-${Date.now()}`,
+      supplierId: supplier.id,
+      isActive: true
+    };
+    setServices(prev => [...prev, newSrv]);
+    firestoreSync.saveService(newSrv).catch(console.error);
+    setCatalogs(prev => prev.map(c => c.id === serviceData.catalogId ? { ...c, serviceCount: (c.serviceCount || 0) + 1 } : c));
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة الخدمة',
+      description: `تمت إضافة خدمة "${serviceData.nameAr}" وتسعيراتها لجميع الرتب بنجاح.`
+    });
+  };
+
+  // Update service
+  const updateService = (id: string, updates: Partial<Omit<DigitalService, 'id' | 'supplierId'>>) => {
+    setServices(prev => {
+      let oldCatalogId = '';
+      const updatedList = prev.map(s => {
+        if (s.id === id) {
+          oldCatalogId = s.catalogId;
+          const updated = { ...s, ...updates };
+          firestoreSync.saveService(updated).catch(console.error);
+          return updated;
+        }
+        return s;
+      });
+
+      // Recalculate catalog counts if catalog changed
+      if (updates.catalogId && updates.catalogId !== oldCatalogId) {
+        setCatalogs(catList => catList.map(cat => ({
+          ...cat,
+          serviceCount: updatedList.filter(srv => srv.catalogId === cat.id).length
+        })));
+      }
+
+      return updatedList;
+    });
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث الخدمة',
+      description: 'تم حفظ تعديلات الخدمة والباقات والتسعير الطبقي بنجاح.'
+    });
+  };
+
+  // Delete service
+  const deleteService = (id: string) => {
+    const targetService = services.find(s => s.id === id);
+    setServices(prev => prev.filter(s => s.id !== id));
+    firestoreSync.deleteService(id).catch(console.error);
+    if (targetService) {
+      setCatalogs(prev => prev.map(c => 
+        c.id === targetService.catalogId 
+          ? { ...c, serviceCount: Math.max(0, (c.serviceCount || 1) - 1) } 
+          : c
+      ));
+    }
+    showToast({
+      type: 'success',
+      title: 'تم حذف الخدمة',
+      description: 'تم حذف الخدمة بنجاح.'
+    });
+  };
+
+  // Add Supplier by Super Admin
+  const addSupplier = (newSupData: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => {
+    const newId = `sup-${Date.now()}`;
+    const newSup: Supplier = {
+      ...newSupData,
+      id: newId,
+      walletBalance: 0,
+      createdAt: new Date().toISOString().substring(0, 10)
+    };
+    setSuppliers(prev => [...prev, newSup]);
+    firestoreSync.saveSupplier(newSup).catch(console.error);
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة المورد بنجاح',
+      description: `تم تسجيل المورد (${newSup.name}) وضبط نسب الرسوم الخاصة به بنجاح.`
+    });
+  };
+
+  // Super Admin updates specific supplier fee
+  const updateSupplierFeeConfig = (
+    supplierId: string, 
+    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }
+  ) => {
+    const targetSup = suppliers.find(s => s.id === supplierId);
+    const updatedSup = targetSup
+      ? {
+          ...targetSup,
+          feeType: config.feeType,
+          feePercentage: config.percentage,
+          fixedFeeAmount: config.fixedAmount
+        }
+      : null;
+
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplierId) return s;
+      return {
+        ...s,
+        feeType: config.feeType,
+        feePercentage: config.percentage,
+        fixedFeeAmount: config.fixedAmount
+      };
+    }));
+    if (updatedSup) {
+      firestoreSync.saveSupplier(updatedSup).catch(console.error);
+    }
+    showToast({
+      type: 'success',
+      title: 'تم تحديث رسوم المورد',
+      description: `تم ضبط رسوم المورد: نوع (${config.feeType}) نسبة (${config.percentage}%) ومبلغ مقطوع (${config.fixedAmount} ر.س).`
+    });
+  };
+
+  // Super Admin updates global fee
+  const updateGlobalFeeConfig = (
+    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }
+  ) => {
+    const nextAdmin: SuperAdmin = {
+      ...superAdmin,
+      defaultFeeType: config.feeType,
+      defaultFeePercentage: config.percentage,
+      defaultFixedFeeAmount: config.fixedAmount
+    };
+    setSuperAdmin(nextAdmin);
+    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+
+    // Update all suppliers with global default and sync to Firestore
+    const updatedSuppliers = suppliers.map(s => ({
+      ...s,
+      feeType: config.feeType,
+      feePercentage: config.percentage,
+      fixedFeeAmount: config.fixedAmount
+    }));
+    setSuppliers(updatedSuppliers);
+    updatedSuppliers.forEach(s => {
+      firestoreSync.saveSupplier(s).catch(console.error);
+    });
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث النسبة والمبلغ العام',
+      description: `تم تطبيق الإعدادات العامة على جميع الموردين: نسبة ${config.percentage}% ومبلغ ${config.fixedAmount} ر.س.`
+    });
+  };
+
+  const adminSettleBank = (amount: number, bankIban: string) => {
+    if (superAdmin.walletBalance < amount) {
+      showToast({
+        type: 'error',
+        title: 'الرصيد غير كافٍ',
+        description: 'رصيد محفظة الإدارة لا يكفي للتحويل إلى الحساب البنكي.'
+      });
+      return;
+    }
+    const newBal = parseFloat((superAdmin.walletBalance - amount).toFixed(2));
+    const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const refId = `adm-stl-${Date.now().toString().slice(-4)}`;
+
+    setSuperAdmin(prev => ({
+      ...prev,
+      walletBalance: newBal
+    }));
+
+    setAdminAccountingEntries(prev => [
+      {
+        id: `adm-acc-${Date.now()}-stl`,
+        date: formattedDate,
+        type: 'bank_settlement',
+        referenceId: refId,
+        supplierId: supplier.id,
+        supplierName: `${supplier.name} (${supplier.storeName})`,
+        description: `تسوية رصيد بنكي وتحويل ${amount.toFixed(2)} ر.س إلى الحساب البنكي للإدارة (${bankIban})`,
+        grossAmount: amount,
+        feeAmount: 0,
+        debit: amount,
+        credit: 0,
+        balanceAfter: newBal,
+        notes: `تم الخصم من محفظة الإدارة وتسوية القيمة مع بنك المورد (${supplier.bankAccountDetails.bankName})`
+      },
+      ...prev
+    ]);
+
+    triggerConfetti();
+    showToast({
+      type: 'success',
+      title: 'تم التحويل إلى الحساب البنكي',
+      description: `تم تحويل مبلغ ${amount.toFixed(2)} ر.س من محفظة مدير التطبيق إلى الآيبان ${bankIban}.`
+    });
+  };
+
+  const adminTransferToAgent = (targetPosCode: string, amount: number) => {
+    const target = posClients.find(p => p.posCode.trim().toUpperCase() === targetPosCode.trim().toUpperCase());
+    if (!target) {
+      showToast({
+        type: 'error',
+        title: 'لم يتم العثور على نقطة البيع',
+        description: `المعرف ${targetPosCode} غير مسجل في النظام.`
+      });
+      return;
+    }
+    if (superAdmin.walletBalance < amount) {
+      showToast({
+        type: 'error',
+        title: 'رصيد محفظة الإدارة غير كافٍ',
+        description: 'لا يوجد رصيد كافٍ في محفظة المدير.'
+      });
+      return;
+    }
+
+    const newBal = parseFloat((superAdmin.walletBalance - amount).toFixed(2));
+    const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const refId = `adm-trf-${Date.now().toString().slice(-4)}`;
+
+    setSuperAdmin(prev => ({
+      ...prev,
+      walletBalance: newBal
+    }));
+
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== target.id) return p;
+      return {
+        ...p,
+        walletBalance: parseFloat((p.walletBalance + amount).toFixed(2))
+      };
+    }));
+
+    setAdminAccountingEntries(prev => [
+      {
+        id: `adm-acc-${Date.now()}-trf`,
+        date: formattedDate,
+        type: 'agent_transfer',
+        referenceId: refId,
+        posId: target.id,
+        posCode: target.posCode,
+        posName: target.tradeName,
+        description: `تحويل رصيد بقيمة ${amount.toFixed(2)} ر.س من محفظة الإدارة لنقطة البيع (${target.tradeName} - ${target.posCode})`,
+        grossAmount: amount,
+        feeAmount: 0,
+        debit: amount,
+        credit: 0,
+        balanceAfter: newBal,
+        notes: `إيداع مباشر في محفظة نقطة البيع`
+      },
+      ...prev
+    ]);
+
+    triggerConfetti();
+    showToast({
+      type: 'success',
+      title: 'تم تحويل الرصيد من الإدارة',
+      description: `تم إيداع ${amount.toFixed(2)} ر.س مباشرة في محفظة ${target.tradeName}.`
+    });
+  };
+
+  const addOfficeEmployee = (employeeData: {
+    name: string;
+    email: string;
+    password?: string;
+    phone: string;
+    roleTitle: string;
+    permissions: EmployeePermissions;
+  }) => {
+    const cleanEmail = employeeData.email.trim().toLowerCase();
+    const cleanPassword = employeeData.password?.trim() || '123456';
+    const newEmp: OfficeEmployee = {
+      id: `emp-${Date.now().toString().slice(-6)}`,
+      supplierId: supplier.id,
+      name: employeeData.name.trim(),
+      email: cleanEmail,
+      password: cleanPassword,
+      phone: employeeData.phone.trim(),
+      roleTitle: employeeData.roleTitle.trim() || 'موظف مكتب',
+      permissions: employeeData.permissions,
+      createdAt: new Date().toISOString().substring(0, 10)
+    };
+
+    // 1. Save in the supplier's employees array
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplier.id) return s;
+      const currentEmployees = s.employees || [];
+      const updated = {
+        ...s,
+        employees: [newEmp, ...currentEmployees.filter(e => e.email?.toLowerCase().trim() !== cleanEmail)]
+      };
+      firestoreSync.saveSupplier(updated).catch(console.error);
+      return updated;
+    }));
+
+    // 2. Register as a dedicated user account of type 'employee' in users collection!
+    const employeeUser: AuthUser = {
+      id: newEmp.id,
+      email: cleanEmail,
+      name: newEmp.name,
+      role: 'employee',
+      phone: newEmp.phone,
+      associatedId: supplier.id,
+      supplierId: supplier.id,
+      employeeId: newEmp.id,
+      roleTitle: newEmp.roleTitle,
+      permissions: newEmp.permissions
+    };
+    firestoreSync.saveUser(employeeUser).catch(console.error);
+
+    showToast({
+      type: 'success',
+      title: 'تم إنشاء وتوثيق حساب الموظف بنجاح',
+      description: `تم إضافة (${newEmp.name}) كحساب موظف معتمد في متجر (${supplier.name}) وحفظ كلمة المرور والصلاحيات في قاعدة البيانات.`
+    });
+  };
+
+  const updateOfficeEmployee = (empId: string, updates: Partial<OfficeEmployee>) => {
+    let updatedEmp: OfficeEmployee | undefined;
+
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplier.id) return s;
+      const currentEmployees = s.employees || [];
+      const updatedList = currentEmployees.map(e => {
+        if (e.id === empId) {
+          updatedEmp = { ...e, ...updates };
+          return updatedEmp;
+        }
+        return e;
+      });
+      const updated = {
+        ...s,
+        employees: updatedList
+      };
+      firestoreSync.saveSupplier(updated).catch(console.error);
+      return updated;
+    }));
+
+    if (updatedEmp) {
+      const emp = updatedEmp as OfficeEmployee;
+      const employeeUser: AuthUser = {
+        id: emp.id,
+        email: emp.email.toLowerCase().trim(),
+        name: emp.name,
+        role: 'employee',
+        phone: emp.phone,
+        associatedId: supplier.id,
+        supplierId: supplier.id,
+        employeeId: emp.id,
+        roleTitle: emp.roleTitle,
+        permissions: emp.permissions
+      };
+      firestoreSync.saveUser(employeeUser).catch(console.error);
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث بيانات الموظف',
+      description: 'تم حفظ تعديلات وصلاحيات الموظف وكلمة المرور بنجاح في النظام.'
+    });
+  };
+
+  const removeOfficeEmployee = (empId: string) => {
+    setSuppliers(prev => prev.map(s => {
+      if (s.id !== supplier.id) return s;
+      const currentEmployees = s.employees || [];
+      const updated = {
+        ...s,
+        employees: currentEmployees.filter(e => e.id !== empId)
+      };
+      firestoreSync.saveSupplier(updated).catch(console.error);
+      return updated;
+    }));
+
+    showToast({
+      type: 'info',
+      title: 'تم حذف الموظف',
+      description: 'تم إزالة الموظف من صلاحيات مكتب المورد.'
+    });
+  };
+
+  return (
+    <AppContext.Provider
+      value={{
+        role,
+        setRole,
+        viewMode,
+        setViewMode,
+        activeNavTab,
+        setActiveNavTab,
+        isFirestoreConnected,
+        isSyncingWithFirestore,
+        isSupplierSelectionRequired,
+        setIsSupplierSelectionRequired,
+        syncAllToFirestore,
+        clearUsersSuppliersAndClientsData,
+        checkDatabaseConnection,
+        isAuthenticated,
+        currentUser,
+        loginWithGoogle,
+        sendLoginOtp,
+        verifyLoginOtpAndLogin,
+        registerAccount,
+        requestPasswordReset,
+        verifyResetCode,
+        completePasswordReset,
+        logout,
+        currentPos,
+        setCurrentPosId,
+        posClients,
+        suppliers,
+        availableClientSuppliers,
+        supplier,
+        currentPosSupplier,
+        setCurrentSupplierId,
+        superAdmin,
+        catalogs,
+        services,
+        depositRequests,
+        loanRepaymentRequests,
+        supplierBankAccounts,
+        orders,
+        accountingEntries,
+        adminAccountingEntries,
+        inviteLinks,
+        notifications,
+        supplierNotifications,
+        clientNotifications,
+        unreadNotificationsCount,
+        unreadSupplierNotificationsCount,
+        unreadPosNotificationsCount,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        clearAllNotifications,
+        markAllSupplierNotificationsAsRead,
+        clearSupplierNotifications,
+        addNotification,
+        triggerConfetti,
+        showToast,
+        toasts,
+        removeToast,
+        calculateFee,
+        executePurchase,
+        executeBalanceTransfer,
+        submitDepositRequest,
+        saveSupplierBankAccount,
+        toggleBankAccountTransferPrivilege,
+        deleteSupplierBankAccount,
+        confirmDepositReceiptByReceiver,
+        confirmLoanRepaymentReceiptByReceiver,
+        approveDepositRequest,
+        rejectDepositRequest,
+        markLoanAsRepaid,
+        payLoanFromWallet,
+        submitLoanRepaymentRequest,
+        approveLoanRepaymentRequest,
+        rejectLoanRepaymentRequest,
+        completeSupplierOrder,
+        rejectSupplierOrder,
+        sendSupplierReplyToClient,
+        confirmClientOtpRead,
+        updatePosTier,
+        togglePosLoanPrivilege,
+        togglePosReceiveTransfersPrivilege,
+        togglePosBonusPrivilege,
+        togglePosGiftsPrivilege,
+        updatePosProfile,
+        updateSupplierProfile,
+        createInviteLink,
+        addCatalog,
+        updateCatalog,
+        deleteCatalog,
+        addService,
+        updateService,
+        deleteService,
+        platformSettings,
+        updatePlatformInterfaceSettings,
+        addFixedCatalogByAdmin,
+        updateFixedCatalogByAdmin,
+        deleteFixedCatalogByAdmin,
+        addDropdownOption,
+        updateDropdownOption,
+        deleteDropdownOption,
+        addSupplier,
+        updateSupplierFeeConfig,
+        updateGlobalFeeConfig,
+        adminSettleBank,
+        adminTransferToAgent,
+        addOfficeEmployee,
+        updateOfficeEmployee,
+        removeOfficeEmployee
+      }}
+    >
+      {children}
+    </AppContext.Provider>
+  );
+};
+
+export const useApp = () => {
+  const context = useContext(AppContext);
+  if (!context) {
+    throw new Error('useApp must be used within an AppProvider');
+  }
+  return context;
+};

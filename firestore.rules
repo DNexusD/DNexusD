@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if true;
+    }
+
+    // Test connection endpoint
+    match /test/connection {
+      allow read, write: if true;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // POS Clients collection
+    match /posClients/{posId} {
+      allow read, write: if true;
+    }
+
+    // Suppliers collection
+    match /suppliers/{supplierId} {
+      allow read, write: if true;
+    }
+
+    // System configurations
+    match /system/{configId} {
+      allow read, write: if true;
+    }
+
+    // Catalogs
+    match /catalogs/{catalogId} {
+      allow read, write: if true;
+    }
+
+    // Digital Services
+    match /services/{serviceId} {
+      allow read, write: if true;
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Deposit Requests and Loans
+    match /depositRequests/{depositId} {
+      allow read, write: if true;
+    }
+
+    // Accounting entries ledger
+    match /accountingEntries/{entryId} {
+      allow read, write: if true;
+    }
+
+    // Admin accounting entries
+    match /adminAccountingEntries/{entryId} {
+      allow read, write: if true;
+    }
+
+    // Balance transfers
+    match /balanceTransfers/{transferId} {
+      allow read, write: if true;
+    }
+
+    // Invite links
+    match /inviteLinks/{inviteId} {
+      allow read, write: if true;
+    }
+
+    // Loan repayment requests
+    match /loanRepaymentRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    // Supplier bank accounts & POS receiver delegations
+    match /supplierBankAccounts/{accountId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "DNexusD2",
+  "description": "A comprehensive platform for digital service providers to manage sales, tiered pricing, and automated inventory for their clients.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

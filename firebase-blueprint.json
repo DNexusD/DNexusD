@@ -1,0 +1,392 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role-based permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["pos_client", "supplier", "super_admin", "employee"] },
+        "phone": { "type": "string" },
+        "associatedId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "name", "role"]
+    },
+    "POSClient": {
+      "title": "POSClient",
+      "description": "Client point of sale profile and wallet",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "posCode": { "type": "string" },
+        "tradeName": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "servicePhone": { "type": "string" },
+        "email": { "type": "string" },
+        "country": { "type": "string" },
+        "city": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "tier": { "type": "string", "enum": ["regular", "bronze", "silver", "gold", "vip"] },
+        "walletBalance": { "type": "number" },
+        "totalSpent": { "type": "number" },
+        "ordersCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "qrCodeValue": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "canReceiveSupplierTransfers": { "type": "boolean" }
+      },
+      "required": ["id", "posCode", "tradeName", "ownerName", "phone", "supplierId", "tier", "walletBalance"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Digital service supplier profile and wallet",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "storeName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "feePercentage": { "type": "number" },
+        "fixedFeeAmount": { "type": "number" },
+        "feeType": { "type": "string", "enum": ["percentage", "fixed", "both"] },
+        "walletBalance": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "country": { "type": "string" },
+        "city": { "type": "string" }
+      },
+      "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
+    },
+    "SuperAdmin": {
+      "title": "SuperAdmin",
+      "description": "Central system administrator config and collected fees",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "walletBalance": { "type": "number" },
+        "defaultFeePercentage": { "type": "number" },
+        "defaultFixedFeeAmount": { "type": "number" },
+        "defaultFeeType": { "type": "string", "enum": ["percentage", "fixed", "both"] }
+      },
+      "required": ["name", "email", "walletBalance"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Digital service purchase and fulfillment order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "posId": { "type": "string" },
+        "posCode": { "type": "string" },
+        "posName": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "packageId": { "type": "string" },
+        "packageName": { "type": "string" },
+        "deliveryMethod": { "type": "string", "enum": ["player_id", "account_login", "voucher_code"] },
+        "costPrice": { "type": "number" },
+        "salePriceToCustomer": { "type": "number" },
+        "feeAmount": { "type": "number" },
+        "totalDeducted": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["wallet", "visa"] },
+        "status": { "type": "string", "enum": ["completed", "in_progress", "pending_supplier", "failed"] },
+        "supplierNotes": { "type": "string" },
+        "completedAt": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" }
+      },
+      "required": ["id", "date", "posId", "posCode", "supplierId", "serviceId", "serviceName", "costPrice", "feeAmount", "totalDeducted", "paymentMethod", "status"]
+    },
+    "DepositRequest": {
+      "title": "DepositRequest",
+      "description": "Wallet deposits and loan/advance credit requests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "posId": { "type": "string" },
+        "posName": { "type": "string" },
+        "posCode": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "amount": { "type": "number" },
+        "transferNumber": { "type": "string" },
+        "transferSenderName": { "type": "string" },
+        "bankName": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "notes": { "type": "string" },
+        "requestType": { "type": "string", "enum": ["cash", "loan"] },
+        "loanReason": { "type": "string" },
+        "loanRepaidStatus": { "type": "string", "enum": ["unpaid", "partial", "repaid"] },
+        "paidAmount": { "type": "number" },
+        "repaidPayments": { "type": "array" },
+        "repaidAt": { "type": "string" },
+        "targetBankAccountId": { "type": "string" },
+        "targetBankName": { "type": "string" },
+        "targetBankAccountNumber": { "type": "string" },
+        "targetIban": { "type": "string" },
+        "targetBankAccountCountry": { "type": "string" },
+        "targetAccountHolderName": { "type": "string" },
+        "targetAccountHolderEmail": { "type": "string" },
+        "receiverPosId": { "type": "string" },
+        "receiverPosName": { "type": "string" },
+        "receiverPosCode": { "type": "string" },
+        "receiverPosEmail": { "type": "string" },
+        "receiverConfirmationStatus": { "type": "string", "enum": ["pending", "confirmed", "rejected"] },
+        "receiverConfirmedAt": { "type": "string" },
+        "receiverConfirmedByName": { "type": "string" },
+        "receiverConfirmationNote": { "type": "string" },
+        "transferReceiptImage": { "type": "string" },
+        "transferReceiptFileName": { "type": "string" }
+      },
+      "required": ["id", "posId", "posCode", "supplierId", "amount", "status", "date"]
+    },
+    "SupplierBankAccount": {
+      "title": "SupplierBankAccount",
+      "description": "Supplier bank accounts with optional POS client delegation for receiving transfers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "bankName": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "iban": { "type": "string" },
+        "country": { "type": "string" },
+        "accountHolderName": { "type": "string" },
+        "accountHolderEmail": { "type": "string" },
+        "accountHolderPhone": { "type": "string" },
+        "delegatedPosId": { "type": "string" },
+        "delegatedPosName": { "type": "string" },
+        "delegatedPosCode": { "type": "string" },
+        "canReceiveSupplierTransfers": { "type": "boolean" },
+        "isPrimary": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "supplierId", "bankName", "country", "accountHolderName", "accountHolderEmail", "canReceiveSupplierTransfers", "isActive", "createdAt"]
+    },
+    "LoanRepaymentRequest": {
+      "title": "LoanRepaymentRequest",
+      "description": "Bank transfer loan repayment request awaiting supplier review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "loanId": { "type": "string" },
+        "loanTransferNumber": { "type": "string" },
+        "loanDate": { "type": "string" },
+        "loanTotalAmount": { "type": "number" },
+        "loanPaidBefore": { "type": "number" },
+        "loanRemainingBefore": { "type": "number" },
+        "loanReason": { "type": "string" },
+        "posId": { "type": "string" },
+        "posName": { "type": "string" },
+        "posCode": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "amount": { "type": "number" },
+        "transferNumber": { "type": "string" },
+        "bankName": { "type": "string" },
+        "senderName": { "type": "string" },
+        "notes": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedAt": { "type": "string" },
+        "approvedAmount": { "type": "number" },
+        "rejectionReason": { "type": "string" },
+        "transferReceiptImage": { "type": "string" },
+        "transferReceiptFileName": { "type": "string" },
+        "targetBankAccountId": { "type": "string" },
+        "targetBankName": { "type": "string" },
+        "targetBankAccountNumber": { "type": "string" },
+        "targetIban": { "type": "string" },
+        "targetBankAccountCountry": { "type": "string" },
+        "targetAccountHolderName": { "type": "string" },
+        "targetAccountHolderEmail": { "type": "string" },
+        "receiverPosId": { "type": "string" },
+        "receiverPosName": { "type": "string" },
+        "receiverPosCode": { "type": "string" },
+        "receiverPosEmail": { "type": "string" },
+        "receiverConfirmationStatus": { "type": "string", "enum": ["pending", "confirmed", "rejected"] },
+        "receiverConfirmedAt": { "type": "string" },
+        "receiverConfirmedByName": { "type": "string" },
+        "receiverConfirmationNote": { "type": "string" }
+      },
+      "required": ["id", "loanId", "posId", "supplierId", "amount", "transferNumber", "status", "date"]
+    },
+    "Catalog": {
+      "title": "Catalog",
+      "description": "Category for digital services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "nameAr": { "type": "string" },
+        "descriptionAr": { "type": "string" },
+        "icon": { "type": "string" },
+        "serviceCount": { "type": "number" }
+      },
+      "required": ["id", "supplierId", "nameAr"]
+    },
+    "DigitalService": {
+      "title": "DigitalService",
+      "description": "Digital service item with tiered packages and delivery mechanisms",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "catalogId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "nameAr": { "type": "string" },
+        "descriptionAr": { "type": "string" },
+        "icon": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "catalogId", "supplierId", "nameAr", "isActive"]
+    },
+    "AccountingEntry": {
+      "title": "AccountingEntry",
+      "description": "Accounting ledger transaction entry for clients and suppliers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string", "enum": ["purchase", "sale", "deposit", "transfer_out", "transfer_in", "fee"] },
+        "referenceId": { "type": "string" },
+        "posId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "description": { "type": "string" },
+        "debit": { "type": "number" },
+        "credit": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "customerName": { "type": "string" },
+        "serviceName": { "type": "string" }
+      },
+      "required": ["id", "date", "type", "referenceId", "posId", "description", "debit", "credit", "balanceAfter"]
+    },
+    "AdminAccountingEntry": {
+      "title": "AdminAccountingEntry",
+      "description": "Admin platform fee earnings and settlements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string", "enum": ["fee_collected", "deposit_received", "bank_settlement", "agent_transfer"] },
+        "referenceId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "posId": { "type": "string" },
+        "posCode": { "type": "string" },
+        "posName": { "type": "string" },
+        "description": { "type": "string" },
+        "feeAmount": { "type": "number" },
+        "grossAmount": { "type": "number" },
+        "debit": { "type": "number" },
+        "credit": { "type": "number" },
+        "balanceAfter": { "type": "number" }
+      },
+      "required": ["id", "date", "type", "referenceId", "description", "feeAmount", "debit", "credit", "balanceAfter"]
+    },
+    "BalanceTransfer": {
+      "title": "BalanceTransfer",
+      "description": "Wallet transfer between POS clients",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "fromPosId": { "type": "string" },
+        "fromPosName": { "type": "string" },
+        "fromPosCode": { "type": "string" },
+        "toPosCode": { "type": "string" },
+        "toPosName": { "type": "string" },
+        "amount": { "type": "number" },
+        "feeAmount": { "type": "number" },
+        "totalDeducted": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "failed"] }
+      },
+      "required": ["id", "date", "fromPosId", "toPosCode", "amount", "totalDeducted", "status"]
+    },
+    "InviteLink": {
+      "title": "InviteLink",
+      "description": "Pre-assigned tier invitation links created by suppliers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "targetTier": { "type": "string", "enum": ["regular", "bronze", "silver", "gold", "vip"] },
+        "createdAt": { "type": "string" },
+        "usedCount": { "type": "number" },
+        "url": { "type": "string" }
+      },
+      "required": ["id", "code", "supplierId", "targetTier", "createdAt", "url"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile with role permission mapping"
+    },
+    "/posClients/{posId}": {
+      "schema": { "$ref": "#/entities/POSClient" },
+      "description": "Point of sale client records and wallets"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Digital service supplier registry and wallets"
+    },
+    "/system/superAdmin": {
+      "schema": { "$ref": "#/entities/SuperAdmin" },
+      "description": "Central system administrator configuration and platform balance"
+    },
+    "/catalogs/{catalogId}": {
+      "schema": { "$ref": "#/entities/Catalog" },
+      "description": "Service categories and catalogs"
+    },
+    "/services/{serviceId}": {
+      "schema": { "$ref": "#/entities/DigitalService" },
+      "description": "Digital services with tiered pricing and delivery options"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Digital service orders and execution tracking"
+    },
+    "/depositRequests/{depositId}": {
+      "schema": { "$ref": "#/entities/DepositRequest" },
+      "description": "Bank deposits and advance credit/loan requests"
+    },
+    "/accountingEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/AccountingEntry" },
+      "description": "Financial accounting records for POS clients and suppliers"
+    },
+    "/adminAccountingEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/AdminAccountingEntry" },
+      "description": "Platform admin earnings and settlements records"
+    },
+    "/balanceTransfers/{transferId}": {
+      "schema": { "$ref": "#/entities/BalanceTransfer" },
+      "description": "Balance transfer log between agents"
+    },
+    "/inviteLinks/{inviteId}": {
+      "schema": { "$ref": "#/entities/InviteLink" },
+      "description": "Supplier invitation links"
+    },
+    "/loanRepaymentRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/LoanRepaymentRequest" },
+      "description": "Client bank transfer requests for partial or full loan repayment"
+    },
+    "/supplierBankAccounts/{accountId}": {
+      "schema": { "$ref": "#/entities/SupplierBankAccount" },
+      "description": "Supplier bank accounts registry and POS client transfer-receiving delegations"
+    }
+  }
+}
