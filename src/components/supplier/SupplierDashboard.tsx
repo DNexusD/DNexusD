@@ -627,10 +627,10 @@ export const SupplierDashboard: React.FC = () => {
                           setShowEditProfileModal(true);
                         }}
                         className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap inline-flex items-center gap-1.5"
-                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بنا)"
+                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
                       >
                         <Share2 className="w-3 h-3 text-amber-400" />
-                        <span>روابط التواصل (اتصل بنا)</span>
+                        <span>روابط التواصل (اتصل بالمتجر)</span>
                       </button>
                   </div>
                   </div>

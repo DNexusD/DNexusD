@@ -792,7 +792,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       <span className="text-[10px] text-slate-400 block mb-1.5 font-semibold">
                         حسابات تجريبية سريعة لاختبار الصلاحيات:
                       </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+                      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
                         <button
                           type="button"
                           onClick={() => fillDemoCredentials('supplier')}
@@ -814,13 +814,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-center transition-colors font-medium"
                         >
                           نقطة بيع
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => fillDemoCredentials('admin')}
-                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-center transition-colors font-medium"
-                        >
-                          مدير التطبيق
                         </button>
                       </div>
                     </div>

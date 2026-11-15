@@ -88,7 +88,7 @@ export const SupplierContactLinks: React.FC<SupplierContactLinksProps> = ({
       {showPrefixDot && <span className="text-slate-500 select-none">·</span>}
       <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-300 whitespace-nowrap shrink-0">
         <MessageCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-        <span>اتصل بنا:</span>
+        <span>اتصل بالمتجر</span>
       </span>
       <div className="flex flex-wrap items-center gap-1.5">
         {links.map((link) => (
@@ -98,7 +98,7 @@ export const SupplierContactLinks: React.FC<SupplierContactLinksProps> = ({
             target="_blank"
             rel="noopener noreferrer"
             title={`${link.label}: ${link.href}`}
-            aria-label={`اتصل بنا عبر ${link.label}`}
+            aria-label={`اتصل بالمتجر عبر ${link.label}`}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-950/90 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/40 text-slate-200 hover:text-white transition-colors whitespace-nowrap shrink-0"
           >
             <SocialPlatformIcon platform={link.key} className="w-3.5 h-3.5 shrink-0" />

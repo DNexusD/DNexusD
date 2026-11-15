@@ -189,7 +189,7 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
             <div>
               <h2 className="text-base sm:text-lg font-bold text-white">تعديل البيانات وروابط التواصل</h2>
               <p className="text-xs text-slate-400">
-                تحديث الشعار، الاسم، البيانات البنكية، وروابط مواقع التواصل الاجتماعي (اتصل بنا)
+                تحديث الشعار، الاسم، البيانات البنكية، وروابط مواقع التواصل الاجتماعي (اتصل بالمتجر)
               </p>
             </div>
           </div>
@@ -409,10 +409,10 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
               <div>
                 <h3 className="text-xs sm:text-sm font-bold text-amber-400 flex items-center gap-2">
                   <Share2 className="w-4 h-4" />
-                  <span>روابط مواقع التواصل الاجتماعي (اتصل بنا)</span>
+                  <span>روابط مواقع التواصل الاجتماعي (اتصل بالمتجر)</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  تظهر هذه الروابط للعملاء ونقاط البيع التابعة لك مباشرة تحت قسم «اتصل بنا» بعد اسم المتجر.
+                  تظهر هذه الروابط للعملاء ونقاط البيع التابعة لك مباشرة تحت قسم «اتصل بالمتجر» بعد اسم المتجر.
                 </p>
               </div>
               <button
