@@ -59,6 +59,7 @@ import {
   calculateBaseSupplierFee,
   calculateServicePurchasePricing
 } from '../utils/pricing';
+import { sanitizeSupplierSocialLinks } from '../utils/socialLinks';
 import {
   mapPasswordResetErrorAr,
   validateResetPasswordInput
@@ -1231,13 +1232,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showToast({
           type: 'success',
           title: 'تم إفراغ البيانات المحلية والسحابية بنجاح!',
-          description: `تم إفراغ ومسح سجلات مجموعات users, suppliers, posClients (${res.usersCleared} مستخدم، ${res.suppliersCleared} مورد، ${res.clientsCleared} عميل).`
+          description: `تم إفراغ ومسح سجلات مجموعات users, suppliers, posClients (${res.usersCleared} مستخدم، ${res.suppliersCleared} متجر، ${res.clientsCleared} عميل).`
         });
       } else {
         showToast({
           type: 'success',
           title: 'تم إفراغ التخزين المحلي بنجاح',
-          description: 'تم مسح وحذف سجلات العميل والمورد والمستخدمين من التخزين المحلي.'
+          description: 'تم مسح وحذف سجلات العميل والمتجر والمستخدمين من التخزين المحلي.'
         });
       }
     } catch (err: unknown) {
@@ -1424,7 +1425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showToast({
           type: 'error',
           title: 'كلمة المرور غير صحيحة',
-          description: 'كلمة المرور المدخلة غير صحيحة! لا تتطابق مع كلمة المرور التي حددها مالك المتجر (المورد) لحساب هذا الموظف.'
+          description: 'كلمة المرور المدخلة غير صحيحة! لا تتطابق مع كلمة المرور التي حددها مالك المتجر لحساب هذا الموظف.'
         });
         return {
           success: false,
@@ -1593,9 +1594,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const roleLabelAr = userRole === 'employee' 
-      ? `موظف في متجر ${matchedEmployeeSupplier?.name || 'المورد'}` 
+      ? `موظف في متجر ${matchedEmployeeSupplier?.name || 'المتجر'}` 
       : userRole === 'supplier' 
-      ? 'المورد' 
+      ? 'المتجر' 
       : userRole === 'super_admin' 
       ? (matchedAdminAcc ? `إدارة التطبيق (${matchedAdminAcc.roleTitle})` : 'مدير التطبيق')
       : 'العميل (نقطة البيع)';
@@ -1604,7 +1605,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'success',
       title: 'تم الاتصال بقاعدة البيانات وتسجيل الدخول بنجاح!',
       description: userRole === 'employee'
-        ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (موظف في متجر ${matchedEmployeeSupplier?.name}). تم نقلك لواجهة المورد وفق صلاحياتك.`
+        ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (موظف في متجر ${matchedEmployeeSupplier?.name}). تم نقلك لواجهة المتجر وفق صلاحياتك.`
         : matchedAdminAcc
         ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (${matchedAdminAcc.roleTitle})، تم تفعيل صلاحياتك الإدارية المحددة.`
         : `تم التحقق بنجاح من قاعدة البيانات ومزامنة الحساب. مرحباً بك يا ${userName}، تم الانتقال فوراً إلى واجهة ${roleLabelAr}.`
@@ -1719,7 +1720,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showToast({
           type: 'error',
           title: 'البريد الإلكتروني مسجل بالفعل',
-          description: 'هذا البريد الإلكتروني لديه حساب مفعل في المنصة، يرجى الانتقال لوجهة تسجيل الدخول كعميل أو مورد.'
+          description: 'هذا البريد الإلكتروني لديه حساب مفعل في المنصة، يرجى الانتقال لوجهة تسجيل الدخول كعميل أو متجر.'
         });
       } else {
         showToast({
@@ -1980,7 +1981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const now = new Date();
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
 
-    // If delivery is Player ID, dispatch order with the ID to the "الالمورد" (supplier) to complete via in-game charge
+    // If delivery is Player ID, dispatch order with the ID to the "المتجر" (supplier) to complete via in-game charge
     const initialStatus = deliveryMethod === 'player_id' 
       ? 'pending_supplier' 
       : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
@@ -2011,7 +2012,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerName: customerName || 'عميل مباشر',
       customerPhone: customerPhone || '',
       supplierNotes: deliveryMethod === 'player_id' 
-        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId || ''}) مرسل للمُنَزِّل للشحن من داخل اللعبة`
+        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId || ''}) مرسل للمتجر للشحن من داخل اللعبة`
         : undefined
     };
 
@@ -2064,7 +2065,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const purchaseTag = pricing.isFreeGiftApplied
       ? ` [هدية مجانية من كتالوج الهدايا المجانية - السعر الأصلي للرتبة: ${pricing.originalTierPrice.toFixed(2)} ر.س]`
       : pricing.isZeroPriceFloorApplied
-      ? ` [قيمة صفرية من المورد - حد أدنى للعميل 0.50 ر.س]`
+      ? ` [قيمة صفرية من المتجر - حد أدنى للعميل 0.50 ر.س]`
       : '';
 
     newAccountingEntries.push({
@@ -2075,8 +2076,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posId: currentPos.id,
       supplierId: supplier.id,
       description: (deliveryMethod === 'player_id'
-        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId}): ${service.nameAr} - ${pkg.name} (${currentPos.tier}) - أُرسل للمُنَزِّل للشحن من اللعبة`
-        : `شراء خدمة: ${service.nameAr} - ${pkg.name} (${currentPos.tier}) من المورد ${supplier.name}`) + purchaseTag,
+        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId}): ${service.nameAr} - ${pkg.name} (${currentPos.tier}) - أُرسل للمتجر للشحن من اللعبة`
+        : `شراء خدمة: ${service.nameAr} - ${pkg.name} (${currentPos.tier}) من المتجر ${supplier.name}`) + purchaseTag,
       debit: unitPrice,
       credit: 0,
       balanceAfter: balanceAfterPurchase,
@@ -2213,8 +2214,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (deliveryMethod === 'player_id') {
       showToast({
         type: 'info',
-        title: 'تم إرسال الطلب مع الأيدي إلى المورد',
-        description: `تم إرسال الأيدي (${deliveryDetails.playerId}) للمُنَزِّل بنجاح ليكمل الشحن من داخل اللعبة. سيتم إشعارك فور اكتمال الشحن.`
+        title: 'تم إرسال الطلب مع الأيدي إلى المتجر',
+        description: `تم إرسال الأيدي (${deliveryDetails.playerId}) للمتجر بنجاح ليكمل الشحن من داخل اللعبة. سيتم إشعارك فور اكتمال الشحن.`
       });
     } else {
       showToast({
@@ -2536,8 +2537,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         posId: resolvedPos.id,
         supplierId: targetSupplierId,
         supplierName: supplier.name,
-        title: 'تم منحك ميزة استلام ومراجعة حوالات المورد',
-        message: `منحك المورد ${supplier.storeName} صلاحية استلام ومراجعة حوالات الشحن الواردة لحساب (${savedAccount.bankName} - ${savedAccount.country}). ظهرت الآن واجهة "استلام ومراجعة حوالات المورد" في لوحتك.`,
+        title: 'تم منحك ميزة استلام ومراجعة حوالات المتجر',
+        message: `منحك المتجر ${supplier.storeName} صلاحية استلام ومراجعة حوالات الشحن الواردة لحساب (${savedAccount.bankName} - ${savedAccount.country}). ظهرت الآن واجهة "استلام ومراجعة حوالات المتجر" في لوحتك.`,
         type: 'announcement'
       });
     }
@@ -2546,7 +2547,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'success',
       title: existing ? 'تم تحديث بيانات الحساب البنكي بنجاح' : 'تمت إضافة الحساب البنكي بنجاح',
       description: savedAccount.canReceiveSupplierTransfers && resolvedPos
-        ? `تم ربط الحساب بنقطة البيع (${resolvedPos.tradeName}) ومنحها ميزة استلام ومراجعة حوالات المورد.`
+        ? `تم ربط الحساب بنقطة البيع (${resolvedPos.tradeName}) ومنحها ميزة استلام ومراجعة حوالات المتجر.`
         : `تم حفظ حساب (${savedAccount.bankName} · ${savedAccount.country}) باسم ${savedAccount.accountHolderName}.`
     });
 
@@ -2585,8 +2586,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         posId: resolvedPos.id,
         supplierId: targetAcc.supplierId,
         supplierName: supplier.name,
-        title: 'تفعيل ميزة استلام حوالات المورد',
-        message: `تم تفعيل صلاحية "استلام ومراجعة حوالات المورد" لحسابك (${updatedAcc.bankName}) لدى ${supplier.storeName}.`,
+        title: 'تفعيل ميزة استلام حوالات المتجر',
+        message: `تم تفعيل صلاحية "استلام ومراجعة حوالات المتجر" لحسابك (${updatedAcc.bankName}) لدى ${supplier.storeName}.`,
         type: 'announcement'
       });
     }
@@ -2595,7 +2596,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: enabled ? 'success' : 'info',
       title: enabled ? 'تم منح ميزة استلام الحوالات بنجاح' : 'تم إيقاف ميزة استلام الحوالات لهذا الحساب',
       description: resolvedPos
-        ? `${enabled ? 'تظهر الآن' : 'تم إخفاء'} واجهة "استلام ومراجعة حوالات المورد" لدى نقطة البيع (${resolvedPos.tradeName}).`
+        ? `${enabled ? 'تظهر الآن' : 'تم إخفاء'} واجهة "استلام ومراجعة حوالات المتجر" لدى نقطة البيع (${resolvedPos.tradeName}).`
         : `تم تحديث صلاحية الحساب البنكي (${updatedAcc.bankName}).`
     });
   };
@@ -2657,10 +2658,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: targetSup.id,
       supplierName: receiverName,
       targetRole: 'pos',
-      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة من مستلم المورد' : 'تنبيه: أفاد مستلم الحوالة بعدم استلامها',
+      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة من مستلم المتجر' : 'تنبيه: أفاد مستلم الحوالة بعدم استلامها',
       message:
         decision === 'confirmed'
-          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س، وأصبح الإشعار ظاهراً لدى المورد في نفس طلب الشحن.`
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س، وأصبح الإشعار ظاهراً لدى المتجر في نفس طلب الشحن.`
           : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام الحوالة #${dep.transferNumber} بمبلغ ${dep.amount.toFixed(2)} ر.س. السبب: ${updatedDep.receiverConfirmationNote}`,
       type: 'deposit'
     });
@@ -2686,8 +2687,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     showToast({
       type: decision === 'confirmed' ? 'success' : 'error',
-      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة وإشعار المورد' : 'تم تسجيل عدم استلام الحوالة وإشعار المورد',
-      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المورد (${targetSup.name}) داخل نفس طلب الشحن #${dep.id}.`
+      title: decision === 'confirmed' ? 'تم تأكيد استلام الحوالة وإشعار المتجر' : 'تم تسجيل عدم استلام الحوالة وإشعار المتجر',
+      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المتجر (${targetSup.name}) داخل نفس طلب الشحن #${dep.id}.`
     });
   };
 
@@ -2759,10 +2760,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       receiverPosEmail: isDelegatedTransfer ? (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail) : undefined,
       receiverConfirmationStatus: isDelegatedTransfer ? 'pending' : undefined,
       notes: isLoan
-        ? `طلب سلفة رصيد آجل بانتظار موافقة المورد ${targetSupplier.name} بدون مرفقات بنكية`
+        ? `طلب سلفة رصيد آجل بانتظار موافقة المتجر ${targetSupplier.name} بدون مرفقات بنكية`
         : isDelegatedTransfer
-        ? `طلب إيداع إلى حساب نقطة البيع المخوّلة (${resolvedReceiverPos?.tradeName || selectedAccount?.accountHolderName}) بانتظار تأكيد الاستلام وموافقة المورد ${targetSupplier.name}`
-        : `طلب إيداع كاش جديد بانتظار مراجعة وتأكيد المورد ${targetSupplier.name}`
+        ? `طلب إيداع إلى حساب نقطة البيع المخوّلة (${resolvedReceiverPos?.tradeName || selectedAccount?.accountHolderName}) بانتظار تأكيد الاستلام وموافقة المتجر ${targetSupplier.name}`
+        : `طلب إيداع كاش جديد بانتظار مراجعة وتأكيد المتجر ${targetSupplier.name}`
     };
 
     setDepositRequests(prev => [newDep, ...prev]);
@@ -2808,7 +2809,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         title: isDelegatedTransfer
           ? 'طلب إيداع لحساب مخوّل بانتظار التأكيد 🏦'
           : 'طلب إيداع بنكي جديد بانتظار المطابقة 🏦',
-        message: `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن بمبلغ ${params.amount.toFixed(2)} ر.س (حوالة: ${newDep.transferNumber} على ${selectedAccount?.bankName || 'حساب المورد'}) مع صورة الإيصال المرفقة.`,
+        message: `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن بمبلغ ${params.amount.toFixed(2)} ر.س (حوالة: ${newDep.transferNumber} على ${selectedAccount?.bankName || 'حساب المتجر'}) مع صورة الإيصال المرفقة.`,
         type: 'deposit',
         depositId,
         amount: params.amount,
@@ -2819,20 +2820,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isLoan) {
       showToast({
         type: 'info',
-        title: 'تم إرسال طلب السلفة للمورد بنجاح',
-        description: `تم إرسال طلب سلفة بقيمة ${params.amount.toFixed(2)} ر.س إلى المورد ${targetSupplier.name} بدون الحاجة لمرفقات بنكية. سيصلك الرصيد فور الموافقة.`
+        title: 'تم إرسال طلب السلفة للمتجر بنجاح',
+        description: `تم إرسال طلب سلفة بقيمة ${params.amount.toFixed(2)} ر.س إلى المتجر ${targetSupplier.name} بدون الحاجة لمرفقات بنكية. سيصلك الرصيد فور الموافقة.`
       });
     } else if (isDelegatedTransfer) {
       showToast({
         type: 'info',
-        title: 'تم إرسال طلب الشحن للمورد ونقطة البيع المخوّلة',
-        description: `تم إرسال الطلب إلى المورد ${targetSupplier.name} وإلى نقطة البيع المخوّلة (${newDep.receiverPosName}) لتأكيد استلام الحوالة على حساب (${selectedAccount?.bankName}).`
+        title: 'تم إرسال طلب الشحن للمتجر ونقطة البيع المخوّلة',
+        description: `تم إرسال الطلب إلى المتجر ${targetSupplier.name} وإلى نقطة البيع المخوّلة (${newDep.receiverPosName}) لتأكيد استلام الحوالة على حساب (${selectedAccount?.bankName}).`
       });
     } else {
       showToast({
         type: 'info',
         title: 'تم إرسال طلب الشحن بنجاح',
-        description: `تم تقديم طلب شحن الرصيد المسبق للمورد ${targetSupplier.name} وسيقوم بمطابقة رقم الحوالة واعتمادها.`
+        description: `تم تقديم طلب شحن الرصيد المسبق للمتجر ${targetSupplier.name} وسيقوم بمطابقة رقم الحوالة واعتمادها.`
       });
     }
   };
@@ -2880,7 +2881,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posId: dep.posId,
       supplierId: supplier.id,
       description: isLoan
-        ? `إيداع سلفة رصيد آجل معتمدة من المورد (${supplier.name}) ${dep.loanReason ? `[سبب السلفة: ${dep.loanReason}]` : ''}`
+        ? `إيداع سلفة رصيد آجل معتمدة من المتجر (${supplier.name}) ${dep.loanReason ? `[سبب السلفة: ${dep.loanReason}]` : ''}`
         : `إيداع رصيد مسبق في المحفظة عبر حوالة بنكية (${dep.bankName} - رقم الحوالة: ${dep.transferNumber})`,
       debit: 0,
       credit: dep.amount,
@@ -2902,14 +2903,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         posCode: dep.posCode,
         posName: dep.posName,
         description: isLoan
-          ? `موافقة المورد على طلب سلفة رصيد آجل بقيمة ${dep.amount.toFixed(2)} ر.س لنقطة البيع ${dep.posName}`
+          ? `موافقة المتجر على طلب سلفة رصيد آجل بقيمة ${dep.amount.toFixed(2)} ر.س لنقطة البيع ${dep.posName}`
           : `إشعار إيداع رصيد مسبق معتمد بقيمة ${dep.amount.toFixed(2)} ر.س (${dep.bankName} - حوالة ${dep.transferNumber})`,
         grossAmount: dep.amount,
         feeAmount: 0,
         debit: 0,
         credit: 0,
         balanceAfter: superAdmin.walletBalance,
-        notes: `معتمد من المورد ${supplier.name} لنقطة البيع ${dep.posName}`
+        notes: `معتمد من المتجر ${supplier.name} لنقطة البيع ${dep.posName}`
       },
       ...prev
     ]);
@@ -2921,8 +2922,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierName: supplier.name,
       title: isLoan ? 'تمت الموافقة على طلب السلفة' : 'تم شحن المحفظة بنجاح',
       message: isLoan
-        ? `وافق المورد ${supplier.name} على طلب السلفة بقيمة ${dep.amount.toFixed(2)} ر.س وقيدها في محفظتك.`
-        : `تم اعتماد إيداع ${dep.amount.toFixed(2)} ر.س في محفظتك من المورد ${supplier.name}.`,
+        ? `وافق المتجر ${supplier.name} على طلب السلفة بقيمة ${dep.amount.toFixed(2)} ر.س وقيدها في محفظتك.`
+        : `تم اعتماد إيداع ${dep.amount.toFixed(2)} ر.س في محفظتك من المتجر ${supplier.name}.`,
       type: 'deposit'
     });
     showToast({
@@ -2950,7 +2951,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: remaining,
       date: formattedDate,
       method: 'bank_transfer',
-      notes: `تسديد مباشر موثق من المورد (${targetSupplier.name})`,
+      notes: `تسديد مباشر موثق من المتجر (${targetSupplier.name})`,
       approvedBy: targetSupplier.name
     };
 
@@ -2966,7 +2967,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       referenceId: dep.id,
       posId: dep.posId,
       supplierId: targetSupplier.id,
-      description: `توثيق تسديد سلفة مستحقة بالكامل بمبلغ ${remaining.toFixed(2)} ر.س للمورد (${targetSupplier.name})`,
+      description: `توثيق تسديد سلفة مستحقة بالكامل بمبلغ ${remaining.toFixed(2)} ر.س للمتجر (${targetSupplier.name})`,
       debit: 0,
       credit: 0,
       balanceAfter: posClients.find(p => p.id === dep.posId)?.walletBalance || 0
@@ -2979,7 +2980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: targetSupplier.id,
       supplierName: targetSupplier.name,
       title: 'تم توثيق سداد السلفة بالكامل',
-      message: `تم توثيق سداد السلفة رقم #${dep.id} بمبلغ ${remaining.toFixed(2)} ر.س بالكامل لدى المورد ${targetSupplier.name}.`,
+      message: `تم توثيق سداد السلفة رقم #${dep.id} بمبلغ ${remaining.toFixed(2)} ر.س بالكامل لدى المتجر ${targetSupplier.name}.`,
       type: 'deposit'
     });
 
@@ -3024,7 +3025,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: validation.amount,
       date: formattedDate,
       method: 'wallet',
-      notes: `سداد مباشر من محفظة العميل (${targetPos.tradeName}) إلى حافظة المورد (${targetSupplier.name})`
+      notes: `سداد مباشر من محفظة العميل (${targetPos.tradeName}) إلى حافظة المتجر (${targetSupplier.name})`
     };
 
     const { updatedLoan, appliedAmount, newPaidAmount, newRemainingAmount, newState } = applyLoanPaymentToLoan(
@@ -3075,7 +3076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       referenceId: loan.id,
       posId: targetPos.id,
       supplierId: targetSupplier.id,
-      description: `سداد ${isFull ? 'كامل' : 'جزئي'} للسلفة #${loan.id} من محفظة العميل إلى حافظة المورد (${targetSupplier.name}) بمبلغ ${appliedAmount.toFixed(2)} ر.س · المتبقي: ${newRemainingAmount.toFixed(2)} ر.س`,
+      description: `سداد ${isFull ? 'كامل' : 'جزئي'} للسلفة #${loan.id} من محفظة العميل إلى حافظة المتجر (${targetSupplier.name}) بمبلغ ${appliedAmount.toFixed(2)} ر.س · المتبقي: ${newRemainingAmount.toFixed(2)} ر.س`,
       debit: appliedAmount,
       credit: 0,
       balanceAfter: newPosWalletBalance
@@ -3114,8 +3115,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetRole: 'pos',
       title: isFull ? 'تم سداد السلفة بالكامل من المحفظة' : 'تم سداد دفعة من السلفة من المحفظة',
       message: isFull
-        ? `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المورد ${targetSupplier.name}، وتم إغلاق السلفة #${loan.id} كمسددة بالكامل.`
-        : `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المورد ${targetSupplier.name}. رصيد محفظتك الجديد: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`,
+        ? `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المتجر ${targetSupplier.name}، وتم إغلاق السلفة #${loan.id} كمسددة بالكامل.`
+        : `تم سداد مبلغ ${appliedAmount.toFixed(2)} ر.س وخصمه من محفظتك (${targetPos.tradeName}) وإضافته إلى محفظة المتجر ${targetSupplier.name}. رصيد محفظتك الجديد: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`,
       type: 'transfer'
     });
 
@@ -3138,7 +3139,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: isFull ? 'تم سداد السلفة بالكامل بنجاح' : 'تم سداد الدفعة من السلفة بنجاح',
-      description: `تم خصم ${appliedAmount.toFixed(2)} ر.س من محفظة العميل (${targetPos.tradeName}) وإضافتها إلى محفظة المورد ${targetSupplier.name}. رصيدك الحالي: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`
+      description: `تم خصم ${appliedAmount.toFixed(2)} ر.س من محفظة العميل (${targetPos.tradeName}) وإضافتها إلى محفظة المتجر ${targetSupplier.name}. رصيدك الحالي: ${newPosWalletBalance.toFixed(2)} ر.س · المتبقي من السلفة: ${newRemainingAmount.toFixed(2)} ر.س.`
     });
 
     return { success: true, receipt };
@@ -3181,11 +3182,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetRole: 'pos',
       title:
         decision === 'confirmed'
-          ? 'تم تأكيد استلام حوالة سداد السلفة من مستلم المورد'
+          ? 'تم تأكيد استلام حوالة سداد السلفة من مستلم المتجر'
           : 'تنبيه: أفاد مستلم الحوالة بعدم استلام حوالة سداد السلفة',
       message:
         decision === 'confirmed'
-          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س، وأصبح التأكيد ظاهراً لدى المورد لاعتماد خصم السلفة.`
+          ? `أكدت نقطة البيع المخوّلة (${receiverName}) استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س، وأصبح التأكيد ظاهراً لدى المتجر لاعتماد خصم السلفة.`
           : `أفادت نقطة البيع المخوّلة (${receiverName}) بعدم استلام حوالة سداد السلفة #${req.loanId} (مرجع: #${req.transferNumber}) بمبلغ ${req.amount.toFixed(2)} ر.س. السبب: ${updatedReq.receiverConfirmationNote}`,
       type: 'deposit'
     });
@@ -3214,9 +3215,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: decision === 'confirmed' ? 'success' : 'error',
       title:
         decision === 'confirmed'
-          ? 'تم تأكيد استلام حوالة السداد وإشعار المورد'
-          : 'تم تسجيل عدم استلام حوالة السداد وإشعار المورد',
-      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المورد (${targetSup.name}) داخل سجل مراجعة سداد السلف.`
+          ? 'تم تأكيد استلام حوالة السداد وإشعار المتجر'
+          : 'تم تسجيل عدم استلام حوالة السداد وإشعار المتجر',
+      description: `سيظهر ردك (${decision === 'confirmed' ? 'تم تأكيد الاستلام' : 'لم يتم الاستلام'}) فوراً للتاجر المتجر (${targetSup.name}) داخل سجل مراجعة سداد السلف.`
     });
   };
 
@@ -3330,8 +3331,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetRole: 'pos',
       title: 'تم إرسال طلب سداد سلفة بحوالة بنكية',
       message: isDelegatedTransfer
-        ? `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} إلى نقطة البيع المخوّلة (${newRequest.receiverPosName}) والمورد ${targetSupplier.name} للمراجعة والاعتماد.`
-        : `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} (حوالة: ${newRequest.transferNumber} · ${newRequest.bankName})، وهو بانتظار مراجعة وموافقة المورد ${targetSupplier.name}.`,
+        ? `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} إلى نقطة البيع المخوّلة (${newRequest.receiverPosName}) والمتجر ${targetSupplier.name} للمراجعة والاعتماد.`
+        : `تم إرسال طلب سداد رقم #${requestId} بقيمة ${validation.amount.toFixed(2)} ر.س للسلفة #${loan.id} (حوالة: ${newRequest.transferNumber} · ${newRequest.bankName})، وهو بانتظار مراجعة وموافقة المتجر ${targetSupplier.name}.`,
       type: 'deposit'
     });
 
@@ -3355,11 +3356,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: isDelegatedTransfer
-        ? 'تم إرسال طلب سداد السلفة للمورد ونقطة البيع المخوّلة'
+        ? 'تم إرسال طلب سداد السلفة للمتجر ونقطة البيع المخوّلة'
         : 'تم إرسال طلب سداد السلفة بنجاح',
       description: isDelegatedTransfer
-        ? `تم توجيه الطلب إلى المورد ${targetSupplier.name} وإلى المخوّل باستلام الحوالة (${newRequest.receiverPosName}) لمراجعة الإيصال وتأكيد الاستلام.`
-        : `تم إرسال طلب سداد بمبلغ ${validation.amount.toFixed(2)} ر.س عن السلفة #${loan.id} (رقم الحوالة: ${newRequest.transferNumber}) وبانتظار موافقة المورد ${targetSupplier.name}.`
+        ? `تم توجيه الطلب إلى المتجر ${targetSupplier.name} وإلى المخوّل باستلام الحوالة (${newRequest.receiverPosName}) لمراجعة الإيصال وتأكيد الاستلام.`
+        : `تم إرسال طلب سداد بمبلغ ${validation.amount.toFixed(2)} ر.س عن السلفة #${loan.id} (رقم الحوالة: ${newRequest.transferNumber}) وبانتظار موافقة المتجر ${targetSupplier.name}.`
     });
 
     return { success: true, requestId, request: newRequest };
@@ -3398,7 +3399,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transferNumber: req.transferNumber,
       bankName: req.bankName,
       senderName: req.senderName,
-      notes: req.notes || `موافقة المورد على حوالة سداد سلفة رقم ${req.transferNumber}`,
+      notes: req.notes || `موافقة المتجر على حوالة سداد سلفة رقم ${req.transferNumber}`,
       repaymentRequestId: req.id,
       approvedBy: targetSupplier.name,
       transferReceiptImage: req.transferReceiptImage,
@@ -3450,7 +3451,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posId: loan.posId,
       posCode: loan.posCode,
       posName: loan.posName,
-      description: `موافقة المورد على سداد سلفة #${loan.id} بحوالة بنكية ${req.transferNumber} بمبلغ ${appliedAmount.toFixed(2)} ر.س`,
+      description: `موافقة المتجر على سداد سلفة #${loan.id} بحوالة بنكية ${req.transferNumber} بمبلغ ${appliedAmount.toFixed(2)} ر.س`,
       grossAmount: appliedAmount,
       feeAmount: 0,
       debit: 0,
@@ -3470,8 +3471,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierName: targetSupplier.name,
       title: isFull ? 'تمت الموافقة وإتمام سداد السلفة بالكامل' : 'تمت الموافقة على سداد جزء من السلفة',
       message: isFull
-        ? `راجع المورد ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) بمبلغ ${appliedAmount.toFixed(2)} ر.س، وأصبحت السلفة #${loan.id} مسددة بالكامل.`
-        : `راجع المورد ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) وخصم ${appliedAmount.toFixed(2)} ر.س من السلفة #${loan.id}. المتبقي: ${newRemainingAmount.toFixed(2)} ر.س.`,
+        ? `راجع المتجر ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) بمبلغ ${appliedAmount.toFixed(2)} ر.س، وأصبحت السلفة #${loan.id} مسددة بالكامل.`
+        : `راجع المتجر ${targetSupplier.name} الحوالة البنكية (${req.transferNumber}) وخصم ${appliedAmount.toFixed(2)} ر.س من السلفة #${loan.id}. المتبقي: ${newRemainingAmount.toFixed(2)} ر.س.`,
       type: 'deposit'
     });
 
@@ -3505,7 +3506,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: req.supplierId,
       supplierName: req.supplierName,
       title: 'تم رفض طلب سداد السلفة بالحوالة',
-      message: `تم رفض طلب سداد السلفة #${req.loanId} (حوالة ${req.transferNumber}) من المورد ${req.supplierName}. السبب: ${cleanReason}`,
+      message: `تم رفض طلب سداد السلفة #${req.loanId} (حوالة ${req.transferNumber}) من المتجر ${req.supplierName}. السبب: ${cleanReason}`,
       type: 'deposit'
     });
 
@@ -3527,7 +3528,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: dep.supplierId,
       supplierName: supplier.name,
       title: dep.requestType === 'loan' ? 'رفض طلب السلفة' : 'رفض طلب الإيداع',
-      message: reason || 'تم رفض طلب الإيداع/السلفة من المورد لعدم مطابقة الشروط.',
+      message: reason || 'تم رفض طلب الإيداع/السلفة من المتجر لعدم مطابقة الشروط.',
       type: 'deposit'
     });
     showToast({
@@ -3537,14 +3538,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Supplier / المورد completing an order that needed manual fulfillment via Game ID
+  // Supplier / المتجر completing an order that needed manual fulfillment via Game ID
   const completeSupplierOrder = (orderId: string, notes?: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
     const isPlayerId = targetOrder.deliveryMethod === 'player_id';
     const defaultNote = isPlayerId
       ? `تم الشحن بنجاح من داخل اللعبة باستخدام الأيدي (${targetOrder?.deliveryDetails.playerId || ''})`
-      : 'تم إتمام الشحن وتفعيل الخدمة بنجاح من المورد';
+      : 'تم إتمام الشحن وتفعيل الخدمة بنجاح من المتجر';
 
     const updatedOrder: Order = {
       ...targetOrder,
@@ -3647,8 +3648,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         posId: targetOrder.posId,
         supplierId: supplier.id,
         supplierName: supplier.name,
-        title: 'رسالة جديدة من المورد',
-        message: `أرسل المورد تنبيهاً/رمزاً للطلب #${orderId}: "${message}"`,
+        title: 'رسالة جديدة من المتجر',
+        message: `أرسل المتجر تنبيهاً/رمزاً للطلب #${orderId}: "${message}"`,
         type: 'order_status',
         orderId: targetOrder.id
       });
@@ -3694,7 +3695,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تأكيد قراءة الرمز',
-      description: `تم إشعار المورد بأن العميل قام بقراءة رمز التحقق للطلب #${orderId}.`
+      description: `تم إشعار المتجر بأن العميل قام بقراءة رمز التحقق للطلب #${orderId}.`
     });
   };
 
@@ -3737,8 +3738,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierName: supplier.name,
       title: newGrantedState ? 'تفعيل ميزة طلب السلف والرصيد الآجل' : 'إلغاء ميزة طلب السلف',
       message: newGrantedState
-        ? 'منحك المورد صلاحية إرسال طلبات السلف والرصيد الآجل. يمكنك الآن طلب السلف من نافذة شحن الرصيد.'
-        : 'قام المورد بإلغاء صلاحية طلب السلف والرصيد الآجل لحسابك.',
+        ? 'منحك المتجر صلاحية إرسال طلبات السلف والرصيد الآجل. يمكنك الآن طلب السلف من نافذة شحن الرصيد.'
+        : 'قام المتجر بإلغاء صلاحية طلب السلف والرصيد الآجل لحسابك.',
       type: 'tier_upgrade'
     });
 
@@ -3746,7 +3747,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: newGrantedState ? 'success' : 'info',
       title: newGrantedState ? 'تم منح ميزة طلب السلفة بنجاح' : 'تم إلغاء ميزة طلب السلفة',
       description: newGrantedState
-        ? 'أصبح بإمكان نقطة البيع إرسال طلبات السلف والرصيد الآجل للمورد.'
+        ? 'أصبح بإمكان نقطة البيع إرسال طلبات السلف والرصيد الآجل للمتجر.'
         : 'تم سحب ميزة طلب السلف من نقطة البيع.'
     });
   };
@@ -3765,10 +3766,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posId: posId,
       supplierId: supplier.id,
       supplierName: supplier.name,
-      title: newGrantedState ? 'تفعيل ميزة استلام حوالات المورد' : 'إلغاء ميزة استلام حوالات المورد',
+      title: newGrantedState ? 'تفعيل ميزة استلام حوالات المتجر' : 'إلغاء ميزة استلام حوالات المتجر',
       message: newGrantedState
-        ? 'منحك المورد صلاحية استلام ومراجعة حوالات المورد البنكية وتأكيدها.'
-        : 'قام المورد بإلغاء صلاحية استلام حوالات المورد لحسابك.',
+        ? 'منحك المتجر صلاحية استلام ومراجعة حوالات المتجر البنكية وتأكيدها.'
+        : 'قام المتجر بإلغاء صلاحية استلام حوالات المتجر لحسابك.',
       type: 'tier_upgrade'
     });
 
@@ -3776,7 +3777,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: newGrantedState ? 'success' : 'info',
       title: newGrantedState ? 'تم تفعيل ميزة استلام الحوالات بنجاح' : 'تم إلغاء ميزة استلام الحوالات',
       description: newGrantedState
-        ? 'أصبح العميل مؤهلاً لاستلام ومراجعة حوالات المورد البنكية.'
+        ? 'أصبح العميل مؤهلاً لاستلام ومراجعة حوالات المتجر البنكية.'
         : 'تم سحب ميزة استلام الحوالات من العميل.'
     });
   };
@@ -3797,8 +3798,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierName: supplier.name,
       title: newGrantedState ? 'تفعيل ميزة الحصول على بونص' : 'إلغاء ميزة الحصول على بونص',
       message: newGrantedState
-        ? 'منحك المورد ميزة الحصول على بونص وعلاوات رصيد إضافية!'
-        : 'قام المورد بإلغاء ميزة الحصول على بونص لحسابك.',
+        ? 'منحك المتجر ميزة الحصول على بونص وعلاوات رصيد إضافية!'
+        : 'قام المتجر بإلغاء ميزة الحصول على بونص لحسابك.',
       type: 'tier_upgrade'
     });
 
@@ -3827,8 +3828,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierName: supplier.name,
       title: newGrantedState ? 'تفعيل ميزة الهدايا والعروض المجانية' : 'إلغاء ميزة الهدايا والعروض المجانية',
       message: newGrantedState
-        ? 'منحك المورد ميزة ظهور الهدايا والعروض المجانية الحصرية!'
-        : 'قام المورد بإلغاء ميزة الهدايا والعروض المجانية لحسابك.',
+        ? 'منحك المتجر ميزة ظهور الهدايا والعروض المجانية الحصرية!'
+        : 'قام المتجر بإلغاء ميزة الهدايا والعروض المجانية لحسابك.',
       type: 'tier_upgrade'
     });
 
@@ -3868,13 +3869,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم تحديث البيانات وحفظها في القواعد الثلاث',
-      description: 'تم الحفظ والمزامنة في قاعدة بيانات العميل، وقاعدة بيانات المورد، وقاعدة بيانات مدير التطبيق.'
+      description: 'تم الحفظ والمزامنة في قاعدة بيانات العميل، وقاعدة بيانات المتجر، وقاعدة بيانات مدير التطبيق.'
     });
   };
 
   const updateSupplierProfile = (supplierId: string, updates: Partial<Supplier>) => {
     const targetSup = suppliers.find(s => s.id === supplierId) || supplier;
-    const updatedSup = { ...targetSup, ...updates };
+    const normalizedUpdates: Partial<Supplier> = {
+      ...updates,
+      ...(updates.socialLinks !== undefined
+        ? { socialLinks: sanitizeSupplierSocialLinks(updates.socialLinks) }
+        : {})
+    };
+    const updatedSup = { ...targetSup, ...normalizedUpdates };
 
     setSuppliers(prev => prev.map(s => {
       if (s.id !== supplierId) return s;
@@ -3896,8 +3903,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     showToast({
       type: 'success',
-      title: 'تم تحديث بيانات المورد بنجاح',
-      description: 'تم الحفظ والمزامنة في قاعدة بيانات المورد وقاعدة البيانات المركزية.'
+      title: 'تم تحديث بيانات المتجر بنجاح',
+      description: 'تم الحفظ والمزامنة في قاعدة بيانات المتجر وقاعدة البيانات المركزية.'
     });
   };
 
@@ -3959,7 +3966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast({
         type: 'error',
         title: 'كتالوج ثابت من الإدارة',
-        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن تعديله من حساب المورد.'
+        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن تعديله من حساب المتجر.'
       });
       return;
     }
@@ -3985,7 +3992,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast({
         type: 'error',
         title: 'كتالوج ثابت من الإدارة',
-        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن حذفه من حساب المورد.'
+        description: 'هذا الكتالوج ثابت من مدير التطبيق ولا يمكن حذفه من حساب المتجر.'
       });
       return { success: false, error: 'كتالوج ثابت من الإدارة' };
     }
@@ -4020,7 +4027,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم حفظ إعدادات الواجهات',
-      description: 'تم تطبيق الإعدادات وتحديث واجهات الموردين ونقاط البيع والعملاء بنجاح.'
+      description: 'تم تطبيق الإعدادات وتحديث واجهات المتاجر ونقاط البيع والعملاء بنجاح.'
     });
   };
 
@@ -4036,7 +4043,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `cat-fixed-${Date.now()}`,
       supplierId: 'all',
       nameAr: cleanName,
-      descriptionAr: input.descriptionAr.trim() || 'كتالوج ثابت معتمد من مدير التطبيق لجميع الموردين',
+      descriptionAr: input.descriptionAr.trim() || 'كتالوج ثابت معتمد من مدير التطبيق لجميع المتاجر',
       icon: input.icon || 'Layers',
       serviceCount: 0,
       isFreeGiftsCatalog: Boolean(input.isFreeGiftsCatalog),
@@ -4047,7 +4054,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تمت إضافة الكتالوج الثابت',
-      description: `سيظهر الكتالوج "${cleanName}" لجميع الموردين بشكل ثابت وغير قابل للتعديل.`
+      description: `سيظهر الكتالوج "${cleanName}" لجميع المتاجر بشكل ثابت وغير قابل للتعديل.`
     });
   };
 
@@ -4069,7 +4076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم تحديث الكتالوج الثابت',
-      description: 'تم حفظ تعديلات مدير التطبيق على الكتالوج الثابت وتعميمها لجميع الموردين.'
+      description: 'تم حفظ تعديلات مدير التطبيق على الكتالوج الثابت وتعميمها لجميع المتاجر.'
     });
   };
 
@@ -4263,8 +4270,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firestoreSync.saveSupplier(newSup).catch(console.error);
     showToast({
       type: 'success',
-      title: 'تمت إضافة المورد بنجاح',
-      description: `تم تسجيل المورد (${newSup.name}) وضبط نسب الرسوم الخاصة به بنجاح.`
+      title: 'تمت إضافة المتجر بنجاح',
+      description: `تم تسجيل المتجر (${newSup.name}) وضبط نسب الرسوم الخاصة به بنجاح.`
     });
   };
 
@@ -4297,8 +4304,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     showToast({
       type: 'success',
-      title: 'تم تحديث رسوم المورد',
-      description: `تم ضبط رسوم المورد: نوع (${config.feeType}) نسبة (${config.percentage}%) ومبلغ مقطوع (${config.fixedAmount} ر.س).`
+      title: 'تم تحديث رسوم المتجر',
+      description: `تم ضبط رسوم المتجر: نوع (${config.feeType}) نسبة (${config.percentage}%) ومبلغ مقطوع (${config.fixedAmount} ر.س).`
     });
   };
 
@@ -4330,7 +4337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم تحديث النسبة والمبلغ العام',
-      description: `تم تطبيق الإعدادات العامة على جميع الموردين: نسبة ${config.percentage}% ومبلغ ${config.fixedAmount} ر.س.`
+      description: `تم تطبيق الإعدادات العامة على جميع المتاجر: نسبة ${config.percentage}% ومبلغ ${config.fixedAmount} ر.س.`
     });
   };
 
@@ -4366,7 +4373,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         debit: amount,
         credit: 0,
         balanceAfter: newBal,
-        notes: `تم الخصم من محفظة الإدارة وتسوية القيمة مع بنك المورد (${supplier.bankAccountDetails.bankName})`
+        notes: `تم الخصم من محفظة الإدارة وتسوية القيمة مع بنك المتجر (${supplier.bankAccountDetails.bankName})`
       },
       ...prev
     ]);
@@ -4559,7 +4566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'info',
       title: 'تم حذف الموظف',
-      description: 'تم إزالة الموظف من صلاحيات مكتب المورد.'
+      description: 'تم إزالة الموظف من صلاحيات مكتب المتجر.'
     });
   };
 

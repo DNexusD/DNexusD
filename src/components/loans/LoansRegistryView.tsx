@@ -347,7 +347,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                 onChange={(e) => setSelectedSupplierId(e.target.value)}
                 className="w-full bg-transparent text-white focus:outline-none"
               >
-                <option value="all">جميع الموردين ({suppliers.length})</option>
+                <option value="all">جميع المتاجر ({suppliers.length})</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.storeName})
@@ -908,7 +908,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
 
                         <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-2 mt-0.5">
                           <span>
-                            المورد:{' '}
+                            المتجر:{' '}
                             <strong className="text-slate-200">
                               {loanSupplier?.name || 'جمال الصالحي'}
                             </strong>

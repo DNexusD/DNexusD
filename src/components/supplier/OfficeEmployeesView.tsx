@@ -21,7 +21,7 @@ export const OfficeEmployeesView: React.FC<OfficeEmployeesViewProps> = ({ employ
       <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white">إدارة موظفي وصلاحيات مكتب المورد</h2>
+            <h2 className="text-lg font-bold text-white">إدارة موظفي وصلاحيات مكتب المتجر</h2>
             <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-mono font-bold">
               {employees.length} موظفين
             </span>

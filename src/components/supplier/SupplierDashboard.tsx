@@ -12,6 +12,7 @@ import {
 } from '../../utils/pdfStatement';
 import { PdfPreviewModal } from '../common/PdfPreviewModal';
 import { ReceiptImageModal } from '../common/ReceiptImageModal';
+import { SupplierContactLinks } from '../common/SupplierContactLinks';
 import { 
   Building2, 
   FolderPlus, 
@@ -118,6 +119,7 @@ export const SupplierDashboard: React.FC = () => {
   const [showAddService, setShowAddService] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
+  const [editProfileSection, setEditProfileSection] = useState<'profile' | 'social'>('profile');
   const [showAddCatalog, setShowAddCatalog] = useState(false);
   const [editingCatalog, setEditingCatalog] = useState<Catalog | null>(null);
   const [editingService, setEditingService] = useState<DigitalService | null>(null);
@@ -311,17 +313,17 @@ export const SupplierDashboard: React.FC = () => {
   };
 
   const handleShareSupplierInfo = async () => {
-    const shareText = `المورد: ${supplier.storeName}\nالمعرف: ${supplier.id}\nرابط المتجر: ${supplier.qrCodeValue || `https://dnexusd.example.com/join/${supplier.id}`}`;
+    const shareText = `المتجر: ${supplier.storeName}\nالمعرف: ${supplier.id}\nرابط المتجر: ${supplier.qrCodeValue || `https://dnexusd.example.com/join/${supplier.id}`}`;
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `المورد ${supplier.storeName}`,
+          title: `المتجر ${supplier.storeName}`,
           text: shareText
         });
         showToast({
           type: 'success',
           title: 'تمت المشاركة بنجاح',
-          description: 'تم مشاركة المعرف وبيانات المورد.'
+          description: 'تم مشاركة المعرف وبيانات المتجر.'
         });
       } catch (err) {
         // User closed share modal
@@ -331,7 +333,7 @@ export const SupplierDashboard: React.FC = () => {
       showToast({
         type: 'success',
         title: 'تم نسخ بيانات المشاركة للحافظة',
-        description: `تم نسخ المعرف (${supplier.id}) وبيانات المورد للحافظة.`
+        description: `تم نسخ المعرف (${supplier.id}) وبيانات المتجر للحافظة.`
       });
     }
   };
@@ -343,7 +345,7 @@ export const SupplierDashboard: React.FC = () => {
         navigator.clipboard.writeText(supplier.qrCodeValue || supplier.id);
         showToast({
           type: 'success',
-          title: 'تم نسخ معرف المورد',
+          title: 'تم نسخ معرف المتجر',
           description: `تم نسخ المعرف (${supplier.id}) للحافظة.`
         });
         return;
@@ -390,7 +392,7 @@ export const SupplierDashboard: React.FC = () => {
       navigator.clipboard.writeText(supplier.qrCodeValue || supplier.id);
       showToast({
         type: 'success',
-        title: 'تم نسخ معرف المورد',
+        title: 'تم نسخ معرف المتجر',
         description: `تم نسخ المعرف (${supplier.id}) إلى الحافظة.`
       });
     }
@@ -511,7 +513,7 @@ export const SupplierDashboard: React.FC = () => {
       const result = await generateStatementPdf({
         title: 'كشف حساب العملاء والمشتريات والإيداعات',
         subtitle: 'تقرير محاسبي تفصيلي لحركات العملاء ونقاط البيع لدى المتجر',
-        portalLabel: 'بوابة المورد المتجر',
+        portalLabel: 'بوابة المتجر',
         entityName: supplier.storeName,
         entityCode: supplier.id,
         generatedAt: nowStr,
@@ -520,7 +522,7 @@ export const SupplierDashboard: React.FC = () => {
           { label: 'عدد القيود', value: `${supplierStatementTotals.count} قيد`, tone: 'neutral' },
           { label: 'إجمالي المدين', value: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit'), tone: 'debit' },
           { label: 'إجمالي الدائن', value: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'), tone: 'credit' },
-          { label: 'رصيد المورد الحالي', value: formatCurrencySar(supplier.walletBalance), tone: 'accent' },
+          { label: 'رصيد المتجر الحالي', value: formatCurrencySar(supplier.walletBalance), tone: 'accent' },
         ],
         columns: [
           { key: 'date', label: 'التاريخ', width: '14%', mono: true },
@@ -542,7 +544,7 @@ export const SupplierDashboard: React.FC = () => {
           totalCredit: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'),
           finalBalance: formatCurrencySar(supplier.walletBalance),
         },
-        filename: `كشف_حساب_المورد_${supplier.storeName}_${nowStr.slice(0, 10)}.pdf`,
+        filename: `كشف_حساب_المتجر_${supplier.storeName}_${nowStr.slice(0, 10)}.pdf`,
       });
 
       if (mode === 'download') {
@@ -578,7 +580,7 @@ export const SupplierDashboard: React.FC = () => {
             <Bell className="w-4 h-4" />
           </div>
           <div className="space-y-0.5">
-            <div className="font-bold text-purple-200">تعميم من إدارة التطبيق للموردين:</div>
+            <div className="font-bold text-purple-200">تعميم من إدارة التطبيق للمتاجر:</div>
             <p className="text-slate-200 leading-relaxed">{platformSettings.supplierInterfaceNotice}</p>
           </div>
         </div>
@@ -609,11 +611,26 @@ export const SupplierDashboard: React.FC = () => {
                       </h1>
                       <button
                         type="button"
-                        onClick={() => setShowEditProfileModal(true)}
+                        onClick={() => {
+                          setEditProfileSection('profile');
+                          setShowEditProfileModal(true);
+                        }}
                         className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 whitespace-nowrap inline-flex items-center justify-center"
-                        title="تعديل بيانات المورد والشعار"
+                        title="تعديل بيانات المتجر والشعار وروابط التواصل"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditProfileSection('social');
+                          setShowEditProfileModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap inline-flex items-center gap-1.5"
+                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بنا)"
+                      >
+                        <Share2 className="w-3 h-3 text-amber-400" />
+                        <span>روابط التواصل (اتصل بنا)</span>
                       </button>
                   </div>
                   </div>
@@ -679,6 +696,10 @@ export const SupplierDashboard: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {supplier.socialLinks && (
+              <SupplierContactLinks socialLinks={supplier.socialLinks} className="pt-0.5" />
+            )}
           </div>
 
           {/* Quick Actions */}
@@ -733,7 +754,7 @@ export const SupplierDashboard: React.FC = () => {
                   ? 'bg-amber-500 text-slate-950 border-amber-400'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600'
               }`}
-              title="مركز إشعارات المورد وتنبيهات العمليات"
+              title="مركز إشعارات المتجر وتنبيهات العمليات"
             >
               <Bell className={`w-4 h-4 ${subTab === 'notifications' ? 'text-slate-950' : 'text-amber-400'}`} />
               <span>الإشعارات</span>
@@ -751,7 +772,7 @@ export const SupplierDashboard: React.FC = () => {
         {/* Supplier KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-800/80 text-xs">
           <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">طلبات شحن الأيدي باللعبة (للمُنَزِّل)</span>
+            <span className="text-[10px] text-slate-400 block">طلبات شحن الأيدي باللعبة (للمتجر)</span>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">
                 {pendingIdOrders.length}
@@ -783,7 +804,7 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">رصيد مبيعات المورد الإجمالي</span>
+            <span className="text-[10px] text-slate-400 block">رصيد مبيعات المتجر الإجمالي</span>
             <span className="text-lg font-bold font-mono text-white tabular-nums">
               {supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
             </span>
@@ -1156,17 +1177,17 @@ export const SupplierDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* SUBTAB 2: IN-GAME PLAYER ID FULFILLMENT CENTER FOR THE المورد / SUPPLIER */}
+      {/* SUBTAB 2: IN-GAME PLAYER ID FULFILLMENT CENTER FOR THE المتجر / SUPPLIER */}
       {subTab === 'pending_orders' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <Gamepad2 className="w-5 h-5 text-amber-400" />
-                <span>طلبات شحن الأيدي الواردة للمُنَزِّل (الشحن المباشر من اللعبة)</span>
+                <span>طلبات شحن الأيدي الواردة للمتجر (الشحن المباشر من اللعبة)</span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                يقوم العميل بإرسال الطلب مع الأيدي (Player ID)، وهنا يستلم المورد الأيدي ليكمل شحن الحساب مباشرة من داخل اللعبة وإشعار العميل باكتمال العملية.
+                يقوم العميل بإرسال الطلب مع الأيدي (Player ID)، وهنا يستلم المتجر الأيدي ليكمل شحن الحساب مباشرة من داخل اللعبة وإشعار العميل باكتمال العملية.
               </p>
             </div>
 
@@ -1229,7 +1250,7 @@ export const SupplierDashboard: React.FC = () => {
                 const isPending = order.status === 'pending_supplier' || order.status === 'in_progress';
                 const isPlayerId = order.deliveryMethod === 'player_id';
                 const pId = order.deliveryDetails.playerId || '';
-                const currentNoteInput = orderNotes[order.id] ?? (isPlayerId ? `تم الشحن بنجاح من داخل اللعبة عبر الأيدي (${pId})` : 'تم الشحن بنجاح عبر بوابة المورد');
+                const currentNoteInput = orderNotes[order.id] ?? (isPlayerId ? `تم الشحن بنجاح من داخل اللعبة عبر الأيدي (${pId})` : 'تم الشحن بنجاح عبر بوابة المتجر');
 
                 return (
                   <div
@@ -1258,7 +1279,7 @@ export const SupplierDashboard: React.FC = () => {
                         {isPending ? (
                           <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1 animate-pulse">
                             <Clock className="w-3 h-3 text-amber-400" />
-                            <span>بانتظار شحن المورد من اللعبة</span>
+                            <span>بانتظار شحن المتجر من اللعبة</span>
                           </span>
                         ) : order.status === 'completed' ? (
                           <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
@@ -1301,7 +1322,7 @@ export const SupplierDashboard: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Quick Copy Buttons for the المورد */}
+                          {/* Quick Copy Buttons for the المتجر */}
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
@@ -1451,7 +1472,7 @@ export const SupplierDashboard: React.FC = () => {
                                     ✓
                                   </div>
                                   <div>
-                                    <div className="font-bold text-emerald-300">تنبيه فوري للمورد: العميل قام بقراءة والاطلاع على رمز التحقق!</div>
+                                    <div className="font-bold text-emerald-300">تنبيه فوري للمتجر: العميل قام بقراءة والاطلاع على رمز التحقق!</div>
                                     <div className="text-[10px] text-emerald-400/90">
                                       وافق العميل على رمز التحقق ونسخه. يمكنك الآن استكمال وإتمام عملية الشحن للطلب.
                                     </div>
@@ -1470,7 +1491,7 @@ export const SupplierDashboard: React.FC = () => {
                     {/* Supplier note display if completed */}
                     {order.supplierNotes && (
                       <div className="text-[11px] text-slate-400 bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-start gap-2">
-                        <span className="text-amber-400 font-semibold shrink-0">ملاحظة المورد:</span>
+                        <span className="text-amber-400 font-semibold shrink-0">ملاحظة المتجر:</span>
                         <span className="text-slate-200">{order.supplierNotes}</span>
                         {order.completedAt && (
                           <span className="text-slate-500 mr-auto font-mono">تاريخ الشحن: {order.completedAt}</span>
@@ -1478,12 +1499,12 @@ export const SupplierDashboard: React.FC = () => {
                       </div>
                     )}
 
-                    {/* IN-GAME FULFILLMENT ACTIONS FOR THE المورد */}
+                    {/* IN-GAME FULFILLMENT ACTIONS FOR THE المتجر */}
                     {isPending && (
                       <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="flex-1">
                           <label className="block text-[10px] text-slate-400 mb-1">
-                            ملاحظة المورد أو رقم مرجع الشحن من اللعبة (تظهر للعميل في الإيصال):
+                            ملاحظة المتجر أو رقم مرجع الشحن من اللعبة (تظهر للعميل في الإيصال):
                           </label>
                           <input
                             type="text"
@@ -2217,7 +2238,7 @@ export const SupplierDashboard: React.FC = () => {
             <div>
               <h2 className="text-base font-bold text-white">إدارة العملاء والوكلاء وترقية الرتب</h2>
               <p className="text-xs text-slate-400">
-                يمكن للمورد ترقية رتبة العميل فوراً إلى (نحاسي أو فضي أو ذهبي أو مميز) لتغيير أسعار المتجر لديه فورياً.
+                يمكن للمتجر ترقية رتبة العميل فوراً إلى (نحاسي أو فضي أو ذهبي أو مميز) لتغيير أسعار المتجر لديه فورياً.
               </p>
             </div>
             <button
@@ -2339,7 +2360,7 @@ export const SupplierDashboard: React.FC = () => {
                         >
                           <div className="flex items-center gap-2 truncate">
                             <Landmark className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                            <span className="truncate text-[11px]">استلام حوالات المورد</span>
+                            <span className="truncate text-[11px]">استلام حوالات المتجر</span>
                           </div>
                           <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
                             client.canReceiveSupplierTransfers ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
@@ -2620,7 +2641,10 @@ export const SupplierDashboard: React.FC = () => {
 
       {/* Edit Supplier Profile Modal */}
       {showEditProfileModal && (
-        <EditSupplierProfileModal onClose={() => setShowEditProfileModal(false)} />
+        <EditSupplierProfileModal
+          initialSection={editProfileSection}
+          onClose={() => setShowEditProfileModal(false)}
+        />
       )}
 
       <PdfPreviewModal

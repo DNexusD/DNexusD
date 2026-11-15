@@ -373,7 +373,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                   <div>
                     <span className="font-bold text-purple-300 block text-xs">إعدادات استهداف الهدايا المجانية:</span>
                     <p className="text-[11px] text-purple-200 mt-0.5">
-                      هذه الخدمة مجانية (0 ر.س للعميل)، وستُحتسب رسوم التطبيق بالنسبة المحددة (<strong className="text-purple-300">{effectiveAppFeePct}%</strong>) من السعر الأصلي. يحدد المورد من يستهدف بالهدية:
+                      هذه الخدمة مجانية (0 ر.س للعميل)، وستُحتسب رسوم التطبيق بالنسبة المحددة (<strong className="text-purple-300">{effectiveAppFeePct}%</strong>) من السعر الأصلي. يحدد المتجر من يستهدف بالهدية:
                     </p>
                   </div>
                 </div>

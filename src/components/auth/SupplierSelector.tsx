@@ -45,7 +45,7 @@ export const SupplierSelector: React.FC = () => {
     setIsSupplierSelectionRequired(false);
     showToast({ 
       type: 'success', 
-      title: 'تم تحديد المورد بنجاح',
+      title: 'تم تحديد المتجر بنجاح',
       description: 'جاري التوجيه إلى واجهة المتجر والخدمات' 
     });
   };
@@ -55,10 +55,10 @@ export const SupplierSelector: React.FC = () => {
       <div className="text-center space-y-1.5">
         <h2 className="text-base sm:text-lg font-bold text-white flex items-center justify-center gap-2">
           <Building2 className="w-5 h-5 text-amber-400" />
-          <span>اختر المورد الخاص بحسابك</span>
+          <span>اختر المتجر الخاص بحسابك</span>
         </h2>
         <p className="text-xs text-amber-300/90 font-medium">
-          تم التعرف على الموردين المسجل لديهم بحسابك:
+          تم التعرف على المتاجر المسجل لديهم بحسابك:
         </p>
       </div>
 
@@ -83,7 +83,7 @@ export const SupplierSelector: React.FC = () => {
                   {s.storeName}
                 </div>
                 <div className="text-[10px] text-slate-400">
-                  {s.name} · معرف المورد: <code className="font-mono text-amber-300">{s.id}</code>
+                  {s.name} · معرف المتجر: <code className="font-mono text-amber-300">{s.id}</code>
                 </div>
               </div>
             </div>
@@ -119,7 +119,7 @@ export const SupplierSelector: React.FC = () => {
             <Hash className="w-4 h-4 text-slate-500 absolute right-3 top-2.5" />
             <input 
               type="text" 
-              placeholder="أدخل معرف المورد (ID)..." 
+              placeholder="أدخل معرف المتجر (ID)..." 
               className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-3 pr-9 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
               value={supplierCode}
               onChange={e => setSupplierCode(e.target.value)}
@@ -131,12 +131,12 @@ export const SupplierSelector: React.FC = () => {
               if (matched) {
                 selectSupplier(matched.id);
               } else {
-                showToast({ type: 'error', title: 'المعرف غير مسجل لديك', description: 'يرجى اختيار مورد من الموردين المسجل لديهم بحسابك' });
+                showToast({ type: 'error', title: 'المعرف غير مسجل لديك', description: 'يرجى اختيار متجر من المتاجر المسجل لديهم بحسابك' });
               }
             }} 
             className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md"
           >
-            تأكيد الدخول لمتجر المورد
+            تأكيد الدخول للمتجر
           </button>
         </div>
       )}
@@ -144,7 +144,7 @@ export const SupplierSelector: React.FC = () => {
       {viewMode === 'scan' && (
         <div className="text-center p-5 border-2 border-dashed border-slate-800 rounded-2xl space-y-3 bg-slate-950">
           <QrCode className="w-12 h-12 text-amber-400 mx-auto" />
-          <p className="text-xs text-slate-400">امسح رمز QR الخاص بالمورد المسجل لديه.</p>
+          <p className="text-xs text-slate-400">امسح رمز QR الخاص بالمتجر المسجل لديه.</p>
           <label className="block cursor-pointer bg-slate-900 border border-slate-700 py-2 px-4 rounded-xl text-xs font-bold text-amber-400 hover:bg-slate-800 transition-colors">
             <span>اختيار صورة الكيو أر من الملفات</span>
             <input
@@ -153,7 +153,7 @@ export const SupplierSelector: React.FC = () => {
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files[0]) {
-                  showToast({ type: 'info', title: 'جاري قراءة رمز الكيو أر...', description: 'سيتم توجيهك لمتجر المورد المسجل مباشرة.' });
+                  showToast({ type: 'info', title: 'جاري قراءة رمز الكيو أر...', description: 'سيتم توجيهك لالمتجر المسجل مباشرة.' });
                   if (displaySuppliers.length > 0) {
                     selectSupplier(displaySuppliers[0].id);
                   }

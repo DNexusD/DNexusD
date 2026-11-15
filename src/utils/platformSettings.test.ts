@@ -23,11 +23,11 @@ test('mergePlatformSettings falls back to defaults cleanly when partial or empty
 
   const custom = mergePlatformSettings({
     showSupplierInterfaceNotice: true,
-    supplierInterfaceNotice: 'تعميم مهم لجميع الموردين',
+    supplierInterfaceNotice: 'تعميم مهم لجميع المتاجر',
     allowSuppliersCreateCustomCatalogs: false,
   });
   assert.equal(custom.showSupplierInterfaceNotice, true);
-  assert.equal(custom.supplierInterfaceNotice, 'تعميم مهم لجميع الموردين');
+  assert.equal(custom.supplierInterfaceNotice, 'تعميم مهم لجميع المتاجر');
   assert.equal(custom.allowSuppliersCreateCustomCatalogs, false);
   assert.equal(
     custom.statementTransactionTypes.length,
@@ -41,21 +41,21 @@ test('getCatalogsForSupplierView shows fixed admin catalogs to all suppliers and
       id: 'cat-fixed-1',
       supplierId: 'all',
       nameAr: 'كتالوج الاتصالات المعتمد',
-      descriptionAr: 'ثابت لجميع الموردين',
+      descriptionAr: 'ثابت لجميع المتاجر',
       icon: 'Smartphone',
       isFixedByAdmin: true,
     },
     {
       id: 'cat-sup-1',
       supplierId: 'sup-1',
-      nameAr: 'كتالوج خاص بالمورد الأول',
+      nameAr: 'كتالوج خاص بالمتجر الأول',
       descriptionAr: 'خاص',
       icon: 'Layers',
     },
     {
       id: 'cat-sup-2',
       supplierId: 'sup-2',
-      nameAr: 'كتالوج خاص بالمورد الثاني',
+      nameAr: 'كتالوج خاص بالمتجر الثاني',
       descriptionAr: 'خاص',
       icon: 'Layers',
     },
@@ -163,7 +163,7 @@ test('matchesAdminStatementTransactionType supports built-in aliases and custom 
     id: 'ae-1',
     date: '2026-11-14 12:00',
     type: 'bank_settlement',
-    description: 'حجز مبلغ احترازي وتسوية بنكية للمورد',
+    description: 'حجز مبلغ احترازي وتسوية بنكية للمتجر',
     debit: 100,
     credit: 0,
     feeAmount: 0,

@@ -197,7 +197,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
             <div>
               <h3 className="font-bold text-base text-white">طلب شحن رصيد المحفظة</h3>
               <p className="text-xs text-slate-400">
-                إيداع رصيد مسبق أو طلب سلفة لدى المورد:{' '}
+                إيداع رصيد مسبق أو طلب سلفة لدى المتجر:{' '}
                 <span className="text-amber-400 font-semibold">{currentPosSupplier.name}</span>
               </p>
             </div>
@@ -306,7 +306,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-[10px] text-amber-300/90 font-medium">
                             <Check className="w-3 h-3 text-amber-400 shrink-0" />
-                            <span>حساب معتمد للمورد</span>
+                            <span>حساب معتمد للمتجر</span>
                           </span>
                         )}
                       </div>
@@ -375,14 +375,14 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                         <>
                           <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                           <span className="text-emerald-300/90 truncate">
-                            يُوجَّه الطلب إلى نقطة البيع المخوّلة ({selectedAccount.delegatedPosName || selectedAccount.accountHolderName}) لمطابقة الحوالة وتأكيدها للمورد فورياً.
+                            يُوجَّه الطلب إلى نقطة البيع المخوّلة ({selectedAccount.delegatedPosName || selectedAccount.accountHolderName}) لمطابقة الحوالة وتأكيدها للمتجر فورياً.
                           </span>
                         </>
                       ) : (
                         <>
                           <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                           <span className="text-slate-300 truncate">
-                            يُوجَّه الطلب مباشرة إلى المورد ({currentPosSupplier.name}) لمطابقة الحوالة واعتماد الرصيد بمحفظتك.
+                            يُوجَّه الطلب مباشرة إلى المتجر ({currentPosSupplier.name}) لمطابقة الحوالة واعتماد الرصيد بمحفظتك.
                           </span>
                         </>
                       )}
@@ -597,7 +597,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
               </div>
 
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200 leading-relaxed">
-                * سيتم إرسال طلب الشحن إلى المورد {currentPosSupplier.name}
+                * سيتم إرسال طلب الشحن إلى المتجر {currentPosSupplier.name}
                 {selectedAccount?.canReceiveSupplierTransfers
                   ? ` وإلى نقطة البيع المخوّلة (${selectedAccount.delegatedPosName || selectedAccount.accountHolderName}) لتأكيد استلام الحوالة`
                   : ''}
@@ -623,7 +623,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                   <span>طلب سلفة رصيد آجل (بدون مرفقات أو بيانات بنكية)</span>
                 </div>
                 <p className="text-slate-300 text-[11px] leading-relaxed">
-                  يتيح لك هذا الخيار طلب <strong className="text-white">سلفة رصيد آجل</strong> عاجلة مباشرة من المورد (<strong className="text-white">{currentPosSupplier.name}</strong>) دون الحاجة لإرفاق صورة إيصال أو إدخال رقم حوالة بنكية.
+                  يتيح لك هذا الخيار طلب <strong className="text-white">سلفة رصيد آجل</strong> عاجلة مباشرة من المتجر (<strong className="text-white">{currentPosSupplier.name}</strong>) دون الحاجة لإرفاق صورة إيصال أو إدخال رقم حوالة بنكية.
                 </p>
               </div>
 
@@ -643,20 +643,20 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                     className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-3.5 py-2.5 text-base font-bold font-mono text-cyan-300 focus:outline-none focus:border-cyan-400"
                   />
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    سيتم قيد هذا المبلغ في محفظتك فور اعتماد المورد لطلب السلفة.
+                    سيتم قيد هذا المبلغ في محفظتك فور اعتماد المتجر لطلب السلفة.
                   </span>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    سبب طلب السلفة / ملاحظات للمورد:
+                    سبب طلب السلفة / ملاحظات للمتجر:
                   </label>
                   <textarea
                     rows={3}
                     required
                     value={loanReason}
                     onChange={(e) => setLoanReason(e.target.value)}
-                    placeholder="وضح للمورد سبب طلب السلفة (مثال: تغطية مبيعات مسائية عاجلة، أو طلب شحن زبون مباشر)..."
+                    placeholder="وضح للمتجر سبب طلب السلفة (مثال: تغطية مبيعات مسائية عاجلة، أو طلب شحن زبون مباشر)..."
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-cyan-500"
                   />
                 </div>
@@ -668,7 +668,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                   <span>تأكيد تسجيل السلفة في القيود وقاعدة البيانات:</span>
                 </div>
                 <p className="text-slate-400 text-[10px] leading-relaxed">
-                  عند اعتماد المورد للسلفة، سيتم تسجيل دين السلفة في القيود المالية لمسير حسابك، وتوثيق الحركة في قاعدة بيانات العميل والمورد مع إمكانية متابعة الاستعلام وتسديد السلفة لاحقاً.
+                  عند اعتماد المتجر للسلفة، سيتم تسجيل دين السلفة في القيود المالية لمسير حسابك، وتوثيق الحركة في قاعدة بيانات العميل والمتجر مع إمكانية متابعة الاستعلام وتسديد السلفة لاحقاً.
                 </p>
               </div>
 
@@ -677,7 +677,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                 className="w-full py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md shadow-cyan-500/20 cursor-pointer"
               >
                 <HandCoins className="w-4 h-4" />
-                <span>إرسال طلب السلفة للمورد (بدون بيانات بنكية)</span>
+                <span>إرسال طلب السلفة للمتجر (بدون بيانات بنكية)</span>
               </button>
             </>
           )}

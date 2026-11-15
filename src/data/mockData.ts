@@ -86,7 +86,7 @@ export const initialSupplierBankAccounts: SupplierBankAccount[] = [
     canReceiveSupplierTransfers: false,
     isPrimary: true,
     isActive: true,
-    notes: 'الحساب البنكي الرئيسي للمورد لاستلام إيداعات شحن المحافظ',
+    notes: 'الحساب البنكي الرئيسي للمتجر لاستلام إيداعات شحن المحافظ',
     createdAt: '2025-01-15'
   },
   {
@@ -102,7 +102,7 @@ export const initialSupplierBankAccounts: SupplierBankAccount[] = [
     canReceiveSupplierTransfers: false,
     isPrimary: false,
     isActive: true,
-    notes: 'حساب بنكي معتمد ومخوّل لدى المورد لاستقبال الحوالات السريعة',
+    notes: 'حساب بنكي معتمد ومخوّل لدى المتجر لاستقبال الحوالات السريعة',
     createdAt: '2025-02-10'
   },
   {
@@ -137,7 +137,7 @@ export const initialSupplierBankAccounts: SupplierBankAccount[] = [
     canReceiveSupplierTransfers: false,
     isPrimary: false,
     isActive: true,
-    notes: 'حساب معتمد ومخوّل للمورد لاستقبال حوالات شحن الرصيد',
+    notes: 'حساب معتمد ومخوّل للمتجر لاستقبال حوالات شحن الرصيد',
     createdAt: '2025-03-15'
   },
   {
@@ -591,7 +591,7 @@ export const initialDepositRequests: DepositRequest[] = [
     bankName: 'سلفة / رصيد آجل (بدون إيصال بنكي)',
     date: '2026-11-08 16:20',
     status: 'approved',
-    notes: 'طلب سلفة رصيد آجل معتمدة من المورد جمال الصالحي',
+    notes: 'طلب سلفة رصيد آجل معتمدة من المتجر جمال الصالحي',
     requestType: 'loan',
     loanReason: 'تغطية مبيعات ليلية عاجلة لباقات ببجي وتيليجرام',
     loanRepaidStatus: 'unpaid'
@@ -608,7 +608,7 @@ export const initialDepositRequests: DepositRequest[] = [
     bankName: 'سلفة / رصيد آجل (بدون إيصال بنكي)',
     date: '2026-11-09 02:10',
     status: 'pending',
-    notes: 'طلب سلفة جديد بانتظار موافقة المورد بدون إيصال بنكي',
+    notes: 'طلب سلفة جديد بانتظار موافقة المتجر بدون إيصال بنكي',
     requestType: 'loan',
     loanReason: 'شحن رصيد آجل عاجل للزبائن لإنهاء مبيعات نهاية الأسبوع',
     loanRepaidStatus: 'unpaid'
@@ -687,7 +687,7 @@ export const initialOrders: Order[] = [
     totalDeducted: 75.75,
     paymentMethod: 'wallet',
     status: 'pending_supplier', // Needs supplier fulfillment!
-    supplierNotes: 'بانتظار تفعيل المورد المباشر للاشتراك على السيرفر',
+    supplierNotes: 'بانتظار تفعيل المتجر المباشر للاشتراك على السيرفر',
     customerName: 'تركي العازمي'
   },
   {
@@ -712,8 +712,8 @@ export const initialOrders: Order[] = [
     feeAmount: 0.60,
     totalDeducted: 60.60,
     paymentMethod: 'wallet',
-    status: 'pending_supplier', // Sent to the المورد with ID to complete in game
-    supplierNotes: 'طلب شحن جديد عبر الأيدي مرسل للمُنَزِّل للشحن المباشر من اللعبة',
+    status: 'pending_supplier', // Sent to the المتجر with ID to complete in game
+    supplierNotes: 'طلب شحن جديد عبر الأيدي مرسل للمتجر للشحن المباشر من اللعبة',
     customerName: 'فهد الشمري',
     customerPhone: '+966 50 445 5667'
   }
@@ -824,13 +824,13 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     posId: 'pos-1',
     posCode: 'RYD-10492',
     posName: 'مركز الأمل للخدمات الرقمية',
-    description: 'إشعار شحن رصيد مسبق للمورد جمال الصالحي بمبلغ 5,000.00 ر.س (حوالة TRX-99482014)',
+    description: 'إشعار شحن رصيد مسبق للمتجر جمال الصالحي بمبلغ 5,000.00 ر.س (حوالة TRX-99482014)',
     grossAmount: 5000.0,
     feeAmount: 0,
     debit: 0,
     credit: 0,
     balanceAfter: 12950.75,
-    notes: 'عملية إيداع رصيد مسبق تم اعتمادها بين نقطة البيع والمورد'
+    notes: 'عملية إيداع رصيد مسبق تم اعتمادها بين نقطة البيع والمتجر'
   },
   {
     id: 'adm-acc-03',
@@ -845,7 +845,7 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     debit: 500.0,
     credit: 0,
     balanceAfter: 12450.75,
-    notes: 'تم الخصم من محفظة رسوم التطبيق وتأكيد استلام قيمته من الحساب البنكي للمورد'
+    notes: 'تم الخصم من محفظة رسوم التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر'
   },
   {
     id: 'adm-acc-04',
@@ -885,7 +885,7 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     debit: 0,
     credit: 0.60,
     balanceAfter: 12452.04,
-    notes: 'تم الشحن من اللعبة بواسطة المورد'
+    notes: 'تم الشحن من اللعبة بواسطة المتجر'
   },
   {
     id: 'adm-acc-06',
@@ -917,13 +917,13 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     posId: 'pos-1',
     posCode: 'RYD-10492',
     posName: 'مركز الأمل للخدمات الرقمية',
-    description: 'تحصيل رسوم منصة 1% على طلب شحن أيدي ببجي 660 شدة (مرسل للمُنَزِّل)',
+    description: 'تحصيل رسوم منصة 1% على طلب شحن أيدي ببجي 660 شدة (مرسل للمتجر)',
     grossAmount: 60.0,
     feeAmount: 0.60,
     debit: 0,
     credit: 0.60,
     balanceAfter: 12454.64,
-    notes: 'طلب شحن أيدي قيد التنفيذ لدى المورد'
+    notes: 'طلب شحن أيدي قيد التنفيذ لدى المتجر'
   },
   {
     id: 'adm-acc-08',
@@ -935,7 +935,7 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     posId: 'pos-2',
     posCode: 'JED-88201',
     posName: 'ديجيتال ستار للاتصالات',
-    description: 'إشعار شحن رصيد مسبق للمورد جمال الصالحي بمبلغ 2,500.00 ر.س (البنك الأهلي TRX-88319022)',
+    description: 'إشعار شحن رصيد مسبق للمتجر جمال الصالحي بمبلغ 2,500.00 ر.س (البنك الأهلي TRX-88319022)',
     grossAmount: 2500.0,
     feeAmount: 0,
     debit: 0,
@@ -955,13 +955,13 @@ export const initialAdminAccountingEntries: AdminAccountingEntry[] = [
     posId: 'pos-3',
     posCode: 'DAM-59123',
     posName: 'نقطة بيع الفرسان للإلكترونيات',
-    description: 'تحصيل رسوم مخصصة للمورد طارق الحربي (1.5% + 0.50 ر.س) على شحن 530 جوهرة فري فاير',
+    description: 'تحصيل رسوم مخصصة للمتجر طارق الحربي (1.5% + 0.50 ر.س) على شحن 530 جوهرة فري فاير',
     grossAmount: 60.0,
     feeAmount: 1.40,
     debit: 0,
     credit: 1.40,
     balanceAfter: 12456.04,
-    notes: 'رسوم مخصصة لمورد طارق الحربي'
+    notes: 'رسوم مخصصة لمتجر طارق الحربي'
   }
 ];
 
@@ -1044,7 +1044,7 @@ export const initialNotifications: AppNotification[] = [
     supplierName: 'مؤسسة جمال للحلول الرقمية',
     targetRole: 'pos',
     title: 'تأكيد وشحن الأيدي بنجاح ✅',
-    message: 'تم شحن طلب شدات ببجي موبايل (660 UC) للأيدي (512398711) بنجاح من المورد.',
+    message: 'تم شحن طلب شدات ببجي موبايل (660 UC) للأيدي (512398711) بنجاح من المتجر.',
     type: 'order_status',
     isRead: false,
     createdAt: '2026-11-06 14:20',
@@ -1057,7 +1057,7 @@ export const initialNotifications: AppNotification[] = [
     supplierName: 'مؤسسة جمال للحلول الرقمية',
     targetRole: 'pos',
     title: 'ترقية رتبة متجرك ⭐',
-    message: 'تهانينا! قام المورد بترقية رتبة حسابك إلى الرتبة الذهبية (تخفيض تلقائي للأسعار 30%).',
+    message: 'تهانينا! قام المتجر بترقية رتبة حسابك إلى الرتبة الذهبية (تخفيض تلقائي للأسعار 30%).',
     type: 'tier_upgrade',
     isRead: false,
     createdAt: '2026-11-05 10:15'

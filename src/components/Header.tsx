@@ -125,7 +125,7 @@ export const Header: React.FC = () => {
             <button
               onClick={() => setShowNotificationsPopover(!showNotificationsPopover)}
               className="relative p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors cursor-pointer flex items-center justify-center"
-              title={isSupplierRole ? "إشعارات وعمليات المورد الفورية" : "الإشعارات والتنبيهات من المورد والمتجر"}
+              title={isSupplierRole ? "إشعارات وعمليات المتجر الفورية" : "الإشعارات والتنبيهات من المتجر والمتجر"}
             >
               <Bell className="w-4 h-4 text-amber-400" />
               {unreadNotificationsCount > 0 && (
@@ -149,7 +149,7 @@ export const Header: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <Bell className="w-4 h-4 text-amber-400" />
                       <h3 className="font-bold text-white text-sm">
-                        {isSupplierRole ? 'إشعارات وتنبيهات المورد' : 'الإشعارات والتنبيهات'}
+                        {isSupplierRole ? 'إشعارات وتنبيهات المتجر' : 'الإشعارات والتنبيهات'}
                       </h3>
                       {unreadNotificationsCount > 0 && (
                         <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30">
@@ -188,12 +188,12 @@ export const Header: React.FC = () => {
                           <Bell className="w-6 h-6" />
                         </div>
                         <p className="text-xs font-medium text-slate-300">
-                          {isSupplierRole ? 'لا توجد إشعارات مورد حالياً' : 'لا توجد إشعارات حالياً'}
+                          {isSupplierRole ? 'لا توجد إشعارات متجر حالياً' : 'لا توجد إشعارات حالياً'}
                         </p>
                         <p className="text-[11px] text-slate-500">
                           {isSupplierRole
                             ? 'ستصلك هنا إشعارات فورية بطلبات الشحن باللعبة، طلبات الإيداع، طلبات وسداد السلف، وتأكيدات الحوالات'
-                            : 'ستصلك هنا التنبيهات وإشعارات الشحن والطلبات من المورد المتجر'}
+                            : 'ستصلك هنا التنبيهات وإشعارات الشحن والطلبات من المتجر'}
                         </p>
                       </div>
                     ) : (
@@ -242,7 +242,7 @@ export const Header: React.FC = () => {
                                 {isSupplierRole ? (
                                   <span className="text-amber-400 font-medium">العميل: {notif.posName || 'نقطة بيع'}</span>
                                 ) : (
-                                  <span className="text-amber-400/80 font-medium">المورد: {notif.supplierName || supplier.name}</span>
+                                  <span className="text-amber-400/80 font-medium">المتجر: {notif.supplierName || supplier.name}</span>
                                 )}
                                 <span className="flex items-center gap-1 dir-ltr">
                                   <Clock className="w-3 h-3 text-slate-400" />
@@ -321,10 +321,10 @@ export const Header: React.FC = () => {
                     ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
-                title={role === 'employee' ? `واجهة موظف مكتب (${currentUser?.name || ''})` : "واجهة المورد / المورد (شحن الأيدي من اللعبة)"}
+                title={role === 'employee' ? `واجهة موظف مكتب (${currentUser?.name || ''})` : "واجهة المتجر (شحن الأيدي من اللعبة)"}
               >
                 <Building2 className="w-3.5 h-3.5" />
-                <span>{role === 'employee' ? `واجهة الموظف (${currentUser?.name?.split(' ')[0] || ''})` : 'واجهة المورد (المورد)'}</span>
+                <span>{role === 'employee' ? `واجهة الموظف (${currentUser?.name?.split(' ')[0] || ''})` : 'واجهة المتجر'}</span>
                 {pendingIdCount > 0 && (
                   <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
                 )}
@@ -433,7 +433,7 @@ export const Header: React.FC = () => {
                 </div>
               ) : !isAuthenticated ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-amber-400 font-semibold">المورد النشط:</span>
+                  <span className="text-amber-400 font-semibold">المتجر النشط:</span>
                   <select
                     value={supplier.id}
                     onChange={e => setCurrentSupplierId(e.target.value)}
@@ -448,12 +448,12 @@ export const Header: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5" />
-                    <span>المورد المسجل: {supplier.name} ({supplier.storeName})</span>
+                    <span>المتجر المسجل: {supplier.name} ({supplier.storeName})</span>
                   </span>
                 </div>
               )}
               <span className="text-slate-400 hidden sm:inline">·</span>
-              <span>رصيد مبيعات المورد: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
+              <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
             </div>
           )}
 
@@ -480,7 +480,7 @@ export const Header: React.FC = () => {
                 )}
                 {adminPerms.canManageSuppliers && (
                   <span>
-                    الموردين الخاضعين للإشراف: <strong className="text-white font-mono tabular-nums">{suppliers.length}</strong>
+                    المتاجر الخاضعين للإشراف: <strong className="text-white font-mono tabular-nums">{suppliers.length}</strong>
                   </span>
                 )}
               </div>

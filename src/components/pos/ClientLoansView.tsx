@@ -334,7 +334,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
       return (
         <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 rounded-lg">
           <Clock className="w-3 h-3" />
-          <span>بانتظار موافقة المورد</span>
+          <span>بانتظار موافقة المتجر</span>
         </span>
       );
     }
@@ -404,7 +404,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                     </strong>{' '}
                     عن السلفة{' '}
                     <strong className="font-mono text-white">#{bankTransferReceipt.loanId}</strong>{' '}
-                    عبر الحوالة البنكية بنجاح، وهو الآن قيد المراجعة وبانتظار موافقة المورد (
+                    عبر الحوالة البنكية بنجاح، وهو الآن قيد المراجعة وبانتظار موافقة المتجر (
                     <strong className="text-white">{bankTransferReceipt.supplierName}</strong>
                     ) لاعتماد خصم المبلغ من السلفة.
                   </p>
@@ -452,7 +452,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">حالة الطلب:</span>
-                  <span className="font-bold text-amber-300">بانتظار موافقة المورد</span>
+                  <span className="font-bold text-amber-300">بانتظار موافقة المتجر</span>
                 </div>
               </div>
 
@@ -503,9 +503,9 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
 
               {/* 4. Supplier Review & Expected Outcome */}
               <div className="space-y-1.5">
-                <div className="text-[11px] font-bold text-slate-200">مراجعة المورد والأثر المتوقع</div>
+                <div className="text-[11px] font-bold text-slate-200">مراجعة المتجر والأثر المتوقع</div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-slate-400">المورد المراجع:</span>
+                  <span className="text-slate-400">المتجر المراجع:</span>
                   <span className="font-semibold text-white truncate">{bankTransferReceipt.supplierName}</span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
@@ -561,7 +561,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
 
             {bankTransferReceipt.notes && (
               <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-300">
-                <span className="text-slate-400">ملاحظاتك المرفقة للمورد: </span>
+                <span className="text-slate-400">ملاحظاتك المرفقة للمتجر: </span>
                 <span className="text-white">{bankTransferReceipt.notes}</span>
               </div>
             )}
@@ -593,7 +593,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                   <strong className="font-mono tabular-nums text-emerald-300">
                     {walletRepayReceipt.amountPaid.toFixed(2)} ر.س
                   </strong>{' '}
-                  بنجاح، وتم خصم المبلغ المحدد من محفظة العميل ({walletRepayReceipt.clientName}) وإضافته فوراً إلى محفظة المورد ({walletRepayReceipt.supplierName}).
+                  بنجاح، وتم خصم المبلغ المحدد من محفظة العميل ({walletRepayReceipt.clientName}) وإضافته فوراً إلى محفظة المتجر ({walletRepayReceipt.supplierName}).
                 </p>
               </div>
             </div>
@@ -673,9 +673,9 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
 
             {/* 3. Supplier Wallet Credit */}
             <div className="space-y-1.5 xl:pl-4 xl:border-l xl:border-slate-800">
-              <div className="text-[11px] font-bold text-emerald-300">الإضافة إلى محفظة المورد</div>
+              <div className="text-[11px] font-bold text-emerald-300">الإضافة إلى محفظة المتجر</div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-slate-400">المورد:</span>
+                <span className="text-slate-400">المتجر:</span>
                 <span className="font-semibold text-white truncate">{walletRepayReceipt.supplierName}</span>
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -685,7 +685,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-slate-400">محفظة المورد:</span>
+                <span className="text-slate-400">محفظة المتجر:</span>
                 <span className="font-mono tabular-nums text-slate-200">
                   {walletRepayReceipt.supplierBalanceBefore.toFixed(2)} ←{' '}
                   <strong className="text-emerald-300">{walletRepayReceipt.supplierBalanceAfter.toFixed(2)} ر.س</strong>
@@ -919,7 +919,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       </span>
                       <span>·</span>
                       <span>
-                        المورد: <strong className="text-slate-200">{loanSup.name}</strong>
+                        المتجر: <strong className="text-slate-200">{loanSup.name}</strong>
                       </span>
                       <span>·</span>
                       <span>
@@ -1026,7 +1026,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       {renderStatusBadge(selectedLoan)}
                     </div>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      المرجع: <span className="font-mono text-amber-300">{selectedLoan.transferNumber}</span> · المورد: <span className="text-slate-200">{loanSup.name} ({loanSup.storeName})</span>
+                      المرجع: <span className="font-mono text-amber-300">{selectedLoan.transferNumber}</span> · المتجر: <span className="text-slate-200">{loanSup.name} ({loanSup.storeName})</span>
                     </p>
                   </div>
                 </div>
@@ -1181,7 +1181,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                               </span>
                               {req.status === 'pending' && (
                                 <span className="text-[11px] font-bold text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded">
-                                  بانتظار مراجعة المورد
+                                  بانتظار مراجعة المتجر
                                 </span>
                               )}
                               {req.status === 'approved' && (
@@ -1371,7 +1371,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                             </strong>
                           </div>
                           <div className="text-[11px] text-slate-300">
-                            سيُخصم المبلغ مباشرة من محفظتك ويُضاف إلى حافظة المورد{' '}
+                            سيُخصم المبلغ مباشرة من محفظتك ويُضاف إلى حافظة المتجر{' '}
                             <strong className="text-white">{loanSup.name}</strong>
                           </div>
                         </div>
@@ -1494,7 +1494,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                                     ) : (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-[10px] text-amber-300/90 font-medium">
                                         <Check className="w-3 h-3 text-amber-400 shrink-0" />
-                                        <span>حساب معتمد للمورد</span>
+                                        <span>حساب معتمد للمتجر</span>
                                       </span>
                                     )}
                                   </div>
@@ -1561,14 +1561,14 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                                     <>
                                       <UserCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                                       <span className="text-emerald-300/90 truncate">
-                                        سيصل طلب سداد السلفة إلى المخوّل ({chosenAccount.delegatedPosName || chosenAccount.accountHolderName}) لمراجعة الإيصال وتأكيد الاستلام قبل اعتماد المورد.
+                                        سيصل طلب سداد السلفة إلى المخوّل ({chosenAccount.delegatedPosName || chosenAccount.accountHolderName}) لمراجعة الإيصال وتأكيد الاستلام قبل اعتماد المتجر.
                                       </span>
                                     </>
                                   ) : (
                                     <>
                                       <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                                       <span className="text-slate-300 truncate">
-                                        يُوجَّه طلب سداد السلفة مباشرة إلى المورد ({loanSup.name}) لمطابقة الإيصال واعتماد السداد.
+                                        يُوجَّه طلب سداد السلفة مباشرة إلى المتجر ({loanSup.name}) لمطابقة الإيصال واعتماد السداد.
                                       </span>
                                     </>
                                   )}
@@ -1580,7 +1580,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                           {/* Snapshot of Loan Details included in request */}
                           <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/25 text-[11px] text-slate-300 space-y-1">
                             <div className="font-bold text-cyan-300">
-                              بيانات السلفة التي سيتم إرفاقها تلقائياً في طلب السداد للمورد:
+                              بيانات السلفة التي سيتم إرفاقها تلقائياً في طلب السداد للمتجر:
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                               <span>رقم السلفة: <strong className="font-mono text-white">{selectedLoan.id}</strong></span>
@@ -1814,7 +1814,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
 
                           <div>
                             <label className="block text-xs font-semibold text-slate-300 mb-1">
-                              ملاحظات للمورد والمخوّل (اختياري):
+                              ملاحظات للمتجر والمخوّل (اختياري):
                             </label>
                             <input
                               type="text"

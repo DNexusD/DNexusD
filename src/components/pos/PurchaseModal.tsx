@@ -64,7 +64,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         setVerificationCode(msg);
         showToast({
           type: 'success',
-          title: 'وصلتك رسالة / رمز من المورد فورا!',
+          title: 'وصلتك رسالة / رمز من المتجر فورا!',
           description: `الرمز المستلم: ${msg}`
         });
       }
@@ -230,7 +230,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     showToast({
       type: 'info',
       title: 'العملية قيد الإنجاز...',
-      description: 'جاري إرسال بيانات الشراء إلى المورد ومعالجة التسليم الفوري.'
+      description: 'جاري إرسال بيانات الشراء إلى المتجر ومعالجة التسليم الفوري.'
     });
 
     // Simulate supplier fulfillment turnaround
@@ -302,7 +302,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 {service.nameAr}
               </h3>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
-                <span>المورد (المورد): {supplier.name}</span>
+                <span>المتجر: {supplier.name}</span>
                 <span>·</span>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${currentTierInfo.badgeColor} ${currentTierInfo.textColor}`}>
                   رتبتك: {currentTierInfo.nameAr}
@@ -331,7 +331,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 <h4 className="text-xl font-bold text-white">العملية قيد الإرسال...</h4>
                 <p className="text-sm text-slate-400 max-w-sm">
                   {selectedMethod === 'player_id' 
-                    ? `جاري خصم المبلغ وإرسال طلب الشحن مع الأيدي إلى المورد (${supplier.name}) للشحن من اللعبة.`
+                    ? `جاري خصم المبلغ وإرسال طلب الشحن مع الأيدي إلى المتجر (${supplier.name}) للشحن من اللعبة.`
                     : 'يتم الآن إرسال بيانات الشراء والتحقق من حساب المستلم وخصم المبلغ.'}
                 </p>
               </div>
@@ -342,7 +342,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
           {orderStage === 'completed' && (
             <div className="py-6 flex flex-col items-center text-center space-y-5 animate-in fade-in zoom-in-95">
               
-              {/* Distinct icon & header for Player ID dispatched to the المورد */}
+              {/* Distinct icon & header for Player ID dispatched to the المتجر */}
               {selectedMethod === 'player_id' ? (
                 <>
                   <div className="w-16 h-16 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 animate-pulse">
@@ -352,13 +352,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <div className="space-y-1.5">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-bold">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>أُرسل للمُنَزِّل · بانتظار الشحن من داخل اللعبة</span>
+                      <span>أُرسل للمتجر · بانتظار الشحن من داخل اللعبة</span>
                     </div>
                     <h4 className="text-xl sm:text-2xl font-bold text-white">
-                      تم إرسال الطلب مع الأيدي إلى المورد بنجاح!
+                      تم إرسال الطلب مع الأيدي إلى المتجر بنجاح!
                     </h4>
                     <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
-                      تم استلام طلب الشحن وإرفاق معرّف اللاعب (الأيدي) وإرساله مباشرة إلى المورد <strong className="text-amber-400">({supplier.name})</strong> ليكمل شحن الحساب من داخل اللعبة.
+                      تم استلام طلب الشحن وإرفاق معرّف اللاعب (الأيدي) وإرساله مباشرة إلى المتجر <strong className="text-amber-400">({supplier.name})</strong> ليكمل شحن الحساب من داخل اللعبة.
                     </p>
                   </div>
 
@@ -373,13 +373,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       </div>
                       <div className="p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 flex flex-col items-center gap-1">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        <span className="font-bold">2. إرسال الأيدي للمُنَزِّل</span>
+                        <span className="font-bold">2. إرسال الأيدي للمتجر</span>
                         <span className="text-[9px] text-slate-400">تم التوصيل للوحة</span>
                       </div>
                       <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 flex flex-col items-center gap-1 animate-pulse">
                         <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
                         <span className="font-bold">3. الشحن باللعبة</span>
-                        <span className="text-[9px] text-amber-400 font-semibold">يقوم المورد بالشحن الآن</span>
+                        <span className="text-[9px] text-amber-400 font-semibold">يقوم المتجر بالشحن الآن</span>
                       </div>
                     </div>
                   </div>
@@ -387,7 +387,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   {/* Player ID Prominent Card with Instant Copy Button */}
                   <div className="w-full p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-slate-950 to-slate-950 border border-amber-500/40 text-right space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400">بيانات الأيدي المرسلة للمُنَزِّل:</span>
+                      <span className="text-[11px] text-slate-400">بيانات الأيدي المرسلة للمتجر:</span>
                       <span className="text-amber-400 font-bold text-xs">شحن عبر الأيدي</span>
                     </div>
                     <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
@@ -466,7 +466,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
                 )}
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
-                  <span>المورد المسؤول عن شحن اللعبة:</span>
+                  <span>المتجر المسؤول عن شحن اللعبة:</span>
                   <span className="font-semibold text-white">{supplier.name}</span>
                 </div>
                 <div className="flex justify-between py-1.5 font-bold text-sm text-emerald-400">
@@ -821,7 +821,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-500/20 via-slate-900 to-slate-900 border border-emerald-500/50 space-y-1 text-xs animate-in zoom-in-95">
                             <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
                               <Sparkles className="w-4 h-4 text-emerald-400 animate-pulse" />
-                              <span>وصلتك رسالة / رمز من المورد فورا:</span>
+                              <span>وصلتك رسالة / رمز من المتجر فورا:</span>
                             </div>
                             <div className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-emerald-500/30">
                               <span className="font-mono text-base font-black text-amber-300 tracking-widest">{supplierLiveMessage}</span>
@@ -832,7 +832,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           </div>
                         ) : (
                           <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-center justify-between">
-                            <span>بانتظار رد المورد بالرمز أو إشعارات الإيميل ({accountEmail})...</span>
+                            <span>بانتظار رد المتجر بالرمز أو إشعارات الإيميل ({accountEmail})...</span>
                             <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
                           </div>
                         )}
@@ -844,7 +844,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             maxLength={16}
                             value={verificationCode}
                             onChange={e => setVerificationCode(e.target.value)}
-                            placeholder="رمز التحقق أو رسالة المورد"
+                            placeholder="رمز التحقق أو رسالة المتجر"
                             className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-lg font-mono tracking-widest text-white focus:outline-none focus:border-amber-500"
                           />
                         </div>
@@ -1047,7 +1047,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 {selectedPricing.isZeroPriceFloorApplied && (
                   <>
                     <div className="flex justify-between text-slate-400 text-[11px]">
-                      <span>قيمة العملية المسجلة من المورد:</span>
+                      <span>قيمة العملية المسجلة من المتجر:</span>
                       <span className="font-mono">0.00 ر.س</span>
                     </div>
                     <div className="flex justify-between text-amber-300 text-[11px]">

@@ -60,7 +60,8 @@
         "createdAt": { "type": "string" },
         "logoUrl": { "type": "string" },
         "country": { "type": "string" },
-        "city": { "type": "string" }
+        "city": { "type": "string" },
+        "socialLinks": { "type": "object" }
       },
       "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
     },

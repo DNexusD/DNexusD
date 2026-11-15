@@ -221,7 +221,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                  إشعارات وتنبيهات المورد
+                  إشعارات وتنبيهات المتجر
                 </h2>
                 {unreadSupplierNotificationsCount > 0 && (
                   <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-xs font-bold animate-pulse">

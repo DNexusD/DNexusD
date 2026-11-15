@@ -376,8 +376,8 @@ export const BankAccountsView: React.FC = () => {
                       <ShieldCheck className={`w-4 h-4 shrink-0 ${acc.canReceiveSupplierTransfers ? 'text-emerald-400' : 'text-slate-500'}`} />
                       <span className={`font-bold ${acc.canReceiveSupplierTransfers ? 'text-emerald-300' : 'text-slate-300'}`}>
                         {acc.canReceiveSupplierTransfers
-                          ? 'مخوّل باستلام ومراجعة حوالات المورد'
-                          : 'حساب مورد مباشر (غير مفوّض لنقطة بيع)'}
+                          ? 'مخوّل باستلام ومراجعة حوالات المتجر'
+                          : 'حساب متجر مباشر (غير مفوّض لنقطة بيع)'}
                       </span>
                     </div>
                     {matchedPos ? (
@@ -466,7 +466,7 @@ export const BankAccountsView: React.FC = () => {
                   onChange={(e) => handleSelectPosClient(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
                 >
-                  <option value="">-- حساب مورد مباشر / اختيار يدوي --</option>
+                  <option value="">-- حساب متجر مباشر / اختيار يدوي --</option>
                   {supplierPosClients.map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.tradeName} ({client.ownerName}) · {client.posCode} {client.email ? `· ${client.email}` : ''}
@@ -616,10 +616,10 @@ export const BankAccountsView: React.FC = () => {
                   />
                   <div>
                     <span className="font-bold text-white block">
-                      منح ميزة استلام ومراجعة حوالات المورد
+                      منح ميزة استلام ومراجعة حوالات المتجر
                     </span>
                     <span className="text-[11px] text-slate-400">
-                      عند التفعيل، تظهر لنقطة البيع / العميل واجهة &quot;استلام ومراجعة حوالات المورد&quot; لتأكيد استلام الحوالات الواردة لهذا الحساب.
+                      عند التفعيل، تظهر لنقطة البيع / العميل واجهة &quot;استلام ومراجعة حوالات المتجر&quot; لتأكيد استلام الحوالات الواردة لهذا الحساب.
                     </span>
                   </div>
                 </label>

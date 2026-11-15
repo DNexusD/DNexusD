@@ -227,7 +227,7 @@ export function normalizeDropdownValue(labelAr: string, explicitValue?: string):
 export function getDropdownListTitle(listKey: PlatformDropdownListKey): string {
   switch (listKey) {
     case 'statementTransactionTypes':
-      return 'نوع الحركة في كشف الحساب / كشف البنك (العملاء والموردون)';
+      return 'نوع الحركة في كشف الحساب / كشف البنك (العملاء والمتاجر)';
     case 'adminStatementTransactionTypes':
       return 'نوع الحركة في كشف حساب مدير التطبيق';
     case 'approvedBankNames':

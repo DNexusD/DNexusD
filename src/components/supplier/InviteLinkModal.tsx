@@ -40,7 +40,7 @@ export const InviteLinkModal: React.FC<InviteLinkModalProps> = ({ onClose }) => 
             </div>
             <div>
               <h3 className="font-bold text-base text-white">توليد رابط إنشاء حساب مع رتبة مسبقة</h3>
-              <p className="text-xs text-slate-400">المورد: {supplier.name}</p>
+              <p className="text-xs text-slate-400">المتجر: {supplier.name}</p>
             </div>
           </div>
           <button

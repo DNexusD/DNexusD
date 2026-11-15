@@ -97,7 +97,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
     }
     addFixedCatalogByAdmin({
       nameAr: newCatName.trim(),
-      descriptionAr: newCatDesc.trim() || 'كتالوج رسمي ثابت من إدارة التطبيق لجميع الموردين',
+      descriptionAr: newCatDesc.trim() || 'كتالوج رسمي ثابت من إدارة التطبيق لجميع المتاجر',
       icon: newCatIsGift ? 'Gift' : newCatIcon,
       isFreeGiftsCatalog: newCatIsGift,
     });
@@ -176,7 +176,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
               إدارة إعدادات الواجهات والكتالوجات الثابتة والقوائم المنسدلة
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              إضافة كتالوجات ثابتة تظهر لجميع الموردين ولا يمكنهم تعديلها أو حذفها، وتحديث خيارات القوائم المنسدلة (مثل نوع الحركة في كشف الحساب/البنك والبنوك المعتمدة) وإعدادات واجهات الموردين ونقاط البيع.
+              إضافة كتالوجات ثابتة تظهر لجميع المتاجر ولا يمكنهم تعديلها أو حذفها، وتحديث خيارات القوائم المنسدلة (مثل نوع الحركة في كشف الحساب/البنك والبنوك المعتمدة) وإعدادات واجهات المتاجر ونقاط البيع.
             </p>
           </div>
         </div>
@@ -195,7 +195,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
               <span>الكتالوجات الثابتة من مدير التطبيق ({fixedCatalogs.length})</span>
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              تظهر هذه الكتالوجات تلقائياً لجميع الموردين ونقاط البيع والعملاء، ويمكن للمورد إضافة خدمات داخلها دون تعديل الكتالوج أو حذفه.
+              تظهر هذه الكتالوجات تلقائياً لجميع المتاجر ونقاط البيع والعملاء، ويمكن للمتجر إضافة خدمات داخلها دون تعديل الكتالوج أو حذفه.
             </p>
           </div>
         </div>
@@ -204,7 +204,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
         <form onSubmit={handleAddFixedCatalog} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 text-xs">
           <div className="font-bold text-cyan-300 flex items-center gap-1.5">
             <PlusCircle className="w-4 h-4" />
-            <span>إضافة كتالوج ثابت جديد لجميع الموردين:</span>
+            <span>إضافة كتالوج ثابت جديد لجميع المتاجر:</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -242,7 +242,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
                 type="text"
                 value={newCatDesc}
                 onChange={(e) => setNewCatDesc(e.target.value)}
-                placeholder="يظهر هذا الوصف لجميع الموردين ونقاط البيع"
+                placeholder="يظهر هذا الوصف لجميع المتاجر ونقاط البيع"
                 className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
               />
             </div>
@@ -359,7 +359,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
                           </span>
                           <span className="px-2 py-0.5 rounded-md bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-[10px] font-semibold inline-flex items-center gap-1">
                             <Lock className="w-3 h-3" />
-                            <span>ثابت لجميع الموردين · غير قابل للتعديل من المورد</span>
+                            <span>ثابت لجميع المتاجر · غير قابل للتعديل من المتجر</span>
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-400">{cat.descriptionAr}</p>
@@ -602,7 +602,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
         <div className="border-b border-slate-800 pb-4">
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <Bell className="w-4 h-4 text-amber-400" />
-            <span>إعدادات واجهات الموردين ونقاط البيع والعملاء</span>
+            <span>إعدادات واجهات المتاجر ونقاط البيع والعملاء</span>
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
             التحكم في التنبيهات العامة المعروضة في البوابات وصلاحيات إنشاء الكتالوجات وخيارات العرض للمتجر ونقاط البيع.
@@ -615,7 +615,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
             <div className="flex items-center justify-between">
               <div className="font-bold text-amber-300 flex items-center gap-1.5">
                 <Building2 className="w-4 h-4" />
-                <span>تنبيه إداري في واجهة الموردين</span>
+                <span>تنبيه إداري في واجهة المتاجر</span>
               </div>
               <label className="inline-flex items-center gap-1.5 cursor-pointer">
                 <input
@@ -698,9 +698,9 @@ export const AdminInterfaceSettingsView: React.FC = () => {
               className="mt-1 rounded border-slate-600 bg-slate-900 text-purple-500"
             />
             <div>
-              <div className="font-bold text-white">السماح للموردين بإضافة كتالوجات خاصة</div>
+              <div className="font-bold text-white">السماح للمتاجر بإضافة كتالوجات خاصة</div>
               <div className="text-[10px] text-slate-400 mt-0.5">
-                عند التعطيل، يلتزم الموردون بالكتالوجات الثابتة المعتمدة من مدير التطبيق فقط.
+                عند التعطيل، يلتزم المتاجر بالكتالوجات الثابتة المعتمدة من مدير التطبيق فقط.
               </div>
             </div>
           </label>

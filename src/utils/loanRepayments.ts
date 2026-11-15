@@ -58,7 +58,7 @@ export function getLoanRepaymentsList(loan: DepositRequest): LoanPaymentRecord[]
         amount: roundCurrency(loan.amount),
         date: loan.repaidAt || loan.date,
         method: 'bank_transfer',
-        notes: loan.notes || 'تسديد كامل موثق من المورد',
+        notes: loan.notes || 'تسديد كامل موثق من المتجر',
       },
     ];
   }
@@ -280,7 +280,7 @@ export function applyLoanPaymentToLoan(
 
   const statusNote =
     newState === 'repaid'
-      ? `تم تسديد السلفة بالكامل (${total.toFixed(2)} ر.س)${supplierName ? ` للمورد (${supplierName})` : ''} بتاريخ ${payment.date}`
+      ? `تم تسديد السلفة بالكامل (${total.toFixed(2)} ر.س)${supplierName ? ` للمتجر (${supplierName})` : ''} بتاريخ ${payment.date}`
       : `سداد جزئي بمبلغ ${appliedAmount.toFixed(2)} ر.س (المسدد: ${newPaidAmount.toFixed(2)} ر.س · المتبقي: ${newRemainingAmount.toFixed(2)} ر.س)`;
 
   const updatedLoan: DepositRequest = {

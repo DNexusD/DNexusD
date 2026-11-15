@@ -132,14 +132,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
           setRegSupplierId(decodedStr);
           showToast({
             type: 'success',
-            title: 'تم قراءة كيو أر المورد بنجاح!',
-            description: `تم استخراج معرف المورد (${decodedStr}) وتعبئته تلقائياً.`
+            title: 'تم قراءة كيو أر المتجر بنجاح!',
+            description: `تم استخراج معرف المتجر (${decodedStr}) وتعبئته تلقائياً.`
           });
         } else {
           showToast({
             type: 'error',
             title: 'تعذر قراءة الكيو أر',
-            description: 'لم يتم العثور على كيو أر صالح في الصورة المرفوعة. يمكنك إدخال معرف المورد يدوياً أو اختيار صورة أخرى.'
+            description: 'لم يتم العثور على كيو أر صالح في الصورة المرفوعة. يمكنك إدخال معرف المتجر يدوياً أو اختيار صورة أخرى.'
           });
         }
       };
@@ -169,7 +169,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
         setRegSupplierId(cleaned);
         showToast({
           type: 'success',
-          title: 'تم لصق معرف المورد',
+          title: 'تم لصق معرف المتجر',
           description: `تم لصق المعرف: ${cleaned}`
         });
       }
@@ -341,8 +341,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     if (regRole === 'pos_client' && !regSupplierId.trim()) {
       showToast({
         type: 'error',
-        title: 'معرف المورد مطلوب',
-        description: 'يرجى تقديم معرف المورد الذي ترغب بإنشاء الحساب لديه (عبر كتابة المعرف، اللصق، أو رفع صورة الكيو أر).'
+        title: 'معرف المتجر مطلوب',
+        description: 'يرجى تقديم معرف المتجر الذي ترغب بإنشاء الحساب لديه (عبر كتابة المعرف، اللصق، أو رفع صورة الكيو أر).'
       });
       return;
     }
@@ -351,7 +351,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     try {
       const createdEmail = regEmail.trim();
       const res = await registerAccount({
-        name: regName.trim() || (regRole === 'supplier' ? 'المورد الرقمي' : 'عميل نقطة بيع'),
+        name: regName.trim() || (regRole === 'supplier' ? 'المتجر الرقمي' : 'عميل نقطة بيع'),
         email: createdEmail,
         password: regPassword,
         role: regRole,
@@ -798,7 +798,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           onClick={() => fillDemoCredentials('supplier')}
                           className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-center transition-colors font-medium"
                         >
-                          المورد (المالك)
+                          المتجر (المالك)
                         </button>
                         <button
                           type="button"
@@ -871,7 +871,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       }`}
                     >
                       <Building2 className="w-4 h-4" />
-                      <span>مورد خدمات / مُنَزِّل</span>
+                      <span>متجر خدمات</span>
                     </button>
                   </div>
                 </div>
@@ -882,7 +882,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                     <div className="flex items-center justify-between text-xs">
                       <label className="font-semibold text-amber-400 flex items-center gap-1.5 text-xs">
                         <QrCode className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span>معرف المورد المراد التسجيل لديه (مطلوب):</span>
+                        <span>معرف المتجر المراد التسجيل لديه (مطلوب):</span>
                       </label>
                       <span className="text-[10px] text-amber-300 font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
                         ID أو QR Code
@@ -890,7 +890,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                     </div>
 
                     <p className="text-[11px] text-slate-300 leading-relaxed">
-                      اكتب المعرف، أو قم بلصقه، أو ارفع صورة الكيو أر (QR) للمورد لاستخراجه وقراءته تلقائياً:
+                      اكتب المعرف، أو قم بلصقه، أو ارفع صورة الكيو أر (QR) للمتجر لاستخراجه وقراءته تلقائياً:
                     </p>
 
                     <div className="space-y-2">
@@ -900,7 +900,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           required={regRole === 'pos_client'}
                           value={regSupplierId}
                           onChange={e => setRegSupplierId(e.target.value)}
-                          placeholder="أدخل معرف المورد أو امسحه (مثال: sup-jamal-01)"
+                          placeholder="أدخل معرف المتجر أو امسحه (مثال: sup-jamal-01)"
                           className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white pl-28 focus:outline-none font-mono"
                           dir="ltr"
                         />
@@ -937,14 +937,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
 
                       {/* Quick Select Option from system suppliers list */}
                       <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-800/80">
-                        <span className="text-slate-400">أو اختر من قائمة الموردين المتاحين:</span>
+                        <span className="text-slate-400">أو اختر من قائمة المتاجر المتاحين:</span>
                         <button
                           type="button"
                           onClick={() => setShowSupplierDropdown(!showSupplierDropdown)}
                           className="text-amber-400 hover:underline font-semibold flex items-center gap-1 text-[11px]"
                         >
                           <ListFilter className="w-3.5 h-3.5" />
-                          <span>{showSupplierDropdown ? 'إغلاق القائمة' : 'استعراض الموردين'}</span>
+                          <span>{showSupplierDropdown ? 'إغلاق القائمة' : 'استعراض المتاجر'}</span>
                         </button>
                       </div>
 
@@ -981,14 +981,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                             <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/20 text-[11px]">
                               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
                               <span>
-                                تم التحقق - المورد: <strong>{suppliers.find(s => s.id === regSupplierId.trim())?.name}</strong> ({suppliers.find(s => s.id === regSupplierId.trim())?.storeName})
+                                تم التحقق - المتجر: <strong>{suppliers.find(s => s.id === regSupplierId.trim())?.name}</strong> ({suppliers.find(s => s.id === regSupplierId.trim())?.storeName})
                               </span>
                             </div>
                           ) : (
                             <div className="flex items-center gap-1.5 text-amber-300 bg-amber-500/10 p-2 rounded-xl border border-amber-500/20 text-[11px]">
                               <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
                               <span>
-                                سيتم إرسال طلب الانضمام إلى المورد بالمعرف: <strong className="font-mono text-white">{regSupplierId.trim()}</strong>
+                                سيتم إرسال طلب الانضمام إلى المتجر بالمعرف: <strong className="font-mono text-white">{regSupplierId.trim()}</strong>
                               </span>
                             </div>
                           )}

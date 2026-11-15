@@ -122,10 +122,10 @@ export const IncomingTransfersReviewView: React.FC = () => {
           <div className="space-y-1">
             <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-              <span>استلام ومراجعة حوالات المورد</span>
+              <span>استلام ومراجعة حوالات المتجر</span>
             </h2>
             <p className="text-xs text-slate-400">
-              أنت مخوّل من المورد <strong className="text-amber-400">{currentPosSupplier.storeName}</strong> باستلام ومراجعة حوالات شحن الأرصدة وطلبات سداد السلف التي يحدد العملاء أن الإيداع تم إلى حسابك.
+              أنت مخوّل من المتجر <strong className="text-amber-400">{currentPosSupplier.storeName}</strong> باستلام ومراجعة حوالات شحن الأرصدة وطلبات سداد السلف التي يحدد العملاء أن الإيداع تم إلى حسابك.
             </p>
           </div>
 
@@ -276,7 +276,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
                       {receiverStatus === 'confirmed' && (
                         <span className="text-emerald-400 font-semibold flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>تم تأكيد استلام الحوالة وإبلاغ المورد ({item.receiverConfirmedAt})</span>
+                          <span>تم تأكيد استلام الحوالة وإبلاغ المتجر ({item.receiverConfirmedAt})</span>
                         </span>
                       )}
                       {receiverStatus === 'rejected' && (
@@ -288,7 +288,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
 
                       <span className="text-slate-600">·</span>
                       <span className="text-slate-400">
-                        حالة اعتماد المورد:{' '}
+                        حالة اعتماد المتجر:{' '}
                         <strong
                           className={
                             item.status === 'approved'
@@ -303,8 +303,8 @@ export const IncomingTransfersReviewView: React.FC = () => {
                               ? 'تم اعتماد سداد السلفة'
                               : 'تم الاعتماد وإضافة الرصيد'
                             : item.status === 'rejected'
-                            ? 'مرفوض من المورد'
-                            : 'قيد مراجعة المورد'}
+                            ? 'مرفوض من المتجر'
+                            : 'قيد مراجعة المتجر'}
                         </strong>
                       </span>
                     </div>
@@ -426,7 +426,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
                 {/* Existing Receiver Note */}
                 {item.receiverConfirmationNote && (
                   <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-slate-300">
-                    <span className="text-slate-400 font-semibold">ملاحظتك المرسلة للمورد: </span>
+                    <span className="text-slate-400 font-semibold">ملاحظتك المرسلة للمتجر: </span>
                     <span>{item.receiverConfirmationNote}</span>
                   </div>
                 )}
@@ -438,7 +438,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
                       type="text"
                       value={noteValue}
                       onChange={(e) => setNotesMap((prev) => ({ ...prev, [noteKey]: e.target.value }))}
-                      placeholder="أضف ملاحظة أو سبب عدم الاستلام للمورد (اختياري)..."
+                      placeholder="أضف ملاحظة أو سبب عدم الاستلام للمتجر (اختياري)..."
                       className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
                     />
 

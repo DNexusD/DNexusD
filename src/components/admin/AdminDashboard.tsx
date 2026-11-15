@@ -213,7 +213,7 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                الإشراف العام على الموردين والممولين، إدارة الحسابات الإدارية، وضبط نسب ومبالغ الرسوم المقطوعة على العمليات.
+                الإشراف العام على المتاجر والممولين، إدارة الحسابات الإدارية، وضبط نسب ومبالغ الرسوم المقطوعة على العمليات.
               </p>
             </div>
           </div>
@@ -225,7 +225,7 @@ export const AdminDashboard: React.FC = () => {
                 className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>إضافة ممول / مورد جديد</span>
+                <span>إضافة ممول / متجر جديد</span>
               </button>
 
               <button
@@ -233,7 +233,7 @@ export const AdminDashboard: React.FC = () => {
                 className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
               >
                 <Send className="w-3.5 h-3.5 text-purple-400" />
-                <span>إرسال رابط تسجيل لمورد</span>
+                <span>إرسال رابط تسجيل لمتجر</span>
               </button>
             </div>
           )}
@@ -259,9 +259,9 @@ export const AdminDashboard: React.FC = () => {
 
             {(perms.canManageSuppliers || perms.canViewStatement) && (
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
-                <span className="text-[11px] text-slate-400 block">إجمالي شبكة الموردين المسجلين</span>
+                <span className="text-[11px] text-slate-400 block">إجمالي شبكة المتاجر المسجلين</span>
                 <div className="text-2xl font-bold font-mono text-amber-400 tabular-nums">
-                  {suppliers.length} موردين معتمدين
+                  {suppliers.length} متاجرن معتمدين
                 </div>
                 <div className="text-[10px] text-slate-400 pt-1">
                   يشرفون على {posClients.length} نقاط بيع
@@ -276,7 +276,7 @@ export const AdminDashboard: React.FC = () => {
                   {superAdmin.defaultFeePercentage}% {superAdmin.defaultFixedFeeAmount > 0 ? `+ ${superAdmin.defaultFixedFeeAmount} ر.س` : ''}
                 </div>
                 <div className="text-[10px] text-slate-400 pt-1">
-                  تطبق على جميع العمليات ما لم يتم تخصيص المورد
+                  تطبق على جميع العمليات ما لم يتم تخصيص المتجر
                 </div>
               </div>
             )}
@@ -310,7 +310,7 @@ export const AdminDashboard: React.FC = () => {
             }`}
           >
             <Building2 className="w-4 h-4" />
-            <span>إشراف الموردين والمحافظ والتحويلات</span>
+            <span>إشراف المتاجر والمحافظ والتحويلات</span>
           </button>
         )}
 
@@ -359,7 +359,7 @@ export const AdminDashboard: React.FC = () => {
         {perms.canClearSystemData && (
           <button
             onClick={() => {
-              if (window.confirm('هل أنت تأكد من إفراغ التخزين المحلي والسحابي لمجموعات المستخدمين، الموردين، ونقاط البيع؟ (users, suppliers, posClients)')) {
+              if (window.confirm('هل أنت تأكد من إفراغ التخزين المحلي والسحابي لمجموعات المستخدمين، المتاجر، ونقاط البيع؟ (users, suppliers, posClients)')) {
                 clearUsersSuppliersAndClientsData();
               }
             }}
@@ -399,7 +399,7 @@ export const AdminDashboard: React.FC = () => {
                   <span>خيارات استخدام مبالغ محفظة مدير التطبيق</span>
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  حسب المواصفات: يمكن لمدير التطبيق تسوية مبالغه واستلامها بنكياً من المورد، أو تحويل رصيد لنقاط البيع، أو شراء وبيع خدمات.
+                  حسب المواصفات: يمكن لمدير التطبيق تسوية مبالغه واستلامها بنكياً من المتجر، أو تحويل رصيد لنقاط البيع، أو شراء وبيع خدمات.
                 </p>
               </div>
 
@@ -409,10 +409,10 @@ export const AdminDashboard: React.FC = () => {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 font-bold text-white">
                       <Landmark className="w-4 h-4 text-emerald-400" />
-                      <span>تسوية الرصيد واستلام قيمته من الحساب البنكي للمورد</span>
+                      <span>تسوية الرصيد واستلام قيمته من الحساب البنكي للمتجر</span>
                     </div>
                     <p className="text-slate-400 text-[11px] leading-relaxed">
-                      خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمورد ({supplier.name}) وإضافتها لحساب مدير التطبيق البنكي.
+                      خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر ({supplier.name}) وإضافتها لحساب مدير التطبيق البنكي.
                     </p>
                   </div>
                   <button
@@ -453,9 +453,9 @@ export const AdminDashboard: React.FC = () => {
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <Building2 className="w-5 h-5 text-purple-400" />
-                  <span>قائمة الموردين المعتمدين تحت إشراف الإدارة</span>
+                  <span>قائمة المتاجر المعتمدين تحت إشراف الإدارة</span>
                 </h2>
-                <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} موردين</span>
+                <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} متاجرن</span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -499,7 +499,7 @@ export const AdminDashboard: React.FC = () => {
               <div>
                 <h3 className="font-bold text-base text-white flex items-center gap-2">
                   <Percent className="w-4 h-4 text-amber-400" />
-                  <span>ضبط نسبة ومبلغ الرسوم العامة لجميع الموردين</span>
+                  <span>ضبط نسبة ومبلغ الرسوم العامة لجميع المتاجر</span>
                 </h3>
                 <p className="text-slate-400 text-[11px] mt-0.5">
                   تحدد النسبة والمبلغ الثابت المقتطع لصالح محفظة الإدارة على أي عملية بيع أو تحويل، كما تُحتسب هذه النسبة المئوية كرسوم تطبيق من السعر الأصلي للرتبة في خدمات كتالوج الهدايا المجانية.
@@ -582,7 +582,7 @@ export const AdminDashboard: React.FC = () => {
                   type="submit"
                   className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
                 >
-                  حفظ وتطبيق الرسوم العامة لجميع الموردين
+                  حفظ وتطبيق الرسوم العامة لجميع المتاجر
                 </button>
               </div>
             </form>
@@ -592,16 +592,16 @@ export const AdminDashboard: React.FC = () => {
               <div>
                 <h3 className="font-bold text-base text-white flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-purple-400" />
-                  <span>تخصيص نسبة ومبلغ الرسوم لكل مورد على حدة</span>
+                  <span>تخصيص نسبة ومبلغ الرسوم لكل متجر على حدة</span>
                 </h3>
                 <p className="text-slate-400 text-[11px] mt-0.5">
-                  يمكن تحديد نسبة أو مبلغ رسوم مخصص لمورد معين يختلف عن النسبة العامة للنظام.
+                  يمكن تحديد نسبة أو مبلغ رسوم مخصص لمتجر معين يختلف عن النسبة العامة للنظام.
                 </p>
               </div>
 
               <div className="space-y-3">
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">اختر المورد المراد تخصيص رسومه:</label>
+                  <label className="block text-slate-300 font-semibold mb-1">اختر المتجر المراد تخصيص رسومه:</label>
                   <select
                     value={selectedSupplierForFee}
                     onChange={e => {
@@ -622,7 +622,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-semibold mb-1">نوع الرسوم لهذا المورد:</label>
+                  <label className="block text-slate-300 font-semibold mb-1">نوع الرسوم لهذا المتجر:</label>
                   <div className="grid grid-cols-3 gap-1.5">
                     <button
                       type="button"
@@ -696,7 +696,7 @@ export const AdminDashboard: React.FC = () => {
                   type="submit"
                   className="w-full py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition-colors"
                 >
-                  حفظ الرسوم المخصصة لهذا المورد
+                  حفظ الرسوم المخصصة لهذا المتجر
                 </button>
               </div>
             </form>
@@ -709,10 +709,10 @@ export const AdminDashboard: React.FC = () => {
       {showAddSupplierModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
           <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 text-slate-100 text-xs my-6">
-            <h3 className="font-bold text-base text-white">إضافة ممول / مورد خدمات جديد للمنصة</h3>
+            <h3 className="font-bold text-base text-white">إضافة ممول / متجر خدمات جديد للمنصة</h3>
             <form onSubmit={handleCreateSupplier} className="space-y-3">
               <div>
-                <label className="block text-slate-400 mb-1">اسم المورد الكامل:</label>
+                <label className="block text-slate-400 mb-1">اسم المتجر الكامل:</label>
                 <input
                   type="text"
                   required
@@ -784,7 +784,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1">آيبان الحساب البنكي للمورد:</label>
+                <label className="block text-slate-400 mb-1">آيبان الحساب البنكي للمتجر:</label>
                 <input
                   type="text"
                   value={newSupIban}
@@ -800,7 +800,7 @@ export const AdminDashboard: React.FC = () => {
                   type="submit"
                   className="flex-1 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs"
                 >
-                  إضافة المورد وتفعيله
+                  إضافة المتجر وتفعيله
                 </button>
                 <button
                   type="button"
@@ -845,7 +845,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950 text-slate-400 text-[11px] leading-relaxed">
-                * سيتم خصم المبلغ من محفظة رسوم التطبيق وتأكيد استلام قيمته من الحساب البنكي للمورد ({supplier.bankAccountDetails.accountHolder}).
+                * سيتم خصم المبلغ من محفظة رسوم التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر ({supplier.bankAccountDetails.accountHolder}).
               </div>
 
               <div className="flex gap-2 pt-2">
@@ -920,9 +920,9 @@ export const AdminDashboard: React.FC = () => {
       {showSupplierInvite && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 text-slate-100 text-center">
-            <h3 className="font-bold text-base text-white">رابط إنشاء حساب لمورد جديد</h3>
+            <h3 className="font-bold text-base text-white">رابط إنشاء حساب لمتجر جديد</h3>
             <p className="text-xs text-slate-400">
-              أرسل هذا الرابط إلى المورد للتسجيل في المنصة وربط بوابته وحسابه البنكي.
+              أرسل هذا الرابط إلى المتجر للتسجيل في المنصة وربط بوابته وحسابه البنكي.
             </p>
 
             <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs font-mono text-purple-300 break-all select-all text-left" dir="ltr">
@@ -934,7 +934,7 @@ export const AdminDashboard: React.FC = () => {
                 onClick={() => {
                   navigator.clipboard.writeText(supplierInviteUrl);
                   setCopiedLink(true);
-                  showToast({ type: 'success', title: 'تم النسخ', description: 'تم نسخ رابط المورد للحافظة' });
+                  showToast({ type: 'success', title: 'تم النسخ', description: 'تم نسخ رابط المتجر للحافظة' });
                   setTimeout(() => setCopiedLink(false), 2500);
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-purple-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5"

@@ -37,14 +37,14 @@ export const ADMIN_PERMISSION_META: Array<{
   },
   {
     key: 'canManageSuppliers',
-    labelAr: 'إشراف وإضافة الموردين والممولين',
-    descriptionAr: 'استعراض قائمة الموردين، إضافة موردين جدد، وإرسال روابط التسجيل.',
+    labelAr: 'إشراف وإضافة المتاجر والممولين',
+    descriptionAr: 'استعراض قائمة المتاجر، إضافة متاجرن جدد، وإرسال روابط التسجيل.',
     category: 'operations',
   },
   {
     key: 'canManageFees',
     labelAr: 'ضبط نسب ومبالغ الرسوم',
-    descriptionAr: 'تعديل الرسوم العامة الافتراضية وتخصيص نسب أو مبالغ الرسوم لكل مورد.',
+    descriptionAr: 'تعديل الرسوم العامة الافتراضية وتخصيص نسب أو مبالغ الرسوم لكل متجر.',
     category: 'financial',
   },
   {
@@ -62,7 +62,7 @@ export const ADMIN_PERMISSION_META: Array<{
   {
     key: 'canClearSystemData',
     labelAr: 'إفراغ وتنظيف بيانات التخزين',
-    descriptionAr: 'صلاحية حساسة لمسح سجلات المستخدمين والموردين ونقاط البيع من التخزين.',
+    descriptionAr: 'صلاحية حساسة لمسح سجلات المستخدمين والمتاجر ونقاط البيع من التخزين.',
     category: 'system',
   },
 ];
@@ -95,8 +95,8 @@ export const ADMIN_ROLE_PRESETS: Array<{
   },
   {
     id: 'operations_admin',
-    labelAr: 'مشرف الموردين والواجهات',
-    roleTitle: 'مشرف الموردين والمنصة',
+    labelAr: 'مشرف المتاجر والواجهات',
+    roleTitle: 'مشرف المتاجر والمنصة',
     permissions: {
       canViewStatement: false,
       canSettleAdminWallet: false,

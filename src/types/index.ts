@@ -197,7 +197,7 @@ export interface POSClient {
   createdAt: string;
   qrCodeValue: string;
   canReceiveSupplierTransfers?: boolean;
-  canRequestLoans?: boolean; // هل يمتلك صلاحية طلب السلف والرصيد الآجل من المورد
+  canRequestLoans?: boolean; // هل يمتلك صلاحية طلب السلف والرصيد الآجل من المتجر
   canGetBonus?: boolean; // هل يمتلك ميزة الحصول على بونص
   canViewGifts?: boolean; // هل يمتلك ميزة ظهور الهدايا والعروض المجانية
 }
@@ -220,6 +220,25 @@ export interface OfficeEmployee {
   createdAt: string;
 }
 
+export interface SupplierCustomSocialLink {
+  id: string;
+  label: string;
+  url: string;
+}
+
+export interface SupplierSocialLinks {
+  whatsapp?: string;
+  telegram?: string;
+  instagram?: string;
+  facebook?: string;
+  x?: string;
+  tiktok?: string;
+  youtube?: string;
+  snapchat?: string;
+  website?: string;
+  customLinks?: SupplierCustomSocialLink[];
+}
+
 export interface Supplier {
   id: string;
   name: string;
@@ -230,9 +249,10 @@ export interface Supplier {
   fixedFeeAmount: number; // Primary fixed fee
   feeType: 'percentage' | 'fixed' | 'both';
   walletBalance: number;
-  logoUrl?: string; // رابط شعار المورد
+  logoUrl?: string; // رابط شعار المتجر
   country?: string; // الدولة
   city?: string; // المدينة
+  socialLinks?: SupplierSocialLinks;
   bankAccountDetails: {
     bankName: string;
     accountHolder: string;
@@ -408,7 +428,7 @@ export interface DepositRequest {
   notes?: string;
   requestType?: 'cash' | 'loan'; // 'cash': إيداع بنكي/كاش، 'loan': طلب سلفة / رصيد آجل
   loanReason?: string; // سبب طلب السلفة
-  loanRepaidStatus?: 'unpaid' | 'partial' | 'repaid'; // حالة تسديد السلفة للمورد
+  loanRepaidStatus?: 'unpaid' | 'partial' | 'repaid'; // حالة تسديد السلفة للمتجر
   paidAmount?: number; // إجمالي المبلغ المسدد من السلفة
   repaidPayments?: LoanPaymentRecord[]; // سجل الدفعات المسددة من السلفة
   repaidAt?: string; // تاريخ إتمام تسديد السلفة بالكامل

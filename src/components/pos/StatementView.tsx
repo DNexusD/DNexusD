@@ -115,7 +115,7 @@ export const StatementView: React.FC = () => {
     const map: Record<StatementFilter, string> = {
       all: 'كشف حساب عام (جميع الحركات)',
       sales: 'مبيعات الخدمات للزبائن',
-      purchases: 'مشتريات الخدمات من المورد',
+      purchases: 'مشتريات الخدمات من المتجر',
       deposits: 'شحن الرصيد المسبق',
       transfers: 'تحويلات الرصيد',
       loans: 'سلف الرصيد الآجل (السلف)',
@@ -321,7 +321,7 @@ export const StatementView: React.FC = () => {
               : 'text-slate-400 hover:text-white'
           }`}
         >
-          مشتريات الخدمات من المورد
+          مشتريات الخدمات من المتجر
         </button>
 
         <button

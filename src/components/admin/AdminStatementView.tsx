@@ -102,7 +102,7 @@ export const AdminStatementView: React.FC = () => {
       return false;
     }
 
-    // 2. Per-Supplier filter (لكل مورد)
+    // 2. Per-Supplier filter (لكل متجر)
     if (selectedSupplierId !== 'all' && entry.supplierId !== selectedSupplierId) {
       return false;
     }
@@ -167,9 +167,9 @@ export const AdminStatementView: React.FC = () => {
 
     if (selectedSupplierId !== 'all') {
       const sup = suppliers.find(s => s.id === selectedSupplierId);
-      parts.push(`خاص بالمورد: ${sup ? sup.name : selectedSupplierId}`);
+      parts.push(`خاص بالمتجر: ${sup ? sup.name : selectedSupplierId}`);
     } else {
-      parts.push('جميع الموردين');
+      parts.push('جميع المتاجر');
     }
 
     if (selectedServiceId !== 'all') {
@@ -278,7 +278,7 @@ export const AdminStatementView: React.FC = () => {
           { key: 'date', label: 'التاريخ', width: '11%', mono: true },
           { key: 'type', label: 'النوع', width: '10%' },
           { key: 'ref', label: 'المرجع', width: '10%', mono: true, nowrap: true },
-          { key: 'party', label: 'المورد / الخدمة', width: '15%' },
+          { key: 'party', label: 'المتجر / الخدمة', width: '15%' },
           { key: 'description', label: 'بيان العملية', width: '20%' },
           { key: 'debit', label: 'مدين', align: 'left', width: '11%', mono: true, nowrap: true },
           { key: 'credit', label: 'دائن', align: 'left', width: '11%', mono: true, nowrap: true },
@@ -339,7 +339,7 @@ export const AdminStatementView: React.FC = () => {
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                متابعة دقيقة لكل مليم: رسوم الخدمات المقتطعة، إيداعات الرصيد، التسويات البنكية، وتفصيل الحساب لكل مورد أو خدمة.
+                متابعة دقيقة لكل مليم: رسوم الخدمات المقتطعة، إيداعات الرصيد، التسويات البنكية، وتفصيل الحساب لكل متجر أو خدمة.
               </p>
             </div>
           </div>
@@ -395,7 +395,7 @@ export const AdminStatementView: React.FC = () => {
           <div className="text-xl font-bold font-mono text-cyan-400 tabular-nums">
             {totalDepositsVolume.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-sans text-slate-400">ر.س</span>
           </div>
-          <div className="text-[10px] text-slate-400">شحن محافظ الوكلاء لدى الموردين</div>
+          <div className="text-[10px] text-slate-400">شحن محافظ الوكلاء لدى المتاجر</div>
         </div>
 
         <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-1">
@@ -494,7 +494,7 @@ export const AdminStatementView: React.FC = () => {
           )}
         </div>
 
-        {/* Detailed Dropdown Filters (نوع الحركة / لكل مورد / لكل خدمة / بحث / تاريخ) */}
+        {/* Detailed Dropdown Filters (نوع الحركة / لكل متجر / لكل خدمة / بحث / تاريخ) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
           {/* Transaction Type Selector (Dynamic from Admin Interface Settings) */}
           <div>
@@ -520,14 +520,14 @@ export const AdminStatementView: React.FC = () => {
           <div>
             <label className="block text-slate-300 font-semibold mb-1 flex items-center gap-1.5">
               <Building2 className="w-3.5 h-3.5 text-purple-400" />
-              <span>كشف حساب لكل مورد:</span>
+              <span>كشف حساب لكل متجر:</span>
             </label>
             <select
               value={selectedSupplierId}
               onChange={e => setSelectedSupplierId(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white text-xs focus:border-purple-500 focus:outline-none"
             >
-              <option value="all">جميع الموردين ({suppliers.length} موردين)</option>
+              <option value="all">جميع المتاجر ({suppliers.length} متاجرن)</option>
               {suppliers.map(sup => (
                 <option key={sup.id} value={sup.id}>
                   {sup.name} ({sup.storeName})
@@ -638,7 +638,7 @@ export const AdminStatementView: React.FC = () => {
             <FileText className="w-10 h-10 text-slate-600 mx-auto" />
             <div className="text-base font-bold text-white">لا توجد قيود محاسبية مطابقة للفلاتر الحالية</div>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              جرب تغيير خيار المورد أو الخدمة أو نوع العملية لعرض حركات أخرى من كشف الحساب.
+              جرب تغيير خيار المتجر أو الخدمة أو نوع العملية لعرض حركات أخرى من كشف الحساب.
             </p>
             <button
               onClick={handleResetFilters}
@@ -655,7 +655,7 @@ export const AdminStatementView: React.FC = () => {
                   <th className="py-3 px-4">التاريخ والوقت</th>
                   <th className="py-3 px-4">نوع القيد المحاسبي</th>
                   <th className="py-3 px-4">رقم المرجع</th>
-                  <th className="py-3 px-4">المورد والخدمة / نقطة البيع</th>
+                  <th className="py-3 px-4">المتجر والخدمة / نقطة البيع</th>
                   <th className="py-3 px-4">بيان العملية والتفاصيل</th>
                   <th className="py-3 px-4 text-left">مدين (خصم)</th>
                   <th className="py-3 px-4 text-left">دائن (رسوم مقبوضة)</th>

@@ -11,7 +11,7 @@ export function buildFallbackSupplierBankAccount(supplier: Supplier): SupplierBa
   return {
     id: `default-${supplier.id}`,
     supplierId: supplier.id,
-    bankName: supplier.bankAccountDetails?.bankName || 'الحساب البنكي للمورد',
+    bankName: supplier.bankAccountDetails?.bankName || 'الحساب البنكي للمتجر',
     accountNumber: supplier.bankAccountDetails?.accountNumber || '',
     iban: supplier.bankAccountDetails?.iban || '',
     country: supplier.country || 'المملكة العربية السعودية',
