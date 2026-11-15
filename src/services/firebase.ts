@@ -7,12 +7,14 @@ import {
   onAuthStateChanged,
   User as FirebaseUser,
   signInWithEmailAndPassword,
+  signInWithCustomToken,
   createUserWithEmailAndPassword,
   updateProfile,
   sendPasswordResetEmail,
   verifyPasswordResetCode,
   confirmPasswordReset
 } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import {
   getFirestore,
   initializeFirestore,
@@ -37,13 +39,13 @@ import firebaseConfig from '../../firebase-applet-config.json';
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: Initialize Firestore with firestoreDatabaseId and auto-detect long polling
-// to prevent WebChannel hangs in proxied/sandboxed iframe environments.
+// CRITICAL: Initialize Firestore with firestoreDatabaseId and forced long polling
+// to prevent WebChannel stream hangs in proxied/sandboxed iframe environments (Cloud Run).
 function createFirestoreInstance() {
   try {
     return initializeFirestore(
       app,
-      { experimentalAutoDetectLongPolling: true },
+      { experimentalForceLongPolling: true },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
@@ -54,9 +56,12 @@ function createFirestoreInstance() {
 export const db = createFirestoreInstance();
 export const auth = getAuth(app);
 auth.languageCode = 'ar';
+export const functions = getFunctions(app);
 export const googleProvider = new GoogleAuthProvider();
 
 export {
+  httpsCallable,
+  signInWithCustomToken,
   sendPasswordResetEmail,
   verifyPasswordResetCode,
   confirmPasswordReset
@@ -120,14 +125,7 @@ export interface ConnectionTestResult {
 /**
  * Validate Connection to Firestore on boot and before any login attempt
  */
-export async function testConnection(timeoutMs = 12000): Promise<ConnectionTestResult> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return {
-      success: false,
-      message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
-    };
-  }
-
+export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestResult> {
   const startTime = Date.now();
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   let timerId: ReturnType<typeof setTimeout> | undefined;
@@ -163,6 +161,9 @@ export async function testConnection(timeoutMs = 12000): Promise<ConnectionTestR
       } else if (err.message.includes('unavailable')) {
         errMsg = 'خدمة قاعدة بيانات Firestore غير متاحة حالياً أو انقطع الاتصال بالشبكة.';
       }
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      errMsg = 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.';
     }
     return {
       success: false,

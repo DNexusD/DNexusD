@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { DigitalService, DeliveryMethod, ServicePackage } from '../../types';
+import { DigitalService, DeliveryMethod, ServicePackage, AccountTier } from '../../types';
 import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
 import { 
@@ -28,7 +28,7 @@ interface EditServiceModalProps {
 }
 
 export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onClose }) => {
-  const { catalogs, supplier, superAdmin, updateService, deleteService, showToast } = useApp();
+  const { catalogs, supplier, superAdmin, posClients, updateService, deleteService, showToast } = useApp();
   const effectiveAppFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
 
@@ -38,6 +38,17 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const [imageUrl, setImageUrl] = useState<string>(service.imageUrl || '');
   const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>(service.deliveryMethods || ['player_id']);
   const [isActive, setIsActive] = useState<boolean>(service.isActive !== false);
+
+  // Gift targeting state
+  const [giftTargetType, setGiftTargetType] = useState<'all_tiers' | 'specific_tiers' | 'specific_clients'>(
+    service.giftTargetType || 'all_tiers'
+  );
+  const [giftTargetTiers, setGiftTargetTiers] = useState<AccountTier[]>(
+    service.giftTargetTiers || ['regular', 'bronze', 'silver', 'gold', 'vip']
+  );
+  const [giftTargetPosIds, setGiftTargetPosIds] = useState<string[]>(
+    service.giftTargetPosIds || []
+  );
 
   // Packages list state
   const [packages, setPackages] = useState<ServicePackage[]>(
@@ -166,6 +177,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       return;
     }
 
+    const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === catalogId));
+
     updateService(service.id, {
       catalogId,
       nameAr: nameAr.trim(),
@@ -173,7 +186,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       imageUrl: imageUrl.trim() || undefined,
       deliveryMethods,
       isActive,
-      packages
+      packages,
+      giftTargetType: isGiftCat ? giftTargetType : undefined,
+      giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
+      giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined
     });
 
     onClose();
@@ -627,14 +643,135 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
             </div>
 
             {isCatalogFreeGifts(catalogs.find(c => c.id === catalogId)) ? (
-              <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-start gap-2 text-[11px] text-purple-200">
-                <Gift className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold text-purple-300 block">هذه الخدمة تابعة لكتالوج الهدايا المجانية:</span>
-                  <span>
-                    سيتم تنفيذها للعميل الذي يملك ميزة الهدايا المجانية بسعر <strong className="text-white">0 ر.س</strong>، وتُحتسب رسوم التطبيق بالنسبة المحددة من مدير التطبيق (<strong className="text-purple-300">{effectiveAppFeePct}%</strong>) من السعر الأصلي الخاص برتبة العميل.
-                  </span>
+              <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 space-y-3">
+                <div className="flex items-start gap-2">
+                  <Gift className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-purple-300 block text-xs">إعدادات استهداف الهدايا المجانية:</span>
+                    <p className="text-[11px] text-purple-200 mt-0.5">
+                      هذه الخدمة مجانية (0 ر.س للعميل)، وستُحتسب رسوم التطبيق بالنسبة المحددة (<strong className="text-purple-300">{effectiveAppFeePct}%</strong>) من السعر الأصلي. يحدد المورد من يستهدف بالهدية:
+                    </p>
+                  </div>
                 </div>
+
+                {/* Targeting Type Selection */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setGiftTargetType('all_tiers')}
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-center transition-all ${
+                      giftTargetType === 'all_tiers'
+                        ? 'bg-purple-600/30 border-purple-500 text-white font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    جميع الرتب (كل العملاء)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGiftTargetType('specific_tiers')}
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-center transition-all ${
+                      giftTargetType === 'specific_tiers'
+                        ? 'bg-purple-600/30 border-purple-500 text-white font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    رتب حسابات محددة
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGiftTargetType('specific_clients')}
+                    className={`p-2.5 rounded-xl border text-xs font-medium text-center transition-all ${
+                      giftTargetType === 'specific_clients'
+                        ? 'bg-purple-600/30 border-purple-500 text-white font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    عملاء / نقاط بيع محددة
+                  </button>
+                </div>
+
+                {/* If specific_tiers */}
+                {giftTargetType === 'specific_tiers' && (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <span className="block text-[11px] font-semibold text-slate-300">اختر الرتب المؤهلة للحصول على الهدية:</span>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: 'regular', label: 'عادي' },
+                        { id: 'bronze', label: 'نحاسي' },
+                        { id: 'silver', label: 'فضي' },
+                        { id: 'gold', label: 'ذهبي' },
+                        { id: 'vip', label: 'مميز VIP' }
+                      ].map(tier => {
+                        const isSelected = giftTargetTiers.includes(tier.id as AccountTier);
+                        return (
+                          <button
+                            key={tier.id}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                if (giftTargetTiers.length > 1) {
+                                  setGiftTargetTiers(giftTargetTiers.filter(t => t !== tier.id));
+                                }
+                              } else {
+                                setGiftTargetTiers([...giftTargetTiers, tier.id as AccountTier]);
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors ${
+                              isSelected
+                                ? 'bg-purple-500 text-slate-950 font-bold border-purple-400'
+                                : 'bg-slate-900 border-slate-700 text-slate-300'
+                            }`}
+                          >
+                            <span>{tier.label}</span>
+                            {isSelected && <Check className="w-3 h-3" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* If specific_clients */}
+                {giftTargetType === 'specific_clients' && (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <span className="block text-[11px] font-semibold text-slate-300">اختر العملاء / نقاط البيع المستهدفة بالهدية:</span>
+                    {posClients.length === 0 ? (
+                      <p className="text-[11px] text-slate-400">لا توجد نقاط بيع مسجلة حالياً.</p>
+                    ) : (
+                      <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                        {posClients.map(client => {
+                          const isSelected = giftTargetPosIds.includes(client.id);
+                          return (
+                            <div
+                              key={client.id}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setGiftTargetPosIds(giftTargetPosIds.filter(id => id !== client.id));
+                                } else {
+                                  setGiftTargetPosIds([...giftTargetPosIds, client.id]);
+                                }
+                              }}
+                              className={`p-2 rounded-xl border text-xs flex items-center justify-between cursor-pointer transition-colors ${
+                                isSelected
+                                  ? 'bg-purple-500/20 border-purple-500 text-purple-200'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white">{client.tradeName}</span>
+                                <span className="text-[10px] text-slate-400">({client.phone || client.ownerName})</span>
+                              </div>
+                              <div className={`w-4 h-4 rounded-md border flex items-center justify-center ${isSelected ? 'bg-purple-500 border-purple-400 text-slate-950' : 'border-slate-700'}`}>
+                                {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : packages.some(p => Object.values(p.tierPrices || {}).some(v => Number(v) === 0)) ? (
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">

@@ -35,6 +35,29 @@ export interface EmployeePermissions {
   canManageBankAccounts?: boolean;
 }
 
+export interface AdminPermissions {
+  canViewStatement?: boolean;
+  canSettleAdminWallet?: boolean;
+  canManageSuppliers?: boolean;
+  canManageFees?: boolean;
+  canManageInterfaceSettings?: boolean;
+  canManageAdminAccounts?: boolean;
+  canClearSystemData?: boolean;
+}
+
+export interface AdminAccount {
+  id: string;
+  name: string;
+  email: string;
+  password?: string;
+  phone: string;
+  roleTitle: string;
+  permissions: AdminPermissions;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -44,8 +67,10 @@ export interface AuthUser {
   associatedId?: string; // posId or supplierId
   supplierId?: string; // For employee: store ID they belong to
   employeeId?: string;
+  adminAccountId?: string; // For sub-admin accounts created by Super Admin
   roleTitle?: string;
   permissions?: EmployeePermissions;
+  adminPermissions?: AdminPermissions;
 }
 
 export type AccountTier = 'regular' | 'bronze' | 'silver' | 'gold' | 'vip';
@@ -148,6 +173,9 @@ export interface DigitalService {
   deliveryMethods: DeliveryMethod[];
   packages: ServicePackage[];
   isActive: boolean;
+  giftTargetType?: 'all_tiers' | 'specific_tiers' | 'specific_clients';
+  giftTargetTiers?: AccountTier[];
+  giftTargetPosIds?: string[];
 }
 
 export interface POSClient {
@@ -228,6 +256,7 @@ export interface SuperAdmin {
     iban: string;
     accountHolder: string;
   }[];
+  adminAccounts?: AdminAccount[];
 }
 
 export interface DropdownOptionItem {

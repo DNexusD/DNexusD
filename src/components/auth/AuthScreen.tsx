@@ -1,8 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { UserRole } from '../../types';
 import { SupplierSelector } from './SupplierSelector';
 import { ForgotPasswordView } from './ForgotPasswordView';
+import {
+  formatCooldownButtonText,
+  isValidLoginEmail,
+  isValidSixDigitCode
+} from '../../utils/loginCode';
 import jsQR from 'jsqr';
 import { 
   Lock, 
@@ -64,12 +69,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
   const [loginOtp, setLoginOtp] = useState('');
   const [showLoginPassword, setShowLoginPassword] = useState(false);
 
-  // OTP Timer state (active for 2 minutes = 120s)
+  // OTP Timer state (10-minute code validity + 60s resend cooldown)
   const [otpSent, setOtpSent] = useState(false);
+  const [otpSentToEmail, setOtpSentToEmail] = useState<string | null>(null);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [demoOtpHint, setDemoOtpHint] = useState<string | null>(null);
+  const lastAutoSubmittedOtpRef = useRef('');
 
   // Registration form state
   // Required: البريد الإلكتروني، تأكيد البريد الإلكتروني، كلمة المرور، تأكيد كلمة المرور
@@ -175,24 +182,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     }
   };
 
-  // Countdown timer for 2-minute OTP
+  // Countdown timer for 60s button cooldown & 10-minute code expiration
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (remainingSeconds > 0) {
-      timer = setInterval(() => {
-        setRemainingSeconds(prev => {
-          if (prev <= 1) {
-            setDemoOtpHint(null);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+    if (cooldownSeconds <= 0 && remainingSeconds <= 0) {
+      return;
     }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [remainingSeconds]);
+    const timer = setInterval(() => {
+      setCooldownSeconds(prev => (prev > 1 ? prev - 1 : 0));
+      setRemainingSeconds(prev => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds, remainingSeconds]);
 
   // Handle Manual Database Connection Test
   const handleManualCheckConnection = async () => {
@@ -225,11 +225,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
   // Handle Send OTP
   const handleSendOtp = async () => {
     setAuthError(null);
-    if (!loginEmail.trim()) {
+    if (!isValidLoginEmail(loginEmail)) {
+      const msg = 'يرجى إدخال بريد إلكتروني صحيح';
+      setAuthError(msg);
       showToast({
         type: 'error',
-        title: 'البريد الإلكتروني مطلوب',
-        description: 'يرجى إدخال بريدك الإلكتروني لإرسال رمز التحقق لمرة واحدة'
+        title: 'البريد الإلكتروني غير صحيح',
+        description: msg
       });
       return;
     }
@@ -237,10 +239,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     setIsSendingOtp(true);
     try {
       const res = await sendLoginOtp(loginEmail);
-      if (res.success && res.code) {
+      if (res.success) {
         setOtpSent(true);
-        setRemainingSeconds(res.remainingSeconds || 120);
-        setDemoOtpHint(res.code);
+        setOtpSentToEmail(res.email || loginEmail.trim().toLowerCase());
+        setCooldownSeconds(res.cooldownSeconds ?? 60);
+        setRemainingSeconds(res.remainingSeconds ?? 600);
+        lastAutoSubmittedOtpRef.current = '';
         setAuthError(null);
       } else if (res.error) {
         setAuthError(res.error);
@@ -253,50 +257,50 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     }
   };
 
-  // Handle Login Submit
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Verify 6-digit code and sign in
+  const performOtpVerifyAndLogin = async (otpCodeToVerify: string) => {
     setAuthError(null);
 
-    if (!loginEmail.trim() || !loginPassword.trim()) {
+    if (!isValidLoginEmail(loginEmail)) {
+      const msg = 'يرجى إدخال بريد إلكتروني صحيح';
+      setAuthError(msg);
       showToast({
         type: 'error',
-        title: 'حقول مطلوبة',
-        description: 'يرجى كتابة البريد الإلكتروني وكلمة المرور'
+        title: 'البريد الإلكتروني مطلوب',
+        description: msg
       });
       return;
     }
 
-    if (!loginOtp.trim()) {
+    if (!isValidSixDigitCode(otpCodeToVerify)) {
+      const msg = 'يرجى إدخال رمز التحقق المكون من 6 أرقام';
+      setAuthError(msg);
       showToast({
         type: 'error',
         title: 'رمز التحقق مطلوب',
-        description: 'يرجى إدخال رمز التحقق المرسل إلى بريدك الإلكتروني (صالح لمدة دقيقتين)'
-      });
-      return;
-    }
-
-    if (remainingSeconds === 0) {
-      showToast({
-        type: 'error',
-        title: 'انتهت صلاحية الرمز',
-        description: 'انتهت صلاحية رمز التحقق (دقيقتين فقط). اضغط على "إعادة إرسال الرمز" للحصول على رمز جديد.'
+        description: msg
       });
       return;
     }
 
     setIsLoggingIn(true);
     try {
-      const res = await verifyLoginOtpAndLogin(loginEmail, loginPassword, loginOtp);
+      const res = await verifyLoginOtpAndLogin(loginEmail, loginPassword, otpCodeToVerify);
       if (!res.success && res.error) {
         setAuthError(res.error);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'تعذر إتمام عملية الدخول';
+      const msg = err instanceof Error ? err.message : 'الرمز غير صحيح أو منتهي الصلاحية';
       setAuthError(msg);
     } finally {
       setIsLoggingIn(false);
     }
+  };
+
+  // Handle Login Submit
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await performOtpVerifyAndLogin(loginOtp);
   };
 
   const [registrationBanner, setRegistrationBanner] = useState<string | null>(null);
@@ -397,9 +401,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
       setLoginPassword('SuperAdminPass2026!');
     }
     setOtpSent(false);
+    setOtpSentToEmail(null);
+    setCooldownSeconds(0);
     setRemainingSeconds(0);
     setLoginOtp('');
-    setDemoOtpHint(null);
+    lastAutoSubmittedOtpRef.current = '';
   };
 
   const formatTimer = (sec: number) => {
@@ -587,7 +593,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                         <span>تسجيل الدخول بالبريد ورمز التحقق</span>
                       </h2>
                       <p className="text-[11px] sm:text-xs text-slate-400">
-                        يتطلب إدخال البريد الإلكتروني، كلمة المرور، ورمز تحقق لمرة واحدة (OTP) يستمر فعالاً لمدة دقيقتين فقط.
+                        يتطلب إدخال البريد الإلكتروني، وطلب رمز تحقق لمرة واحدة (OTP) يصل إلى بريدك صالحاً لمدة 10 دقائق.
                       </p>
                     </div>
 
@@ -601,7 +607,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           type="email"
                           required
                           value={loginEmail}
-                          onChange={e => setLoginEmail(e.target.value)}
+                          onChange={e => {
+                            setLoginEmail(e.target.value);
+                            if (otpSent || otpSentToEmail || cooldownSeconds > 0) {
+                              setOtpSent(false);
+                              setOtpSentToEmail(null);
+                              setCooldownSeconds(0);
+                              setRemainingSeconds(0);
+                              setLoginOtp('');
+                              lastAutoSubmittedOtpRef.current = '';
+                            }
+                          }}
                           placeholder="name@company.com"
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white pl-9 focus:outline-none transition-colors font-mono"
                           dir="ltr"
@@ -631,7 +647,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       <div className="relative">
                         <input
                           type={showLoginPassword ? 'text' : 'password'}
-                          required
                           value={loginPassword}
                           onChange={e => setLoginPassword(e.target.value)}
                           placeholder="••••••••••••"
@@ -648,7 +663,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       </div>
                     </div>
 
-                    {/* 3. OTP Code (One-time code with 2-minute timer) */}
+                    {/* 3. OTP Code (One-time code with 10-minute expiry and 60s cooldown) */}
                     <div className="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-slate-950 border border-slate-800/80 space-y-2.5 sm:space-y-3">
                       <div className="flex items-center justify-between text-xs gap-1.5 flex-wrap">
                         <label className="font-semibold text-slate-200 flex items-center gap-1.5 text-xs">
@@ -663,11 +678,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           </span>
                         ) : otpSent ? (
                           <span className="text-[10px] sm:text-[11px] font-semibold text-rose-400">
-                            انتهت الصلاحية (دقيقتان)
+                            انتهت الصلاحية (10 دقائق)
                           </span>
                         ) : (
                           <span className="text-[10px] sm:text-[11px] text-slate-500">
-                            صلاحية الرمز: دقيقتان
+                            صلاحية الرمز: 10 دقائق
                           </span>
                         )}
                       </div>
@@ -679,7 +694,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           autoComplete="one-time-code"
                           maxLength={6}
                           value={loginOtp}
-                          onChange={e => setLoginOtp(e.target.value.replace(/\D/g, ''))}
+                          onChange={e => {
+                            const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+                            setLoginOtp(digits);
+                            if (digits.length < 6) {
+                              lastAutoSubmittedOtpRef.current = '';
+                            } else if (
+                              digits.length === 6 &&
+                              !isLoggingIn &&
+                              isValidLoginEmail(loginEmail) &&
+                              lastAutoSubmittedOtpRef.current !== digits
+                            ) {
+                              lastAutoSubmittedOtpRef.current = digits;
+                              void performOtpVerifyAndLogin(digits);
+                            }
+                          }}
                           placeholder="رمز التحقق (6 أرقام)"
                           className="flex-1 min-w-0 bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-xl px-2 sm:px-3 py-2 text-center font-mono text-sm sm:text-base font-bold tracking-wider sm:tracking-widest text-white focus:outline-none transition-colors placeholder:text-[11px] placeholder:font-normal placeholder:tracking-normal placeholder:font-sans placeholder:text-slate-500"
                           dir="ltr"
@@ -688,9 +717,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                         <button
                           type="button"
                           onClick={handleSendOtp}
-                          disabled={isSendingOtp || remainingSeconds > 60}
+                          disabled={isSendingOtp || cooldownSeconds > 0}
                           className={`px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-colors shrink-0 whitespace-nowrap ${
-                            remainingSeconds > 60
+                            isSendingOtp || cooldownSeconds > 0
                               ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                               : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md'
                           }`}
@@ -700,22 +729,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           ) : (
                             <Send className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                           )}
-                          <span>{otpSent ? 'إعادة الإرسال' : 'إرسال الرمز'}</span>
+                          <span>{formatCooldownButtonText(cooldownSeconds, isSendingOtp)}</span>
                         </button>
                       </div>
 
-                      {demoOtpHint && (
-                        <div className="flex items-center justify-between p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs gap-1">
-                          <span className="text-amber-300 text-[10px] sm:text-[11px] truncate">
-                            الرمز: <strong className="font-mono text-white text-xs sm:text-sm tracking-wider mr-1">{demoOtpHint}</strong>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setLoginOtp(demoOtpHint)}
-                            className="text-[10px] sm:text-[11px] font-bold text-amber-400 underline hover:text-amber-300 shrink-0"
-                          >
-                            تعبئة تلقائية
-                          </button>
+                      {otpSent && otpSentToEmail && remainingSeconds > 0 && (
+                        <div
+                          data-testid="otp-email-sent-notice"
+                          className="flex items-start gap-2 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs text-emerald-200"
+                        >
+                          <Mail className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                          <div className="leading-relaxed text-[11px]">
+                            تم إرسال الرمز إلى بريدك{' '}
+                            <strong dir="ltr" className="text-white font-mono">
+                              {otpSentToEmail}
+                            </strong>
+                          </div>
                         </div>
                       )}
                     </div>

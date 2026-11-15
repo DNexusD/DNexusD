@@ -1,8 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Supplier } from '../../types';
 import { AdminStatementView } from './AdminStatementView';
 import { AdminInterfaceSettingsView } from './AdminInterfaceSettingsView';
+import { AdminAccountsView } from './AdminAccountsView';
+import {
+  AdminDashboardTab,
+  getFirstAllowedAdminTab,
+  isAdminTabAllowed,
+  resolveEffectiveAdminPermissions
+} from '../../utils/adminAccounts';
 import { 
   ShieldCheck, 
   Wallet, 
@@ -16,15 +22,15 @@ import {
   PlusCircle, 
   Users, 
   Sliders, 
-  Coins, 
-  DollarSign,
   FileText,
-  Database,
-  Trash2
+  Trash2,
+  UserCog
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
   const { 
+    role,
+    currentUser,
     superAdmin, 
     suppliers,
     supplier, 
@@ -34,15 +40,62 @@ export const AdminDashboard: React.FC = () => {
     updateGlobalFeeConfig, 
     adminSettleBank, 
     adminTransferToAgent,
-    setCurrentSupplierId,
     activeNavTab,
     setActiveNavTab,
     showToast,
     clearUsersSuppliersAndClientsData
   } = useApp();
 
-  // Local admin tab switcher (syncs with global activeNavTab)
-  const [adminSubTab, setAdminSubTab] = useState<'statement' | 'overview' | 'fees' | 'interface_settings'>('statement');
+  const perms = resolveEffectiveAdminPermissions(currentUser, role);
+  const canViewAdminWallet = perms.canViewStatement || perms.canSettleAdminWallet;
+
+  // Local admin tab switcher (syncs with global activeNavTab and enforces permissions)
+  const [adminSubTab, setAdminSubTab] = useState<AdminDashboardTab>(() => {
+    const candidate = activeNavTab as AdminDashboardTab;
+    if (
+      ['statement', 'overview', 'fees', 'interface_settings', 'admin_accounts'].includes(candidate) &&
+      isAdminTabAllowed(candidate, perms)
+    ) {
+      return candidate;
+    }
+    return getFirstAllowedAdminTab(perms);
+  });
+
+  useEffect(() => {
+    const candidate = activeNavTab as AdminDashboardTab;
+    const isValidTab = ['statement', 'overview', 'fees', 'interface_settings', 'admin_accounts'].includes(candidate);
+
+    if (isValidTab && isAdminTabAllowed(candidate, perms)) {
+      if (adminSubTab !== candidate) {
+        setAdminSubTab(candidate);
+      }
+      return;
+    }
+
+    if (!isAdminTabAllowed(adminSubTab, perms)) {
+      const firstAllowed = getFirstAllowedAdminTab(perms);
+      setAdminSubTab(firstAllowed);
+      if (activeNavTab !== firstAllowed) {
+        setActiveNavTab(firstAllowed);
+      }
+    }
+  }, [
+    activeNavTab,
+    adminSubTab,
+    perms.canViewStatement,
+    perms.canSettleAdminWallet,
+    perms.canManageSuppliers,
+    perms.canManageFees,
+    perms.canManageInterfaceSettings,
+    perms.canManageAdminAccounts,
+    setActiveNavTab
+  ]);
+
+  const handleSelectAdminTab = (tab: AdminDashboardTab) => {
+    if (!isAdminTabAllowed(tab, perms)) return;
+    setAdminSubTab(tab);
+    setActiveNavTab(tab);
+  };
 
   // Settings state for Global fee
   const [globalFeeType, setGlobalFeeType] = useState<'percentage' | 'fixed' | 'both'>(superAdmin.defaultFeeType || 'percentage');
@@ -149,261 +202,295 @@ export const AdminDashboard: React.FC = () => {
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white tracking-tight">
-                واجهة مدير التطبيق (Super Admin Dashboard)
-              </h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-xl font-bold text-white tracking-tight">
+                  واجهة مدير التطبيق (Super Admin Dashboard)
+                </h1>
+                {currentUser?.adminAccountId && (
+                  <span className="text-xs font-semibold text-purple-300">
+                    · {currentUser.name} ({currentUser.roleTitle || 'مشرف تطبيق'})
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                الإشراف العام على الموردين والممولين، إضافة موردين جدد، وضبط نسب ومبالغ الرسوم المقطوعة على العمليات.
+                الإشراف العام على الموردين والممولين، إدارة الحسابات الإدارية، وضبط نسب ومبالغ الرسوم المقطوعة على العمليات.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setShowAddSupplierModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>إضافة ممول / مورد جديد</span>
-            </button>
+          {perms.canManageSuppliers && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setShowAddSupplierModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>إضافة ممول / مورد جديد</span>
+              </button>
 
-            <button
-              onClick={() => setShowSupplierInvite(true)}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
-            >
-              <Send className="w-3.5 h-3.5 text-purple-400" />
-              <span>إرسال رابط تسجيل لمورد</span>
-            </button>
-          </div>
+              <button
+                onClick={() => setShowSupplierInvite(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
+              >
+                <Send className="w-3.5 h-3.5 text-purple-400" />
+                <span>إرسال رابط تسجيل لمورد</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Central Wallet & Platform Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-5 border-t border-slate-800/80">
-          
-          <div className="p-4 rounded-2xl bg-slate-950 border border-purple-500/30 space-y-1">
-            <span className="text-[11px] text-purple-300 font-semibold block">
-              محفظة مدير التطبيق (إجمالي رسوم العمليات)
-            </span>
-            <div className="text-2xl font-bold font-mono text-emerald-400 tabular-nums">
-              {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs text-slate-400 font-sans">ر.س</span>
-            </div>
-            <div className="text-[10px] text-slate-400 pt-1">
-              تتجمع تلقائياً من رسوم كل عملية شراء وبيع خدمات أو تحويل رصيد
-            </div>
-          </div>
+        {(canViewAdminWallet || perms.canManageSuppliers || perms.canManageFees) && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-5 border-t border-slate-800/80">
+            {canViewAdminWallet && (
+              <div className="p-4 rounded-2xl bg-slate-950 border border-purple-500/30 space-y-1">
+                <span className="text-[11px] text-purple-300 font-semibold block">
+                  محفظة مدير التطبيق (إجمالي رسوم العمليات)
+                </span>
+                <div className="text-2xl font-bold font-mono text-emerald-400 tabular-nums">
+                  {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
+                  <span className="text-xs text-slate-400 font-sans">ر.س</span>
+                </div>
+                <div className="text-[10px] text-slate-400 pt-1">
+                  تتجمع تلقائياً من رسوم كل عملية شراء وبيع خدمات أو تحويل رصيد
+                </div>
+              </div>
+            )}
 
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 block">إجمالي شبكة الموردين المسجلين</span>
-            <div className="text-2xl font-bold font-mono text-amber-400">
-              {suppliers.length} موردين معتمدين
-            </div>
-            <div className="text-[10px] text-slate-400 pt-1">
-              يشرفون على {posClients.length} نقاط بيع
-            </div>
-          </div>
+            {(perms.canManageSuppliers || perms.canViewStatement) && (
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
+                <span className="text-[11px] text-slate-400 block">إجمالي شبكة الموردين المسجلين</span>
+                <div className="text-2xl font-bold font-mono text-amber-400 tabular-nums">
+                  {suppliers.length} موردين معتمدين
+                </div>
+                <div className="text-[10px] text-slate-400 pt-1">
+                  يشرفون على {posClients.length} نقاط بيع
+                </div>
+              </div>
+            )}
 
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 block">الرسوم العامة الافتراضية للمنصة</span>
-            <div className="text-2xl font-bold font-mono text-cyan-400">
-              {superAdmin.defaultFeePercentage}% {superAdmin.defaultFixedFeeAmount > 0 ? `+ ${superAdmin.defaultFixedFeeAmount} ر.س` : ''}
-            </div>
-            <div className="text-[10px] text-slate-400 pt-1">
-              تطبق على جميع العمليات ما لم يتم تخصيص المورد
-            </div>
+            {(perms.canManageFees || perms.canViewStatement) && (
+              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
+                <span className="text-[11px] text-slate-400 block">الرسوم العامة الافتراضية للمنصة</span>
+                <div className="text-2xl font-bold font-mono text-cyan-400 tabular-nums">
+                  {superAdmin.defaultFeePercentage}% {superAdmin.defaultFixedFeeAmount > 0 ? `+ ${superAdmin.defaultFixedFeeAmount} ر.س` : ''}
+                </div>
+                <div className="text-[10px] text-slate-400 pt-1">
+                  تطبق على جميع العمليات ما لم يتم تخصيص المورد
+                </div>
+              </div>
+            )}
           </div>
-
-        </div>
+        )}
       </div>
 
-      {/* Admin Navigation Bar with Statement Tab */}
+      {/* Admin Navigation Bar */}
       <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs">
-        <button
-          onClick={() => {
-            setAdminSubTab('statement');
-            setActiveNavTab('statement');
-          }}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
-            (adminSubTab === 'statement' || activeNavTab === 'statement')
-              ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-          }`}
-        >
-          <FileText className="w-4 h-4" />
-          <span>كشف حساب مدير التطبيق (المحفظة والرسوم)</span>
-        </button>
+        {perms.canViewStatement && (
+          <button
+            onClick={() => handleSelectAdminTab('statement')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+              adminSubTab === 'statement'
+                ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>كشف حساب مدير التطبيق (المحفظة والرسوم)</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => {
-            setAdminSubTab('overview');
-            setActiveNavTab('overview');
-          }}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
-            (adminSubTab === 'overview' && activeNavTab !== 'statement' && activeNavTab !== 'fees' && activeNavTab !== 'interface_settings')
-              ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-          }`}
-        >
-          <Building2 className="w-4 h-4" />
-          <span>إشراف الموردين والمحافظ والتحويلات</span>
-        </button>
+        {(perms.canManageSuppliers || perms.canSettleAdminWallet) && (
+          <button
+            onClick={() => handleSelectAdminTab('overview')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+              adminSubTab === 'overview'
+                ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>إشراف الموردين والمحافظ والتحويلات</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => {
-            setAdminSubTab('fees');
-            setActiveNavTab('fees');
-          }}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
-            (adminSubTab === 'fees' || activeNavTab === 'fees')
-              ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-          }`}
-        >
-          <Percent className="w-4 h-4" />
-          <span>إعدادات نسب ومبالغ الرسوم</span>
-        </button>
+        {perms.canManageFees && (
+          <button
+            onClick={() => handleSelectAdminTab('fees')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+              adminSubTab === 'fees'
+                ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Percent className="w-4 h-4" />
+            <span>إعدادات نسب ومبالغ الرسوم</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => {
-            setAdminSubTab('interface_settings');
-            setActiveNavTab('interface_settings');
-          }}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
-            (adminSubTab === 'interface_settings' || activeNavTab === 'interface_settings')
-              ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-          }`}
-        >
-          <Sliders className="w-4 h-4" />
-          <span>إعدادات الواجهات والكتالوجات والقوائم</span>
-        </button>
+        {perms.canManageInterfaceSettings && (
+          <button
+            onClick={() => handleSelectAdminTab('interface_settings')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+              adminSubTab === 'interface_settings'
+                ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Sliders className="w-4 h-4" />
+            <span>إعدادات الواجهات والكتالوجات والقوائم</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => {
-            if (window.confirm('هل أنت تأكد من إفراغ التخزين المحلي والسحابي لمجموعات المستخدمين، الموردين، ونقاط البيع؟ (users, suppliers, posClients)')) {
-              clearUsersSuppliersAndClientsData();
-            }
-          }}
-          className="mr-auto flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all font-semibold"
-          title="إفراغ ومسح سجلات users, suppliers, posClients من التخزين المحلي والسحابي"
-        >
-          <Trash2 className="w-4 h-4 text-rose-400" />
-          <span>إفراغ التخزين (Users / Suppliers / POS)</span>
-        </button>
+        {perms.canManageAdminAccounts && (
+          <button
+            onClick={() => handleSelectAdminTab('admin_accounts')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+              adminSubTab === 'admin_accounts'
+                ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <UserCog className="w-4 h-4" />
+            <span>حسابات إدارة التطبيق ({(superAdmin.adminAccounts || []).length})</span>
+          </button>
+        )}
+
+        {perms.canClearSystemData && (
+          <button
+            onClick={() => {
+              if (window.confirm('هل أنت تأكد من إفراغ التخزين المحلي والسحابي لمجموعات المستخدمين، الموردين، ونقاط البيع؟ (users, suppliers, posClients)')) {
+                clearUsersSuppliersAndClientsData();
+              }
+            }}
+            className="mr-auto flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all font-semibold"
+            title="إفراغ ومسح سجلات users, suppliers, posClients من التخزين المحلي والسحابي"
+          >
+            <Trash2 className="w-4 h-4 text-rose-400" />
+            <span>إفراغ التخزين (Users / Suppliers / POS)</span>
+          </button>
+        )}
       </div>
 
       {/* View 1: Detailed Admin Statement View */}
-      {(adminSubTab === 'statement' || activeNavTab === 'statement') && (
+      {adminSubTab === 'statement' && perms.canViewStatement && (
         <AdminStatementView />
       )}
 
       {/* View 1B: Interface Settings, Fixed Catalogs & Dynamic Dropdowns */}
-      {(adminSubTab === 'interface_settings' || activeNavTab === 'interface_settings') && (
+      {adminSubTab === 'interface_settings' && perms.canManageInterfaceSettings && (
         <AdminInterfaceSettingsView />
       )}
 
+      {/* View 1C: Admin Accounts & Granular Permissions Management */}
+      {adminSubTab === 'admin_accounts' && perms.canManageAdminAccounts && (
+        <AdminAccountsView />
+      )}
+
       {/* View 2: Platform Overview & Wallet Usage */}
-      {(adminSubTab === 'overview' && activeNavTab !== 'statement' && activeNavTab !== 'fees' && activeNavTab !== 'interface_settings') && (
+      {adminSubTab === 'overview' && (perms.canManageSuppliers || perms.canSettleAdminWallet) && (
         <>
-          {/* Admin Wallet Usage Operations (Required specifications: 3 options) */}
-          <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
-        <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Wallet className="w-5 h-5 text-amber-400" />
-            <span>خيارات استخدام مبالغ محفظة مدير التطبيق</span>
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            حسب المواصفات: يمكن لمدير التطبيق تسوية مبالغه واستلامها بنكياً من المورد، أو تحويل رصيد لنقاط البيع، أو شراء وبيع خدمات.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          
-          {/* Action A: Settle to bank account from supplier */}
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 font-bold text-white">
-                <Landmark className="w-4 h-4 text-emerald-400" />
-                <span>تسوية الرصيد واستلام قيمته من الحساب البنكي للمورد</span>
+          {/* Admin Wallet Usage Operations */}
+          {perms.canSettleAdminWallet && (
+            <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-amber-400" />
+                  <span>خيارات استخدام مبالغ محفظة مدير التطبيق</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  حسب المواصفات: يمكن لمدير التطبيق تسوية مبالغه واستلامها بنكياً من المورد، أو تحويل رصيد لنقاط البيع، أو شراء وبيع خدمات.
+                </p>
               </div>
-              <p className="text-slate-400 text-[11px] leading-relaxed">
-                خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمورد ({supplier.name}) وإضافتها لحساب مدير التطبيق البنكي.
-              </p>
-            </div>
-            <button
-              onClick={() => setActiveAdminAction('settle_bank')}
-              className="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <span>تسوية وسحب رصيد بنكي</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
 
-          {/* Action B: Transfer balance to POS agents */}
-          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2 font-bold text-white">
-                <Send className="w-4 h-4 text-cyan-400" />
-                <span>تحويل رصيد من المحفظة إلى نقاط البيع والوكلاء</span>
-              </div>
-              <p className="text-slate-400 text-[11px] leading-relaxed">
-                استخدام مبالغ محفظة الإدارة في شحن محافظ الوكلاء مباشرة عبر معرف العميل.
-              </p>
-            </div>
-            <button
-              onClick={() => setActiveAdminAction('transfer_agent')}
-              className="py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <span>تحويل رصيد لنقطة بيع</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-        </div>
-      </div>
-
-      {/* List of Registered Suppliers under Supervision */}
-      <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-purple-400" />
-            <span>قائمة الموردين المعتمدين تحت إشراف الإدارة</span>
-          </h2>
-          <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} موردين</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {suppliers.map(sup => (
-            <div key={sup.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-sm text-white">{sup.name}</h4>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                    رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${sup.fixedFeeAmount} ر.س` : ''}
-                  </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                {/* Action A: Settle to bank account from supplier */}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 font-bold text-white">
+                      <Landmark className="w-4 h-4 text-emerald-400" />
+                      <span>تسوية الرصيد واستلام قيمته من الحساب البنكي للمورد</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] leading-relaxed">
+                      خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمورد ({supplier.name}) وإضافتها لحساب مدير التطبيق البنكي.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveAdminAction('settle_bank')}
+                    className="py-2.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>تسوية وسحب رصيد بنكي</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
-                <div className="text-slate-500 text-[10px]">{sup.phone} · {sup.email}</div>
-                <div className="text-slate-500 text-[10px] font-mono">
-                  البنك: {sup.bankAccountDetails.bankName} ({sup.bankAccountDetails.iban})
+
+                {/* Action B: Transfer balance to POS agents */}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 font-bold text-white">
+                      <Send className="w-4 h-4 text-cyan-400" />
+                      <span>تحويل رصيد من المحفظة إلى نقاط البيع والوكلاء</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] leading-relaxed">
+                      استخدام مبالغ محفظة الإدارة في شحن محافظ الوكلاء مباشرة عبر معرف العميل.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveAdminAction('transfer_agent')}
+                    className="py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>تحويل رصيد لنقطة بيع</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
+            </div>
+          )}
 
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
-                <span className="text-slate-400">رصيد مبيعاته:</span>
-                <strong className="text-emerald-400 font-mono font-bold tabular-nums">
-                  {sup.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
-                </strong>
+          {/* List of Registered Suppliers under Supervision */}
+          {perms.canManageSuppliers && (
+            <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Building2 className="w-5 h-5 text-purple-400" />
+                  <span>قائمة الموردين المعتمدين تحت إشراف الإدارة</span>
+                </h2>
+                <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} موردين</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {suppliers.map(sup => (
+                  <div key={sup.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-sm text-white">{sup.name}</h4>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                          رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${sup.fixedFeeAmount} ر.س` : ''}
+                        </span>
+                      </div>
+                      <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
+                      <div className="text-slate-500 text-[10px]">{sup.phone} · {sup.email}</div>
+                      <div className="text-slate-500 text-[10px] font-mono">
+                        البنك: {sup.bankAccountDetails.bankName} ({sup.bankAccountDetails.iban})
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
+                      <span className="text-slate-400">رصيد مبيعاته:</span>
+                      <strong className="text-emerald-400 font-mono font-bold tabular-nums">
+                        {sup.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                      </strong>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
-      </div>
+          )}
         </>
       )}
 
       {/* View 3: Fee Settings (Global vs Per-Supplier) */}
-      {(adminSubTab === 'fees' || activeNavTab === 'fees') && (
+      {adminSubTab === 'fees' && perms.canManageFees && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             

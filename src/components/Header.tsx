@@ -26,6 +26,7 @@ import {
   CreditCard
 } from 'lucide-react';
 import { TIERS_CONFIG } from '../types';
+import { resolveEffectiveAdminPermissions } from '../utils/adminAccounts';
 
 export const Header: React.FC = () => {
   const { 
@@ -289,61 +290,68 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          {/* 3 Dedicated Interfaces Switcher (Requested by User) */}
-          <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-700 text-xs">
-            <button
-              onClick={() => {
-                setRole('pos_client');
-                setActiveNavTab('store');
-              }}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
-                role === 'pos_client'
-                  ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="واجهة العميل ونقطة البيع"
-            >
-              <Store className="w-3.5 h-3.5" />
-              <span>واجهة العميل</span>
-            </button>
+          {/* 3 Dedicated Interfaces Switcher (Hidden when authenticated to enforce strict role isolation per user request) */}
+          {!isAuthenticated ? (
+            <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-700 text-xs">
+              <button
+                onClick={() => {
+                  setRole('pos_client');
+                  setActiveNavTab('store');
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
+                  role === 'pos_client'
+                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="واجهة العميل ونقطة البيع"
+              >
+                <Store className="w-3.5 h-3.5" />
+                <span>واجهة العميل</span>
+              </button>
 
-            <button
-              onClick={() => {
-                if (role !== 'employee') {
-                  setRole('supplier');
-                  setActiveNavTab(pendingIdCount > 0 ? 'pending_orders' : 'catalogs');
-                }
-              }}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors relative ${
-                role === 'supplier' || role === 'employee'
-                  ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title={role === 'employee' ? `واجهة موظف مكتب (${currentUser?.name || ''})` : "واجهة المورد / المورد (شحن الأيدي من اللعبة)"}
-            >
-              <Building2 className="w-3.5 h-3.5" />
-              <span>{role === 'employee' ? `واجهة الموظف (${currentUser?.name?.split(' ')[0] || ''})` : 'واجهة المورد (المورد)'}</span>
-              {pendingIdCount > 0 && (
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-              )}
-            </button>
+              <button
+                onClick={() => {
+                  if (role !== 'employee') {
+                    setRole('supplier');
+                    setActiveNavTab(pendingIdCount > 0 ? 'pending_orders' : 'catalogs');
+                  }
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors relative ${
+                  role === 'supplier' || role === 'employee'
+                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title={role === 'employee' ? `واجهة موظف مكتب (${currentUser?.name || ''})` : "واجهة المورد / المورد (شحن الأيدي من اللعبة)"}
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>{role === 'employee' ? `واجهة الموظف (${currentUser?.name?.split(' ')[0] || ''})` : 'واجهة المورد (المورد)'}</span>
+                {pendingIdCount > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                )}
+              </button>
 
-            <button
-              onClick={() => {
-                setRole('super_admin');
-                setActiveNavTab('overview');
-              }}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
-                role === 'super_admin'
-                  ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="واجهة مدير التطبيق"
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>مدير التطبيق</span>
-            </button>
-          </div>
+              <button
+                onClick={() => {
+                  setRole('super_admin');
+                  setActiveNavTab('overview');
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
+                  role === 'super_admin'
+                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="واجهة مدير التطبيق"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>مدير التطبيق</span>
+              </button>
+            </div>
+          ) : (
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-amber-300 font-semibold">
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+              <span>واجهة مصرحة حصرياً لحسابك</span>
+            </div>
+          )}
 
           {/* User Auth Status & Logout */}
           {isAuthenticated ? (
@@ -369,36 +377,47 @@ export const Header: React.FC = () => {
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           {role === 'pos_client' && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-slate-400 flex items-center gap-1 font-medium">
-                <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-                تبديل حساب العميل لاختبار اختلاف أسعار الرتب:
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {posClients.map((client, idx) => {
-                  const isSelected = client.id === currentPos.id;
-                  const tier = TIERS_CONFIG[client.tier];
-                  const itemKey = client.id ? `${client.id}-${idx}` : `client-${idx}`;
-                  return (
-                    <button
-                      key={itemKey}
-                      onClick={() => setCurrentPosId(client.id)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
-                        isSelected
-                          ? 'bg-slate-800 text-white border-amber-500 ring-1 ring-amber-500/50'
-                          : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
-                      }`}
-                    >
-                      {client.logoUrl ? (
-                        <img src={client.logoUrl} alt="" className="w-3.5 h-3.5 rounded object-cover shrink-0" />
-                      ) : null}
-                      <span className="truncate max-w-[110px]">{client.tradeName}</span>
-                      <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${tier.badgeColor} ${tier.textColor}`}>
-                        {tier.nameAr}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              {!isAuthenticated ? (
+                <>
+                  <span className="text-slate-400 flex items-center gap-1 font-medium">
+                    <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                    تبديل حساب العميل لاختبار اختلاف أسعار الرتب:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {posClients.map((client, idx) => {
+                      const isSelected = client.id === currentPos.id;
+                      const tier = TIERS_CONFIG[client.tier];
+                      const itemKey = client.id ? `${client.id}-${idx}` : `client-${idx}`;
+                      return (
+                        <button
+                          key={itemKey}
+                          onClick={() => setCurrentPosId(client.id)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 border ${
+                            isSelected
+                              ? 'bg-slate-800 text-white border-amber-500 ring-1 ring-amber-500/50'
+                              : 'bg-slate-950/60 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                          }`}
+                        >
+                          {client.logoUrl ? (
+                            <img src={client.logoUrl} alt="" className="w-3.5 h-3.5 rounded object-cover shrink-0" />
+                          ) : null}
+                          <span className="truncate max-w-[110px]">{client.tradeName}</span>
+                          <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${tier.badgeColor} ${tier.textColor}`}>
+                            {tier.nameAr}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2 text-slate-300">
+                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>حساب نقطة البيع المسجل: {currentPos.tradeName}</span>
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -412,7 +431,7 @@ export const Header: React.FC = () => {
                   </span>
                   <span className="text-slate-400">تابع لمتجر: <strong className="text-white">{supplier.name} ({supplier.storeName})</strong></span>
                 </div>
-              ) : (
+              ) : !isAuthenticated ? (
                 <div className="flex items-center gap-2">
                   <span className="text-amber-400 font-semibold">المورد النشط:</span>
                   <select
@@ -425,20 +444,48 @@ export const Header: React.FC = () => {
                     ))}
                   </select>
                 </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>المورد المسجل: {supplier.name} ({supplier.storeName})</span>
+                  </span>
+                </div>
               )}
               <span className="text-slate-400 hidden sm:inline">·</span>
               <span>رصيد مبيعات المورد: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
             </div>
           )}
 
-          {role === 'super_admin' && (
-            <div className="flex items-center gap-4 text-slate-300">
-              <span className="text-purple-400 font-semibold">{superAdmin.name}</span>
-              <span className="text-slate-400">·</span>
-              <span>محفظة رسوم المنصة: <strong className="text-emerald-400 font-mono tabular-nums">{superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
-              <span>الموردين الخاضعين للإشراف: <strong className="text-white font-mono">{suppliers.length}</strong></span>
-            </div>
-          )}
+          {role === 'super_admin' && (() => {
+            const adminPerms = resolveEffectiveAdminPermissions(currentUser, role);
+            const canSeeAdminWallet = adminPerms.canViewStatement || adminPerms.canSettleAdminWallet;
+            return (
+              <div className="flex flex-wrap items-center gap-4 text-slate-300">
+                <span className="text-purple-400 font-semibold">
+                  {currentUser?.adminAccountId
+                    ? `${currentUser.name} (${currentUser.roleTitle || 'مشرف تطبيق'})`
+                    : superAdmin.name}
+                </span>
+                {canSeeAdminWallet && (
+                  <>
+                    <span className="text-slate-400">·</span>
+                    <span>
+                      محفظة رسوم المنصة:{' '}
+                      <strong className="text-emerald-400 font-mono tabular-nums">
+                        {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                      </strong>
+                    </span>
+                  </>
+                )}
+                {adminPerms.canManageSuppliers && (
+                  <span>
+                    الموردين الخاضعين للإشراف: <strong className="text-white font-mono tabular-nums">{suppliers.length}</strong>
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="flex items-center gap-2 mr-auto text-slate-400">
           </div>

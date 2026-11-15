@@ -1,4 +1,4 @@
-import { AccountTier, Catalog, ServicePackage, SuperAdmin, Supplier } from '../types';
+import { AccountTier, Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier } from '../types';
 
 export const ZERO_PRICE_CLIENT_FLOOR_SAR = 0.5;
 
@@ -82,19 +82,35 @@ export function calculateServicePurchasePricing(params: {
   pkg: ServicePackage | null | undefined;
   clientTier: AccountTier;
   clientCanViewGifts?: boolean;
+  clientPosId?: string;
+  service?: DigitalService | null;
   catalog?: Catalog | null;
   supplier?: Partial<Supplier> | null;
   superAdmin?: Partial<SuperAdmin> | null;
 }): ServicePricingBreakdown {
-  const { pkg, clientTier, clientCanViewGifts = false, catalog, supplier, superAdmin } = params;
+  const { pkg, clientTier, clientCanViewGifts = false, clientPosId, service, catalog, supplier, superAdmin } = params;
 
   const originalTierPrice = getPackageTierPrice(pkg, clientTier);
   const freeGiftCatalog = isCatalogFreeGifts(catalog);
   const appFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
 
-  // Rule 2: Service inside Free Gifts Catalog for a client with Free Gifts privilege:
-  // Service price = 0 SAR, and app fee = the App Admin's configured percentage of the original service price for the client's tier.
-  if (freeGiftCatalog && clientCanViewGifts) {
+  let isGiftEligible = freeGiftCatalog && clientCanViewGifts;
+  if (isGiftEligible && service) {
+    const targetType = service.giftTargetType || 'all_tiers';
+    if (targetType === 'specific_tiers') {
+      const allowedTiers = service.giftTargetTiers || [];
+      if (!allowedTiers.includes(clientTier)) {
+        isGiftEligible = false;
+      }
+    } else if (targetType === 'specific_clients') {
+      const allowedPosIds = service.giftTargetPosIds || [];
+      if (!clientPosId || !allowedPosIds.includes(clientPosId)) {
+        isGiftEligible = false;
+      }
+    }
+  }
+
+  if (isGiftEligible) {
     const giftFee = parseFloat(((originalTierPrice * appFeePct) / 100).toFixed(2));
     return {
       originalTierPrice,

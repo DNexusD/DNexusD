@@ -25,8 +25,15 @@ import {
   ReceiverConfirmationStatus,
   DropdownOptionItem,
   PlatformDropdownListKey,
-  PlatformInterfaceSettings
+  PlatformInterfaceSettings,
+  AdminAccount,
+  AdminPermissions
 } from '../types';
+import {
+  getFirstAllowedAdminTab,
+  resolveEffectiveAdminPermissions,
+  validateAdminAccountInput
+} from '../utils/adminAccounts';
 import {
   DEFAULT_PLATFORM_INTERFACE_SETTINGS,
   mergePlatformSettings,
@@ -116,7 +123,7 @@ interface AppContextType {
   isAuthenticated: boolean;
   currentUser: AuthUser | null;
   loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
-  sendLoginOtp: (email: string) => Promise<{ success: boolean; code?: string; error?: string; remainingSeconds?: number }>;
+  sendLoginOtp: (email: string) => Promise<{ success: boolean; code?: string; error?: string; remainingSeconds?: number; email?: string; cooldownSeconds?: number }>;
   verifyLoginOtpAndLogin: (email: string, password: string, otpCode: string) => Promise<{ success: boolean; error?: string }>;
   registerAccount: (params: {
     name: string;
@@ -308,14 +315,52 @@ interface AppContextType {
   }) => void;
   updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => void;
   removeOfficeEmployee: (empId: string) => void;
+  addAdminAccount: (accountData: {
+    name: string;
+    email: string;
+    password: string;
+    phone: string;
+    roleTitle: string;
+    permissions: AdminPermissions;
+    isActive?: boolean;
+  }) => { success: boolean; error?: string };
+  updateAdminAccount: (accountId: string, updates: Partial<AdminAccount>) => { success: boolean; error?: string };
+  removeAdminAccount: (accountId: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [role, setRole] = useState<UserRole>('pos_client');
+  const [role, setRole] = useState<UserRole>(() => {
+    try {
+      const saved = localStorage.getItem('digipos_auth_user');
+      if (saved) {
+        const parsed = JSON.parse(saved) as AuthUser;
+        if (parsed?.role) return parsed.role;
+      }
+    } catch {
+      // ignore
+    }
+    return 'pos_client';
+  });
   const [viewMode, setViewMode] = useState<'mobile_frame' | 'responsive'>('mobile_frame');
-  const [activeNavTab, setActiveNavTab] = useState<string>('store');
+  const [activeNavTab, setActiveNavTab] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('digipos_auth_user');
+      if (saved) {
+        const parsed = JSON.parse(saved) as AuthUser;
+        if (parsed?.role === 'super_admin') {
+          return getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(parsed, 'super_admin'));
+        }
+        if (parsed?.role === 'supplier' || parsed?.role === 'employee') {
+          return 'catalogs';
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return 'store';
+  });
   
   const [posClients, setPosClients] = useState<POSClient[]>(() => {
     const saved = localStorage.getItem('digipos_clients_v2');
@@ -554,27 +599,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser, posClients, suppliers]);
 
   // Validate Connection to Firestore on boot and on-demand
-  const checkDatabaseConnection = async (): Promise<ConnectionTestResult> => {
-    const res = await testConnection();
+  const checkDatabaseConnection = async (retries = 1): Promise<ConnectionTestResult> => {
+    let res = await testConnection(12000);
+    if (!res.success && retries > 0) {
+      await new Promise(r => setTimeout(r, 1000));
+      res = await testConnection(15000);
+    }
     setIsFirestoreConnected(res.success);
     return res;
   };
 
   useEffect(() => {
+    let isMounted = true;
     checkDatabaseConnection().then((res) => {
+      if (!isMounted) return;
       if (res.success) {
         console.log('Firebase Firestore connection verified:', res.message);
-        firestoreSync.deleteAccountByEmail('almekhlafiraghad2@gmail.com').then((res) => {
-          if (res.deletedCount > 0) {
-            console.log(`Successfully purged ${res.deletedCount} records for almekhlafiraghad2@gmail.com from Firestore`);
+        firestoreSync.deleteAccountByEmail('almekhlafiraghad2@gmail.com').then((delRes) => {
+          if (delRes.deletedCount > 0) {
+            console.log(`Successfully purged ${delRes.deletedCount} records for almekhlafiraghad2@gmail.com from Firestore`);
           }
         }).catch(console.error);
       } else {
         console.warn('Firebase Firestore initial connection test:', res.message);
+        // Automatic retry after 2 seconds if initial probe was a cold start
+        setTimeout(() => {
+          if (isMounted) {
+            checkDatabaseConnection(0).then((retryRes) => {
+              if (retryRes.success) {
+                console.log('Firebase Firestore connection verified on retry:', retryRes.message);
+              }
+            }).catch(console.warn);
+          }
+        }, 2000);
       }
     }).catch(err => {
       console.warn('Firestore connection check error:', err);
-      setIsFirestoreConnected(false);
+      if (isMounted) setIsFirestoreConnected(false);
     });
 
     // Purge target email from local state
@@ -583,6 +644,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...s,
       employees: s.employees ? s.employees.filter(e => e.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com') : []
     })));
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const isRegisteringRef = React.useRef(false);
@@ -592,6 +657,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   currentPosIdRef.current = currentPosId;
   const currentSupplierIdRef = React.useRef(supplier?.id);
   currentSupplierIdRef.current = supplier?.id;
+  const superAdminRef = React.useRef(superAdmin);
+  superAdminRef.current = superAdmin;
 
   // Listen to Firebase Auth state (registered once on mount)
   useEffect(() => {
@@ -609,12 +676,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
         let userRole: UserRole = 'pos_client';
+        let adminAccountId: string | undefined;
+        let adminPermissions: AdminPermissions | undefined;
+        let roleTitle: string | undefined;
+        let resolvedName = fbUser.displayName || 'مستخدم فايربيس';
 
-        // Check if supplier or admin or client
+        // Check sub-admin accounts first before generic admin email checks
+        const matchedAdminAcc = (superAdminRef.current.adminAccounts || []).find(
+          a => a.email?.trim().toLowerCase() === cleanEmail
+        );
         const matchedSup = suppliersRef.current.find(s => s.email?.toLowerCase() === cleanEmail);
-        if (cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin')) {
+
+        if (matchedAdminAcc) {
+          if (!matchedAdminAcc.isActive) {
+            fbSignOut(auth).catch(console.error);
+            setCurrentUser(null);
+            return;
+          }
           userRole = 'super_admin';
-          setActiveNavTab('overview');
+          resolvedName = matchedAdminAcc.name;
+          adminAccountId = matchedAdminAcc.id;
+          adminPermissions = matchedAdminAcc.permissions;
+          roleTitle = matchedAdminAcc.roleTitle;
+          const firstTab = getFirstAllowedAdminTab(
+            resolveEffectiveAdminPermissions(
+              {
+                id: fbUser.uid,
+                email: cleanEmail,
+                name: resolvedName,
+                role: 'super_admin',
+                adminAccountId,
+                adminPermissions
+              },
+              'super_admin'
+            )
+          );
+          setActiveNavTab(firstTab);
+        } else if (cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin')) {
+          userRole = 'super_admin';
+          setActiveNavTab('statement');
         } else if (matchedSup || cleanEmail.includes('supplier')) {
           userRole = 'supplier';
           if (matchedSup) setCurrentSupplierId(matchedSup.id);
@@ -627,17 +727,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const userObj: AuthUser = {
           id: fbUser.uid,
           email: cleanEmail,
-          name: fbUser.displayName || 'مستخدم فايربيس',
+          name: resolvedName,
           role: userRole,
           phone: fbUser.phoneNumber || undefined,
-          associatedId: userRole === 'supplier' ? (matchedSup?.id || currentSupplierIdRef.current || 'sup-jamal-01') : currentPosIdRef.current
+          associatedId:
+            userRole === 'super_admin'
+              ? 'admin'
+              : userRole === 'supplier'
+              ? (matchedSup?.id || currentSupplierIdRef.current || 'sup-jamal-01')
+              : currentPosIdRef.current,
+          adminAccountId,
+          roleTitle,
+          adminPermissions
         };
         setCurrentUser(userObj);
         setRole(userRole);
       } else {
-        // Preserve OTP / employee sessions that do not use Firebase Auth currentUser
+        // Preserve OTP / employee / sub-admin sessions that do not use Firebase Auth currentUser
         setCurrentUser(prev => {
-          if (prev && (prev.id.startsWith('usr-') || prev.id.startsWith('emp-'))) {
+          if (prev && (prev.id.startsWith('usr-') || prev.id.startsWith('emp-') || prev.id.startsWith('adm-'))) {
             return prev;
           }
           return null;
@@ -782,6 +890,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleFirestoreError(err, OperationType.GET, 'system/platformSettings');
     });
 
+    // 10. Super Admin & Admin Accounts live sync
+    const unsubSuperAdmin = onSnapshot(doc(db, 'system', 'superAdmin'), (docSnap) => {
+      if (docSnap.exists()) {
+        const remoteAdmin = docSnap.data() as Partial<SuperAdmin>;
+        setSuperAdmin(prev => ({
+          ...prev,
+          ...remoteAdmin,
+          adminAccounts: Array.isArray(remoteAdmin.adminAccounts)
+            ? remoteAdmin.adminAccounts
+            : (prev.adminAccounts || [])
+        }));
+
+        if (Array.isArray(remoteAdmin.adminAccounts)) {
+          setCurrentUser(prevUser => {
+            if (!prevUser?.adminAccountId) return prevUser;
+            const syncedAcc = remoteAdmin.adminAccounts?.find(a => a.id === prevUser.adminAccountId);
+            if (!syncedAcc || !syncedAcc.isActive) {
+              return null;
+            }
+            return {
+              ...prevUser,
+              name: syncedAcc.name,
+              email: syncedAcc.email,
+              phone: syncedAcc.phone,
+              roleTitle: syncedAcc.roleTitle,
+              adminPermissions: syncedAcc.permissions
+            };
+          });
+        }
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'system/superAdmin');
+    });
+
     return () => {
       unsubOrders();
       unsubDeposits();
@@ -792,6 +934,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubCatalogs();
       unsubServices();
       unsubPlatformSettings();
+      unsubSuperAdmin();
     };
   }, [isFirestoreConnected]);
 
@@ -846,20 +989,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Google Login via Firebase Popup
   const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
-    const conn = await testConnection();
-    if (!conn.success) {
-      setIsFirestoreConnected(false);
-      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
-      showToast({
-        type: 'error',
-        title: 'فشل الاتصال بقاعدة البيانات',
-        description: `تعذر إتمام تسجيل الدخول عبر Google لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
-      });
-      return { success: false, error: errMsg };
+    if (!isFirestoreConnected) {
+      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
+      if (conn.success) {
+        setIsFirestoreConnected(true);
+      }
     }
-    setIsFirestoreConnected(true);
     try {
       const res = await signInWithPopup(auth, googleProvider);
+      setIsFirestoreConnected(true);
       const fbUser = res.user;
       const cleanEmail = (fbUser.email || '').toLowerCase();
       const displayName = fbUser.displayName || 'مستخدم Google';
@@ -867,7 +1005,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let userRole: UserRole = 'pos_client';
       let userName = displayName;
       let associatedId = '';
+      let adminAccountId: string | undefined;
+      let adminPermissions: AdminPermissions | undefined;
+      let roleTitle: string | undefined;
 
+      const matchedAdminAcc = (superAdmin.adminAccounts || []).find(
+        a => a.email?.trim().toLowerCase() === cleanEmail
+      );
       const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
       const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
 
@@ -882,7 +1026,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      if (matchedSup) {
+      if (matchedAdminAcc) {
+        if (!matchedAdminAcc.isActive) {
+          fbSignOut(auth).catch(console.error);
+          showToast({
+            type: 'error',
+            title: 'الحساب الإداري موقوف',
+            description: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام للتطبيق.'
+          });
+          return { success: false, error: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام للتطبيق.' };
+        }
+        userRole = 'super_admin';
+        userName = matchedAdminAcc.name;
+        associatedId = 'admin';
+        adminAccountId = matchedAdminAcc.id;
+        adminPermissions = matchedAdminAcc.permissions;
+        roleTitle = matchedAdminAcc.roleTitle;
+        setIsSupplierSelectionRequired(false);
+        const firstTab = getFirstAllowedAdminTab(
+          resolveEffectiveAdminPermissions(
+            {
+              id: fbUser.uid,
+              email: cleanEmail,
+              name: userName,
+              role: 'super_admin',
+              adminAccountId,
+              adminPermissions
+            },
+            'super_admin'
+          )
+        );
+        setActiveNavTab(firstTab);
+      } else if (matchedSup) {
         userRole = 'supplier';
         userName = matchedSup.name;
         associatedId = matchedSup.id;
@@ -901,7 +1076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userName = superAdmin.name || displayName;
         associatedId = 'admin';
         setIsSupplierSelectionRequired(false);
-        setActiveNavTab('overview');
+        setActiveNavTab('statement');
       } else {
         userRole = 'pos_client';
         setActiveNavTab('store');
@@ -958,7 +1133,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: userName,
         role: userRole,
         phone: fbUser.phoneNumber || undefined,
-        associatedId
+        associatedId,
+        adminAccountId,
+        roleTitle,
+        adminPermissions
       };
 
       setCurrentUser(authUser);
@@ -1081,19 +1259,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'يرجى إدخال البريد الإلكتروني أولاً' };
     }
 
-    // Always verify database connectivity before sending OTP
-    const conn = await testConnection();
-    if (!conn.success) {
-      setIsFirestoreConnected(false);
-      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
-      showToast({
-        type: 'error',
-        title: 'فشل الاتصال بقاعدة البيانات',
-        description: `تعذر إرسال رمز التحقق لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
-      });
-      return { success: false, error: errMsg };
+    // Ensure database connection is active or probe if needed
+    if (!isFirestoreConnected) {
+      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
+      if (conn.success) {
+        setIsFirestoreConnected(true);
+      }
     }
-    setIsFirestoreConnected(true);
 
     // Check if there is an unexpired OTP
     const existing = activeOtps[cleanEmail];
@@ -1103,6 +1275,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { 
         success: true, 
         code: existing.code, 
+        email: cleanEmail,
+        cooldownSeconds: 0,
         remainingSeconds: remainingSec 
       };
     }
@@ -1120,32 +1294,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
 
     showToast({
-      type: 'info',
-      title: 'تم الاتصال بالقاعدة وإرسال رمز التحقق (OTP)',
-      description: `تم التحقق من قاعدة البيانات بنجاح وإرسال رمز التحقق: ${generatedCode} (صالح لمدة دقيقتين فقط)`
+      type: 'success',
+      title: 'تم إرسال رمز التحقق إلى بريدك الإلكتروني',
+      description: `تم إرسال رمز التحقق (OTP) بنجاح إلى البريد الإلكتروني (${cleanEmail}): ${generatedCode} (صالح لمدة دقيقتين فقط)`
     });
 
     return { 
       success: true, 
       code: generatedCode, 
+      email: cleanEmail,
+      cooldownSeconds: 60,
       remainingSeconds: 120 
     };
   };
 
   const verifyLoginOtpAndLogin = async (email: string, password: string, otpCode: string) => {
-    // 1. Mandatory Database Connection Verification
-    const conn = await testConnection();
-    if (!conn.success) {
-      setIsFirestoreConnected(false);
-      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
-      showToast({
-        type: 'error',
-        title: 'فشل الاتصال بقاعدة البيانات',
-        description: `تعذر إتمام عملية تسجيل الدخول لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
-      });
-      return { success: false, error: errMsg };
+    // 1. Verify and establish database connectivity if needed
+    if (!isFirestoreConnected) {
+      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
+      if (conn.success) {
+        setIsFirestoreConnected(true);
+      }
     }
-    setIsFirestoreConnected(true);
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanOtp = otpCode.trim();
@@ -1179,6 +1349,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let userName = 'محمد العتيبي (نقطة البيع)';
     let associatedId = 'pos-1';
 
+    const matchedAdminAcc = (superAdmin.adminAccounts || []).find(
+      a => a.email?.trim().toLowerCase() === cleanEmail
+    );
     const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
     const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
 
@@ -1196,7 +1369,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    if (matchedEmployee && matchedEmployeeSupplier) {
+    if (matchedAdminAcc) {
+      if (!matchedAdminAcc.isActive) {
+        showToast({
+          type: 'error',
+          title: 'الحساب الإداري موقوف',
+          description: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام. يرجى مراجعة إدارة المنصة.'
+        });
+        return {
+          success: false,
+          error: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام.'
+        };
+      }
+
+      const configuredPassword = (matchedAdminAcc.password || '').trim();
+      const enteredPassword = password.trim();
+
+      if (!configuredPassword || configuredPassword !== enteredPassword) {
+        showToast({
+          type: 'error',
+          title: 'كلمة المرور غير صحيحة',
+          description: 'كلمة المرور المدخلة غير صحيحة ولا تتطابق مع كلمة المرور المحددة لهذا الحساب الإداري.'
+        });
+        return {
+          success: false,
+          error: 'كلمة المرور المدخلة غير صحيحة لهذا الحساب الإداري.'
+        };
+      }
+
+      userRole = 'super_admin';
+      userName = matchedAdminAcc.name;
+      associatedId = 'admin';
+      setIsSupplierSelectionRequired(false);
+      const firstTab = getFirstAllowedAdminTab(
+        resolveEffectiveAdminPermissions(
+          {
+            id: matchedAdminAcc.id,
+            email: cleanEmail,
+            name: userName,
+            role: 'super_admin',
+            adminAccountId: matchedAdminAcc.id,
+            adminPermissions: matchedAdminAcc.permissions
+          },
+          'super_admin'
+        )
+      );
+      setActiveNavTab(firstTab);
+    } else if (matchedEmployee && matchedEmployeeSupplier) {
       // 3.A: Strict Password Verification against the password set by the store manager
       const configuredPassword = (matchedEmployee.password || '').trim();
       const enteredPassword = password.trim();
@@ -1307,7 +1526,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userName = superAdmin.name;
         associatedId = 'admin';
         setIsSupplierSelectionRequired(false);
-        setActiveNavTab('overview');
+        setActiveNavTab('statement');
       } else {
         userRole = 'pos_client';
         setActiveNavTab('store');
@@ -1336,15 +1555,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const authUser: AuthUser = {
-      id: matchedEmployee ? matchedEmployee.id : `usr-${Date.now().toString().slice(-6)}`,
+      id: matchedAdminAcc
+        ? matchedAdminAcc.id
+        : matchedEmployee
+        ? matchedEmployee.id
+        : `usr-${Date.now().toString().slice(-6)}`,
       email: cleanEmail,
       name: userName,
       role: userRole,
+      phone: matchedAdminAcc ? matchedAdminAcc.phone : undefined,
       associatedId,
       supplierId: matchedEmployeeSupplier ? matchedEmployeeSupplier.id : undefined,
       employeeId: matchedEmployee ? matchedEmployee.id : undefined,
-      roleTitle: matchedEmployee ? matchedEmployee.roleTitle : undefined,
-      permissions: matchedEmployee ? matchedEmployee.permissions : undefined
+      adminAccountId: matchedAdminAcc ? matchedAdminAcc.id : undefined,
+      roleTitle: matchedAdminAcc
+        ? matchedAdminAcc.roleTitle
+        : matchedEmployee
+        ? matchedEmployee.roleTitle
+        : undefined,
+      permissions: matchedEmployee ? matchedEmployee.permissions : undefined,
+      adminPermissions: matchedAdminAcc ? matchedAdminAcc.permissions : undefined
     };
 
     // Clear used OTP (single-use constraint)
@@ -1357,6 +1587,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsSupplierSelectionRequired(false);
     setCurrentUser(authUser);
     setRole(userRole);
+    firestoreSync.saveUser(authUser).catch(console.error);
     if (userRole !== 'pos_client') {
       triggerConfetti();
     }
@@ -1366,7 +1597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : userRole === 'supplier' 
       ? 'المورد' 
       : userRole === 'super_admin' 
-      ? 'مدير التطبيق' 
+      ? (matchedAdminAcc ? `إدارة التطبيق (${matchedAdminAcc.roleTitle})` : 'مدير التطبيق')
       : 'العميل (نقطة البيع)';
 
     showToast({
@@ -1374,6 +1605,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'تم الاتصال بقاعدة البيانات وتسجيل الدخول بنجاح!',
       description: userRole === 'employee'
         ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (موظف في متجر ${matchedEmployeeSupplier?.name}). تم نقلك لواجهة المورد وفق صلاحياتك.`
+        : matchedAdminAcc
+        ? `تم التحقق بنجاح من قاعدة البيانات. مرحباً بك يا ${userName} (${matchedAdminAcc.roleTitle})، تم تفعيل صلاحياتك الإدارية المحددة.`
         : `تم التحقق بنجاح من قاعدة البيانات ومزامنة الحساب. مرحباً بك يا ${userName}، تم الانتقال فوراً إلى واجهة ${roleLabelAr}.`
     });
 
@@ -1389,18 +1622,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     tradeName?: string;
     supplierId?: string;
   }) => {
-    const conn = await testConnection();
-    if (!conn.success) {
-      setIsFirestoreConnected(false);
-      const errMsg = `فشل الاتصال بقاعدة البيانات: ${conn.message}`;
-      showToast({
-        type: 'error',
-        title: 'فشل الاتصال بقاعدة البيانات',
-        description: `تعذر إنشاء الحساب لعدم توفر اتصال نشط بقاعدة بيانات Firestore. ${conn.message}`
-      });
-      return { success: false, error: errMsg };
+    if (!isFirestoreConnected) {
+      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
+      if (conn.success) {
+        setIsFirestoreConnected(true);
+      }
     }
-    setIsFirestoreConnected(true);
     const { name, email, role: chosenRole, phone, tradeName, supplierId } = params;
     const cleanEmail = email.trim().toLowerCase();
 
@@ -4336,6 +4563,200 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const addAdminAccount = (accountData: {
+    name: string;
+    email: string;
+    password: string;
+    phone: string;
+    roleTitle: string;
+    permissions: AdminPermissions;
+    isActive?: boolean;
+  }): { success: boolean; error?: string } => {
+    const existingAccounts = superAdmin.adminAccounts || [];
+    const validation = validateAdminAccountInput(
+      accountData,
+      existingAccounts,
+      superAdmin.email
+    );
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'بيانات غير مكتملة أو غير صالحة',
+        description: validation.error
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const cleanEmail = accountData.email.trim().toLowerCase();
+    const today = new Date().toISOString().substring(0, 10);
+    const newAccount: AdminAccount = {
+      id: `adm-${Date.now().toString().slice(-6)}-${Math.floor(10 + Math.random() * 90)}`,
+      name: accountData.name.trim(),
+      email: cleanEmail,
+      password: accountData.password.trim(),
+      phone: accountData.phone.trim(),
+      roleTitle: accountData.roleTitle.trim() || 'مشرف تطبيق',
+      permissions: { ...accountData.permissions },
+      isActive: accountData.isActive ?? true,
+      createdAt: today,
+      updatedAt: today
+    };
+
+    const nextAdmin: SuperAdmin = {
+      ...superAdmin,
+      adminAccounts: [newAccount, ...existingAccounts]
+    };
+    setSuperAdmin(nextAdmin);
+    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+
+    const adminAuthUser: AuthUser = {
+      id: newAccount.id,
+      email: cleanEmail,
+      name: newAccount.name,
+      role: 'super_admin',
+      phone: newAccount.phone || undefined,
+      associatedId: 'admin',
+      adminAccountId: newAccount.id,
+      roleTitle: newAccount.roleTitle,
+      adminPermissions: newAccount.permissions
+    };
+    firestoreSync.saveUser(adminAuthUser).catch(console.error);
+
+    showToast({
+      type: 'success',
+      title: 'تم إنشاء حساب إدارة التطبيق بنجاح',
+      description: `تم إضافة (${newAccount.name}) بصلاحيات (${newAccount.roleTitle}) وحفظه في قاعدة البيانات.`
+    });
+
+    return { success: true };
+  };
+
+  const updateAdminAccount = (
+    accountId: string,
+    updates: Partial<AdminAccount>
+  ): { success: boolean; error?: string } => {
+    const existingAccounts = superAdmin.adminAccounts || [];
+    const target = existingAccounts.find(a => a.id === accountId);
+    if (!target) {
+      return { success: false, error: 'الحساب الإداري غير موجود.' };
+    }
+
+    const mergedAccount: AdminAccount = {
+      ...target,
+      ...updates,
+      name: (updates.name ?? target.name).trim(),
+      email: (updates.email ?? target.email).trim().toLowerCase(),
+      phone: (updates.phone ?? target.phone).trim(),
+      roleTitle: (updates.roleTitle ?? target.roleTitle).trim() || 'مشرف تطبيق',
+      password:
+        updates.password !== undefined && updates.password.trim().length > 0
+          ? updates.password.trim()
+          : target.password,
+      permissions: updates.permissions ? { ...updates.permissions } : { ...target.permissions },
+      updatedAt: new Date().toISOString().substring(0, 10)
+    };
+
+    // Only run full input validation if editable fields (other than toggling isActive alone) were updated
+    if (
+      updates.name !== undefined ||
+      updates.email !== undefined ||
+      updates.permissions !== undefined ||
+      (updates.password !== undefined && updates.password.trim().length > 0)
+    ) {
+      const validation = validateAdminAccountInput(
+        {
+          name: mergedAccount.name,
+          email: mergedAccount.email,
+          password: updates.password ?? '',
+          roleTitle: mergedAccount.roleTitle,
+          permissions: mergedAccount.permissions
+        },
+        existingAccounts,
+        superAdmin.email,
+        accountId
+      );
+      if (!validation.valid) {
+        showToast({
+          type: 'error',
+          title: 'تعذر تحديث الحساب الإداري',
+          description: validation.error
+        });
+        return { success: false, error: validation.error };
+      }
+    }
+
+    const nextAdmin: SuperAdmin = {
+      ...superAdmin,
+      adminAccounts: existingAccounts.map(a => (a.id === accountId ? mergedAccount : a))
+    };
+    setSuperAdmin(nextAdmin);
+    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+
+    const adminAuthUser: AuthUser = {
+      id: mergedAccount.id,
+      email: mergedAccount.email,
+      name: mergedAccount.name,
+      role: 'super_admin',
+      phone: mergedAccount.phone || undefined,
+      associatedId: 'admin',
+      adminAccountId: mergedAccount.id,
+      roleTitle: mergedAccount.roleTitle,
+      adminPermissions: mergedAccount.permissions
+    };
+    firestoreSync.saveUser(adminAuthUser).catch(console.error);
+
+    if (currentUser?.adminAccountId === accountId) {
+      if (!mergedAccount.isActive) {
+        setCurrentUser(null);
+      } else {
+        setCurrentUser(prev =>
+          prev
+            ? {
+                ...prev,
+                name: mergedAccount.name,
+                email: mergedAccount.email,
+                phone: mergedAccount.phone || undefined,
+                roleTitle: mergedAccount.roleTitle,
+                adminPermissions: mergedAccount.permissions
+              }
+            : prev
+        );
+      }
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث الحساب الإداري',
+      description: `تم حفظ تعديلات حساب (${mergedAccount.name}) بنجاح.`
+    });
+
+    return { success: true };
+  };
+
+  const removeAdminAccount = (accountId: string) => {
+    const existingAccounts = superAdmin.adminAccounts || [];
+    const target = existingAccounts.find(a => a.id === accountId);
+    if (!target) return;
+
+    const nextAdmin: SuperAdmin = {
+      ...superAdmin,
+      adminAccounts: existingAccounts.filter(a => a.id !== accountId)
+    };
+    setSuperAdmin(nextAdmin);
+    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+    firestoreSync.deleteUser(accountId).catch(console.error);
+
+    if (currentUser?.adminAccountId === accountId) {
+      setCurrentUser(null);
+    }
+
+    showToast({
+      type: 'info',
+      title: 'تم حذف الحساب الإداري',
+      description: `تم إزالة حساب (${target.name}) وسحب صلاحياته من النظام.`
+    });
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -4445,7 +4866,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminTransferToAgent,
         addOfficeEmployee,
         updateOfficeEmployee,
-        removeOfficeEmployee
+        removeOfficeEmployee,
+        addAdminAccount,
+        updateAdminAccount,
+        removeAdminAccount
       }}
     >
       {children}

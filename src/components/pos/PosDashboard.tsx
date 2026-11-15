@@ -140,9 +140,10 @@ export const PosDashboard: React.FC = () => {
     setTimeout(() => setCopiedPosCode(false), 2500);
   };
 
-  // Filter services
+  // Filter services strictly by active POS supplier ID
   const filteredServices = services.filter(srv => {
     if (!srv.isActive) return false;
+    if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
     if (isCatalogFreeGifts(srvCat) && !currentPos.canViewGifts) return false;
     if (selectedCatalogId !== 'all' && srv.catalogId !== selectedCatalogId) return false;

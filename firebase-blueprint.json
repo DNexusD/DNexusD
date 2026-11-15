@@ -11,6 +11,8 @@
         "role": { "type": "string", "enum": ["pos_client", "supplier", "super_admin", "employee"] },
         "phone": { "type": "string" },
         "associatedId": { "type": "string" },
+        "adminAccountId": { "type": "string" },
+        "adminPermissions": { "type": "object" },
         "createdAt": { "type": "string" }
       },
       "required": ["id", "email", "name", "role"]
@@ -72,7 +74,8 @@
         "walletBalance": { "type": "number" },
         "defaultFeePercentage": { "type": "number" },
         "defaultFixedFeeAmount": { "type": "number" },
-        "defaultFeeType": { "type": "string", "enum": ["percentage", "fixed", "both"] }
+        "defaultFeeType": { "type": "string", "enum": ["percentage", "fixed", "both"] },
+        "adminAccounts": { "type": "array" }
       },
       "required": ["name", "email", "walletBalance"]
     },
@@ -329,6 +332,21 @@
         "url": { "type": "string" }
       },
       "required": ["id", "code", "supplierId", "targetTier", "createdAt", "url"]
+    },
+    "LoginCode": {
+      "title": "LoginCode",
+      "description": "Hashed single-use login verification codes managed exclusively by Cloud Functions",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "codeHash": { "type": "string" },
+        "salt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "attempts": { "type": "number" },
+        "lastSentAtMs": { "type": "number" }
+      },
+      "required": ["email", "codeHash", "salt", "createdAt", "expiresAt", "attempts"]
     }
   },
   "firestore": {
@@ -387,6 +405,10 @@
     "/supplierBankAccounts/{accountId}": {
       "schema": { "$ref": "#/entities/SupplierBankAccount" },
       "description": "Supplier bank accounts registry and POS client transfer-receiving delegations"
+    },
+    "/loginCodes/{email}": {
+      "schema": { "$ref": "#/entities/LoginCode" },
+      "description": "Server-only hashed OTP login codes (client access denied)"
     }
   }
 }

@@ -59,6 +59,15 @@ export const firestoreSync = {
     }
   },
 
+  async deleteUser(userId: string): Promise<void> {
+    const path = `users/${userId}`;
+    try {
+      await deleteDoc(doc(db, 'users', userId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  },
+
   // POS Client operations
   async savePosClient(client: POSClient): Promise<void> {
     const path = `posClients/${client.id}`;

@@ -206,9 +206,11 @@ export const SupplierDashboard: React.FC = () => {
   const pendingLoansCount = depositRequests.filter(d => d.supplierId === supplier.id && d.status === 'pending' && (d.requestType === 'loan' || !!d.loanReason)).length;
   const pendingLoanRepaymentsCount = loanRepaymentRequests.filter(r => r.supplierId === supplier.id && r.status === 'pending').length;
   const totalLoansActionBadge = pendingLoansCount + pendingLoanRepaymentsCount;
-  const pendingOrders = orders.filter(o => o.status === 'pending_supplier' || o.status === 'in_progress');
-  const pendingIdOrders = orders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'player_id');
-  const pendingAccountOrders = orders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'account_login');
+  const supplierOrders = useMemo(() => orders.filter(o => !o.supplierId || o.supplierId === supplier.id), [orders, supplier.id]);
+  const supplierServices = useMemo(() => services.filter(s => !s.supplierId || s.supplierId === supplier.id), [services, supplier.id]);
+  const pendingOrders = supplierOrders.filter(o => o.status === 'pending_supplier' || o.status === 'in_progress');
+  const pendingIdOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'player_id');
+  const pendingAccountOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'account_login');
 
   // Active employee info for display in header
   const activeEmployee = role === 'employee' 
@@ -1054,7 +1056,7 @@ export const SupplierDashboard: React.FC = () => {
 
           {/* Services with 5-tier table representation */}
           <div className="space-y-4">
-            {services.map(srv => {
+            {supplierServices.map(srv => {
               const cat = catalogs.find(c => c.id === srv.catalogId);
               return (
                 <div key={srv.id} className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">

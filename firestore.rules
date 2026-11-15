@@ -4,7 +4,7 @@ service cloud.firestore {
     
     // Default deny catch-all
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
     // Test connection endpoint
@@ -80,6 +80,16 @@ service cloud.firestore {
     // Supplier bank accounts & POS receiver delegations
     match /supplierBankAccounts/{accountId} {
       allow read, write: if true;
+    }
+
+    // Login verification codes (Cloud Functions Admin SDK only)
+    match /loginCodes/{email} {
+      allow read, write: if false;
+    }
+
+    // Trigger Email from Firestore queue (Cloud Functions Admin SDK only)
+    match /mail/{mailId} {
+      allow read, write: if false;
     }
   }
 }
