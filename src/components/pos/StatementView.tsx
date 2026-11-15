@@ -346,16 +346,18 @@ export const StatementView: React.FC = () => {
           تحويل الرصيد
         </button>
 
-        <button
-          onClick={() => selectQuickFilter('loans')}
-          className={`px-3 py-1.5 rounded-xl font-medium transition-colors ${
-            activeFilter === 'loans'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          سلف الرصيد الآجل (السلف)
-        </button>
+        {currentPos.canRequestLoans && (
+          <button
+            onClick={() => selectQuickFilter('loans')}
+            className={`px-3 py-1.5 rounded-xl font-medium transition-colors ${
+              activeFilter === 'loans'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            سلف الرصيد الآجل (السلف)
+          </button>
+        )}
       </div>
 
       {/* Search & Dynamic Transaction Type Dropdown */}

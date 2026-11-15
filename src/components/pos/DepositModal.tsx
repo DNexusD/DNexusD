@@ -195,9 +195,13 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
               )}
             </div>
             <div>
-              <h3 className="font-bold text-base text-white">طلب شحن رصيد المحفظة</h3>
+              <h3 className="font-bold text-base text-white">
+                {currentPos.canRequestLoans ? 'طلب شحن رصيد المحفظة أو سلفة' : 'طلب شحن رصيد المحفظة'}
+              </h3>
               <p className="text-xs text-slate-400">
-                إيداع رصيد مسبق أو طلب سلفة لدى المتجر:{' '}
+                {currentPos.canRequestLoans
+                  ? 'إيداع رصيد مسبق أو طلب سلفة لدى المتجر: '
+                  : 'إيداع وشحن رصيد مسبق لدى المتجر: '}
                 <span className="text-amber-400 font-semibold">{currentPosSupplier.name}</span>
               </p>
             </div>

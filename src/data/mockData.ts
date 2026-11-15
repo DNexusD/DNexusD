@@ -208,7 +208,8 @@ export const initialPosClients: POSClient[] = [
     totalSpent: 48920.0,
     ordersCount: 312,
     createdAt: '2025-02-01',
-    qrCodeValue: 'POS:RYD-10492|NAME:Al-Amal Digital|SUP:sup-jamal-01'
+    qrCodeValue: 'POS:RYD-10492|NAME:Al-Amal Digital|SUP:sup-jamal-01',
+    canRequestLoans: true
   },
   {
     id: 'pos-2',
@@ -227,7 +228,8 @@ export const initialPosClients: POSClient[] = [
     totalSpent: 26400.0,
     ordersCount: 168,
     createdAt: '2025-02-15',
-    qrCodeValue: 'POS:JED-28314|NAME:Digital Star|SUP:sup-jamal-01'
+    qrCodeValue: 'POS:JED-28314|NAME:Digital Star|SUP:sup-jamal-01',
+    canRequestLoans: false
   },
   {
     id: 'pos-3',
@@ -246,7 +248,8 @@ export const initialPosClients: POSClient[] = [
     totalSpent: 4200.0,
     ordersCount: 34,
     createdAt: '2025-04-10',
-    qrCodeValue: 'POS:DAM-59123|NAME:Al-Fursan POS|SUP:sup-jamal-01'
+    qrCodeValue: 'POS:DAM-59123|NAME:Al-Fursan POS|SUP:sup-jamal-01',
+    canRequestLoans: false
   },
   {
     id: 'pos-4',
@@ -265,7 +268,8 @@ export const initialPosClients: POSClient[] = [
     totalSpent: 18900.0,
     ordersCount: 115,
     createdAt: '2025-03-05',
-    qrCodeValue: 'POS:MAK-48190|NAME:Sarah Smart Cards|SUP:sup-jamal-01'
+    qrCodeValue: 'POS:MAK-48190|NAME:Sarah Smart Cards|SUP:sup-jamal-01',
+    canRequestLoans: false
   }
 ];
 

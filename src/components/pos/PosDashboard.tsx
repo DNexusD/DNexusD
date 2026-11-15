@@ -80,6 +80,12 @@ export const PosDashboard: React.FC = () => {
   }, [activeNavTab, canReceiveSupplierTransfers, setActiveNavTab]);
 
   useEffect(() => {
+    if (activeNavTab === 'loans' && !currentPos.canRequestLoans) {
+      setActiveNavTab('store');
+    }
+  }, [activeNavTab, currentPos.canRequestLoans, setActiveNavTab]);
+
+  useEffect(() => {
     if (!currentPos.canViewGifts && selectedCatalogId !== 'all') {
       const selCat = catalogs.find(c => c.id === selectedCatalogId);
       if (isCatalogFreeGifts(selCat)) {
@@ -245,8 +251,8 @@ export const PosDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Active Special Client Features Banner (Gifts, Free Offers & Bonus Privileges) */}
-      {(currentPos.canViewGifts || currentPos.canGetBonus) && (
+      {/* Active Special Client Features Banner (Gifts, Free Offers, Loans & Bonus Privileges) */}
+      {(currentPos.canViewGifts || currentPos.canGetBonus || currentPos.canRequestLoans) && (
         <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-950/40 via-amber-950/30 to-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -257,6 +263,12 @@ export const PosDashboard: React.FC = () => {
                 <span>الميزات الخاصة الحصرية الممنوحة لك من المتجر:</span>
               </h3>
               <div className="flex flex-wrap items-center gap-2 mt-1">
+                {currentPos.canRequestLoans && (
+                  <span className="px-2.5 py-1 rounded-xl bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-bold flex items-center gap-1 text-[11px]">
+                    <HandCoins className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>ميزة طلب وإدارة السلف</span>
+                  </span>
+                )}
                 {currentPos.canGetBonus && (
                   <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold flex items-center gap-1 text-[11px]">
                     <Sparkles className="w-3.5 h-3.5 text-amber-400" />
@@ -439,7 +451,7 @@ export const PosDashboard: React.FC = () => {
               className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-amber-500/10"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>شحن رصيد كاش أو سلفة</span>
+              <span>{currentPos.canRequestLoans ? 'شحن رصيد كاش أو سلفة' : 'شحن رصيد المحفظة'}</span>
             </button>
 
             <button
@@ -491,19 +503,21 @@ export const PosDashboard: React.FC = () => {
           <span>سجل العمليات السابقة ({orders.length})</span>
         </button>
 
-        <button
-          onClick={() => setActiveNavTab('loans')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
-            activeNavTab === 'loans'
-              ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
-              : 'text-cyan-300 hover:text-white bg-slate-900 border border-cyan-500/30'
-          }`}
-        >
-          <HandCoins className="w-4 h-4 shrink-0" />
-          <span>
-            إدارة السلف ({depositRequests.filter(d => isLoanDeposit(d) && d.posId === currentPos.id && d.status === 'approved' && getLoanRemainingAmount(d) > 0).length})
-          </span>
-        </button>
+        {currentPos.canRequestLoans && (
+          <button
+            onClick={() => setActiveNavTab('loans')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              activeNavTab === 'loans'
+                ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                : 'text-cyan-300 hover:text-white bg-slate-900 border border-cyan-500/30'
+            }`}
+          >
+            <HandCoins className="w-4 h-4 shrink-0" />
+            <span>
+              إدارة السلف ({depositRequests.filter(d => isLoanDeposit(d) && d.posId === currentPos.id && d.status === 'approved' && getLoanRemainingAmount(d) > 0).length})
+            </span>
+          </button>
+        )}
 
         {canReceiveSupplierTransfers && (
           <button
@@ -719,8 +733,8 @@ export const PosDashboard: React.FC = () => {
       {/* TAB 2: STATEMENT VIEW */}
       {activeNavTab === 'statement' && <StatementView />}
 
-      {/* TAB 2B: LOANS MANAGEMENT VIEW */}
-      {activeNavTab === 'loans' && (
+      {/* TAB 2B: LOANS MANAGEMENT VIEW (Only when authorized) */}
+      {activeNavTab === 'loans' && currentPos.canRequestLoans && (
         <ClientLoansView
           onOpenNewLoan={() => setShowDepositModal(true)}
           onOpenRechargeWallet={() => setShowDepositModal(true)}
