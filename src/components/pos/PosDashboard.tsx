@@ -582,7 +582,7 @@ export const PosDashboard: React.FC = () => {
                 رتبتك: {tier.nameAr}
               </span>
               <span className="text-slate-300">
-                تظهر لك أسعار الخدمات الخاصة برتبتك مباشرة بتخفيض خاص لنقطة بيعك!
+                تظهر لك أسعار الخدمات الخاصة برتبة حسابك فقط ({tier.nameAr}).
               </span>
             </div>
           </div>
@@ -602,17 +602,8 @@ export const PosDashboard: React.FC = () => {
                 supplier: activeSup,
                 superAdmin
               });
-              const regularPricing = calculateServicePurchasePricing({
-                pkg: primaryPkg,
-                clientTier: 'regular',
-                clientCanViewGifts: false,
-                catalog: srvCatalog,
-                supplier: activeSup,
-                superAdmin
-              });
 
               const tierPriceWithFee = pricing.totalAmount.toFixed(2);
-              const regularPriceWithFee = regularPricing.totalAmount.toFixed(2);
               const isGiftService = pricing.isFreeGiftApplied;
 
               return (
@@ -698,16 +689,10 @@ export const PosDashboard: React.FC = () => {
                           <span className={`text-xl font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-amber-400'}`}>
                             {tierPriceWithFee} <span className="text-xs font-normal">ر.س</span>
                           </span>
-                          {isGiftService && pricing.originalTierPrice > 0 ? (
+                          {isGiftService && pricing.originalTierPrice > 0 && (
                             <span className="text-xs text-slate-500 line-through font-mono">
                               {pricing.originalTierPrice.toFixed(2)} ر.س
                             </span>
-                          ) : (
-                            platformSettings.showTierComparisonInPosStore && currentPos.tier !== 'regular' && regularPricing.totalAmount > pricing.totalAmount && (
-                              <span className="text-xs text-slate-500 line-through font-mono">
-                                {regularPriceWithFee} ر.س
-                              </span>
-                            )
                           )}
                         </div>
                       </div>

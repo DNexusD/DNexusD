@@ -518,7 +518,7 @@ export const initialServices: DigitalService[] = [
       {
         id: 'pkg-gift-pubg-60',
         name: 'باقة الهدية الحصرية (60 شدة)',
-        description: 'السعر الأصلي للرتب: عادي 100 · نحاسي 90 · فضي 80 · ذهبي 70 · مميز 60 (مشمولة بسعر 0 ر.س في الهدايا المجانية)',
+        description: 'باقة الهدية الحصرية (مشمولة بسعر 0 ر.س في الهدايا المجانية)',
         tierPrices: {
           regular: 100,
           bronze: 90,

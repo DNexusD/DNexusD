@@ -599,30 +599,6 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       supplier: activeSup,
                       superAdmin
                     });
-                    const regPricing = calculateServicePurchasePricing({
-                      pkg,
-                      clientTier: 'regular',
-                      clientCanViewGifts: Boolean(currentPos.canViewGifts),
-                      catalog: serviceCatalog,
-                      supplier: activeSup,
-                      superAdmin
-                    });
-                    const goldPricing = calculateServicePurchasePricing({
-                      pkg,
-                      clientTier: 'gold',
-                      clientCanViewGifts: Boolean(currentPos.canViewGifts),
-                      catalog: serviceCatalog,
-                      supplier: activeSup,
-                      superAdmin
-                    });
-                    const vipPricing = calculateServicePurchasePricing({
-                      pkg,
-                      clientTier: 'vip',
-                      clientCanViewGifts: Boolean(currentPos.canViewGifts),
-                      catalog: serviceCatalog,
-                      supplier: activeSup,
-                      superAdmin
-                    });
 
                     const pkgTotalWithFee = pkgPricing.totalAmount.toFixed(2);
                     const savings = Math.max(0, pkgPricing.originalTierPrice - pkgPricing.unitPrice);
@@ -651,13 +627,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 قيمة دنيا 0.50 ر.س
                               </span>
-                            ) : (
-                              regPricing.originalTierPrice - pkgPricing.originalTierPrice > 0 && (
-                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                  توفير {(regPricing.originalTierPrice - pkgPricing.originalTierPrice).toFixed(2)} ر.س بفضل رتبتك
-                                </span>
-                              )
-                            )}
+                            ) : null}
                           </div>
                           {pkg.description && (
                             <div className="text-xs text-slate-400">{pkg.description}</div>
@@ -673,15 +643,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                                 <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
                               )}
                             </div>
-                          ) : platformSettings.showTierComparisonInPosStore ? (
-                            <div className="text-[10px] text-slate-400 flex items-center gap-2 pt-0.5">
-                              <span>عادي: {regPricing.totalAmount.toFixed(2)} ر.س</span>
-                              <span>·</span>
-                              <span>ذهبي: {goldPricing.totalAmount.toFixed(2)} ر.س</span>
-                              <span>·</span>
-                              <span className="text-purple-400 font-semibold">مميز: {vipPricing.totalAmount.toFixed(2)} ر.س</span>
+                          ) : (
+                            <div className="text-[10px] text-slate-400 pt-0.5">
+                              سعر رتبة حسابك ({currentTierInfo.nameAr})
                             </div>
-                          ) : null}
+                          )}
                         </div>
 
                         <div className="text-left shrink-0 pl-2">
