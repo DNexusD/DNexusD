@@ -682,7 +682,7 @@ export const PosDashboard: React.FC = () => {
                     {srv.packages.length > 1 ? (
                       <div>
                         <span className="text-[11px] font-medium text-slate-300 leading-relaxed block">
-                          اضغط شراء لاستعراض الباقات والأسعار
+                          اضغط شحن وشراء فوري لإستعراض الباقات والاسعار
                         </span>
                       </div>
                     ) : (
