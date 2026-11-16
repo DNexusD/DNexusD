@@ -686,8 +686,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <span className="font-semibold text-white">{activeSup.storeName || activeSup.name}</span>
                 </div>
                 <div className="flex justify-between py-1.5 font-bold text-sm text-emerald-400">
-                  <span>سعر الخدمة الإجمالي:</span>
-                  <span className="font-mono tabular-nums">{clientDisplayedTotal.toFixed(2)} ر.س</span>
+                  <span>{selectedPricing.isFreeGiftApplied ? 'السعر:' : 'سعر الخدمة الإجمالي:'}</span>
+                  <span className="font-mono tabular-nums">
+                    {selectedPricing.isFreeGiftApplied ? (
+                      <span className="text-emerald-400 font-bold">مجاني</span>
+                    ) : (
+                      `${clientDisplayedTotal.toFixed(2)} ر.س`
+                    )}
+                  </span>
                 </div>
               </div>
 
@@ -897,8 +903,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               </span>
                             )}
                             {displayPricing.isFreeGiftApplied ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                                🎁 هدية مجانية (0.00 ر.س)
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-emerald-400 border border-purple-500/30 font-bold">
+                                🎁 هدية مجانية (مجاني)
                               </span>
                             ) : displayPricing.isZeroPriceFloorApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -913,7 +919,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             <div className="text-[10px] text-purple-300/90 flex items-center gap-2 pt-0.5 flex-wrap">
                               <span>السعر الأصلي لرتبتك: {displayPricing.originalTierPrice.toFixed(2)} ر.س</span>
                               <span>·</span>
-                              <span>سعر الهدية: 0.00 ر.س</span>
+                              <span>السعر: <strong className="text-emerald-400 font-bold">مجاني</strong></span>
                               {savings > 0 && (
                                 <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
                               )}
@@ -929,18 +935,30 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
                         <div className="text-left shrink-0 pl-2 space-y-0.5">
                           {pkgOpts.allowSingleCode && (
-                            <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                              {(singlePricing.isFreeGiftApplied ? 0 : singlePricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span>
+                            <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {singlePricing.isFreeGiftApplied ? (
+                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">{pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
+                              ) : (
+                                <>{singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span></>
+                              )}
                             </div>
                           )}
                           {pkgOpts.allowPackage && packagePricing && (
-                            <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? 'text-cyan-300' : 'text-base text-amber-400'}`}>
-                              {(packagePricing.isFreeGiftApplied ? 0 : packagePricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span>
+                            <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? (packagePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-cyan-300') : 'text-base text-amber-400'}`}>
+                              {packagePricing.isFreeGiftApplied ? (
+                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
+                              ) : (
+                                <>{packagePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span></>
+                              )}
                             </div>
                           )}
                           {!pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
-                            <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                              {pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span>
+                            <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {displayPricing.isFreeGiftApplied ? (
+                                <span>مجاني</span>
+                              ) : (
+                                <>{pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span></>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1008,8 +1026,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                                 : 'تسليم كود فوري'}
                             </div>
                           </div>
-                          <div className="font-mono font-bold text-sm text-amber-400 shrink-0">
-                            {(singleOptPricing.isFreeGiftApplied ? 0 : singleOptPricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                          <div className={`font-mono font-bold text-sm shrink-0 ${singleOptPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {singleOptPricing.isFreeGiftApplied ? (
+                              <span>مجاني</span>
+                            ) : (
+                              <>{singleOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
+                            )}
                           </div>
                         </button>
                       )}
@@ -1037,8 +1059,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               )}
                             </div>
                           </div>
-                          <div className="font-mono font-bold text-sm text-cyan-300 shrink-0">
-                            {(packageOptPricing.isFreeGiftApplied ? 0 : packageOptPricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                          <div className={`font-mono font-bold text-sm shrink-0 ${packageOptPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-cyan-300'}`}>
+                            {packageOptPricing.isFreeGiftApplied ? (
+                              <span>مجاني</span>
+                            ) : (
+                              <>{packageOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
+                            )}
                           </div>
                       </button>
                     </div>
@@ -1381,9 +1407,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                     <div className="flex justify-between text-purple-300">
                       <span className="flex items-center gap-1">
                         <Gift className="w-3.5 h-3.5" />
-                        <span>سعر الخدمة (كتالوج الهدايا المجانية):</span>
+                        <span>السعر:</span>
                       </span>
-                      <span className="font-mono font-bold">0.00 ر.س</span>
+                      <span className="font-bold text-emerald-400">مجاني</span>
                     </div>
                     <div className="flex justify-between text-slate-400 text-[11px]">
                       <span>السعر الأصلي لرتبة ({currentTierInfo.nameAr}):</span>
@@ -1404,9 +1430,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </>
                 )}
                 <div className="flex justify-between font-bold text-sm text-white pt-1 border-t border-slate-800/70">
-                  <span>سعر الخدمة الإجمالي للدفع:</span>
-                  <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                    {clientDisplayedTotal.toFixed(2)} ر.س
+                  <span>{selectedPricing.isFreeGiftApplied ? 'السعر للدفع:' : 'سعر الخدمة الإجمالي للدفع:'}</span>
+                  <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {selectedPricing.isFreeGiftApplied ? (
+                      <span className="text-emerald-400 font-bold">مجاني</span>
+                    ) : (
+                      `${clientDisplayedTotal.toFixed(2)} ر.س`
+                    )}
                   </span>
                 </div>
               </div>
@@ -1434,7 +1464,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   {selectedPkgIsOutOfStock
                     ? 'نفد المخزون - غير متاح حالياً'
                     : selectedPricing.isFreeGiftApplied
-                    ? 'استلام الهدية المجانية (0.00 ر.س)'
+                    ? 'استلام الهدية المجانية (مجاني)'
                     : `تأكيد دفع ${clientDisplayedTotal.toFixed(2)} ر.س وشحن فوري`}
                 </span>
               </button>

@@ -416,7 +416,7 @@ export const PosDashboard: React.FC = () => {
             >
               <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
                 <Gift className="w-4 h-4 text-purple-300" />
-                <span>🎁 هدايا وعروض مجانية متاحة (السعر: 0.00 ر.س)</span>
+                <span>🎁 هدايا وعروض مجانية متاحة (السعر: مجاني)</span>
               </div>
               <div className="text-[10px] text-purple-200/80 mt-0.5">
                 {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر أو تواصل معه لتفعيل هديتك والعرض المجاني المخصص لك.'}
@@ -826,8 +826,8 @@ export const PosDashboard: React.FC = () => {
                           <div className="flex items-center gap-2 flex-wrap">
                             <h3 className="font-bold text-base text-white">{srv.nameAr}</h3>
                             {isGiftService && (
-                              <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-bold">
-                                🎁 هدية مجانية (0 ر.س)
+                              <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-emerald-400 border border-purple-500/40 text-[10px] font-bold">
+                                🎁 هدية مجانية (مجاني)
                               </span>
                             )}
                           </div>
@@ -923,26 +923,40 @@ export const PosDashboard: React.FC = () => {
                     ) : primaryOpts?.allowSingleCode && primaryOpts?.allowPackage && packagePricing ? (
                       <div className="flex flex-wrap items-center gap-4">
                         <div>
-                          <span className="text-[10px] text-slate-400 block">سعر الكود الواحد:</span>
-                          <span className={`text-lg font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-amber-400'}`}>
-                            {tierPriceWithFee} <span className="text-[11px] font-normal">ر.س</span>
+                          <span className="text-[10px] text-slate-400 block">
+                            {isGiftService ? 'السعر:' : 'سعر الكود الواحد:'}
                           </span>
+                          {isGiftService ? (
+                            <span className="text-lg font-bold font-mono tabular-nums text-emerald-400">
+                              مجاني
+                            </span>
+                          ) : (
+                            <span className="text-lg font-bold font-mono tabular-nums text-amber-400">
+                              {tierPriceWithFee} <span className="text-[11px] font-normal">ر.س</span>
+                            </span>
+                          )}
                         </div>
                         <div className="pr-3 border-r border-slate-800">
                           <span className="text-[10px] text-cyan-300 flex items-center gap-1">
                             <Package className="w-3 h-3" />
-                            <span>سعر الباقة ({primaryOpts.packageCodesCount} أكواد):</span>
+                            <span>{isGiftService ? 'السعر (باقة):' : `سعر الباقة (${primaryOpts.packageCodesCount} أكواد):`}</span>
                           </span>
-                          <span className={`text-lg font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-cyan-300'}`}>
-                            {(isGiftService || packagePricing.isFreeGiftApplied ? 0 : packagePricing.totalAmount).toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
-                          </span>
+                          {isGiftService || packagePricing.isFreeGiftApplied ? (
+                            <span className="text-lg font-bold font-mono tabular-nums text-emerald-400">
+                              مجاني
+                            </span>
+                          ) : (
+                            <span className="text-lg font-bold font-mono tabular-nums text-cyan-300">
+                              {packagePricing.totalAmount.toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
                       <div>
                         <span className="text-[10px] text-slate-400 block">
                           {isGiftService
-                            ? 'سعر الهدية المجانية:'
+                            ? 'السعر:'
                             : primaryOpts && !primaryOpts.allowSingleCode && primaryOpts.allowPackage
                             ? `سعر الباقة (${primaryOpts.packageCodesCount} أكواد) لرتبتك:`
                             : pricing.isZeroPriceFloorApplied
@@ -950,9 +964,15 @@ export const PosDashboard: React.FC = () => {
                             : 'سعر باقة الأساس لرتبتك:'}
                         </span>
                         <div className="flex items-baseline gap-1.5 flex-wrap">
-                          <span className={`text-xl font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-amber-400'}`}>
-                            {tierPriceWithFee} <span className="text-xs font-normal">ر.س</span>
-                          </span>
+                          {isGiftService ? (
+                            <span className="text-xl font-bold font-mono tabular-nums text-emerald-400">
+                              مجاني
+                            </span>
+                          ) : (
+                            <span className="text-xl font-bold font-mono tabular-nums text-amber-400">
+                              {tierPriceWithFee} <span className="text-xs font-normal">ر.س</span>
+                            </span>
+                          )}
                           {isGiftService && pricing.originalTierPrice > 0 && (
                             <span className="text-xs text-slate-500 line-through font-mono">
                               {pricing.originalTierPrice.toFixed(2)} ر.س
@@ -1206,8 +1226,11 @@ export const PosDashboard: React.FC = () => {
                         const orderSrv = services.find(s => s.id === order.serviceId);
                         const orderCat = orderSrv ? catalogs.find(c => c.id === orderSrv.catalogId) : undefined;
                         const isFreeGiftOrder = Boolean(order.isFreeGiftOrder || (orderCat && isCatalogFreeGifts(orderCat) && order.costPrice === 0));
-                        return (isFreeGiftOrder ? 0 : order.totalDeducted).toFixed(2);
-                      })()} ر.س
+                        if (isFreeGiftOrder) {
+                          return <span className="text-emerald-400 font-bold">مجاني</span>;
+                        }
+                        return `${order.totalDeducted.toFixed(2)} ر.س`;
+                      })()}
                     </div>
                   </div>
                 </div>
