@@ -232,6 +232,8 @@ export interface POSClient {
   canRequestLoans?: boolean; // هل يمتلك صلاحية طلب السلف والرصيد الآجل من المتجر
   canGetBonus?: boolean; // هل يمتلك ميزة الحصول على بونص
   canViewGifts?: boolean; // هل يمتلك ميزة ظهور الهدايا والعروض المجانية
+  pendingGiftFees?: number; // رسوم تطبيق مؤجلة من هدايا مجانية لحين شحن المحفظة (لا تظهر للعميل كمديونية)
+  usedGiftServiceIds?: string[]; // معرفات خدمات الهدايا المجانية المستخدمة والمكتملة لإخفائها من واجهة العميل
 }
 
 export interface FeeConfig {
@@ -516,6 +518,9 @@ export interface Order {
   salePriceToCustomer?: number; // Optional resale price
   feeAmount: number; // Platform fee
   totalDeducted: number; // costPrice + feeAmount
+  isFreeGiftOrder?: boolean;
+  deferredFeeAmount?: number;
+  deferredFeeSettled?: boolean;
   paymentMethod: 'wallet' | 'visa';
   status: 'completed' | 'in_progress' | 'pending_supplier' | 'failed';
   supplierNotes?: string;

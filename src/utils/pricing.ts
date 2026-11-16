@@ -162,3 +162,145 @@ export function calculateServicePurchasePricing(params: {
     isZeroPriceFloorApplied: false
   };
 }
+
+export const FREE_GIFT_MIN_WALLET_BALANCE_SAR = 0;
+export const FREE_GIFT_EMPTY_WALLET_MESSAGE = 'لاستلام هديتك لابد ان يكون في محفظتك 10 ر.س';
+export const FREE_GIFT_LOW_WALLET_MESSAGE = 'لاستلام هديتك لابد ان يكون في محفظتك على الأقل 1 ر.س';
+
+export function validateFreeGiftWalletBalance(_params: {
+  isFreeGiftApplied: boolean;
+  walletBalance: number;
+  totalAmount?: number;
+}): { allowed: boolean; message?: string } {
+  // Free gifts can always be claimed: if wallet covers app fee it is deducted immediately;
+  // otherwise the app fee is deferred silently until the next wallet recharge.
+  return { allowed: true };
+}
+
+function roundCurrencySar(value: number): number {
+  return parseFloat((Number.isFinite(value) ? value : 0).toFixed(2));
+}
+
+export interface GiftFeePaymentResolution {
+  walletDeductionNow: number;
+  deferredFeeAdded: number;
+  newWalletBalance: number;
+  newPendingGiftFees: number;
+  isDeferred: boolean;
+}
+
+export function resolveGiftClaimFeePayment(params: {
+  isFreeGiftApplied: boolean;
+  walletBalance: number;
+  feeAmount: number;
+  existingPendingFees?: number;
+}): GiftFeePaymentResolution {
+  const walletBalance = roundCurrencySar(params.walletBalance);
+  const feeAmount = Math.max(0, roundCurrencySar(params.feeAmount));
+  const existingPendingFees = Math.max(0, roundCurrencySar(params.existingPendingFees ?? 0));
+
+  if (!params.isFreeGiftApplied) {
+    return {
+      walletDeductionNow: feeAmount,
+      deferredFeeAdded: 0,
+      newWalletBalance: roundCurrencySar(walletBalance - feeAmount),
+      newPendingGiftFees: existingPendingFees,
+      isDeferred: false,
+    };
+  }
+
+  if (feeAmount <= 0) {
+    return {
+      walletDeductionNow: 0,
+      deferredFeeAdded: 0,
+      newWalletBalance: walletBalance,
+      newPendingGiftFees: existingPendingFees,
+      isDeferred: false,
+    };
+  }
+
+  if (walletBalance >= feeAmount) {
+    return {
+      walletDeductionNow: feeAmount,
+      deferredFeeAdded: 0,
+      newWalletBalance: roundCurrencySar(walletBalance - feeAmount),
+      newPendingGiftFees: existingPendingFees,
+      isDeferred: false,
+    };
+  }
+
+  // Insufficient balance: allow claiming gift, do not drop/negative wallet balance, defer fee until recharge
+  return {
+    walletDeductionNow: 0,
+    deferredFeeAdded: feeAmount,
+    newWalletBalance: walletBalance,
+    newPendingGiftFees: roundCurrencySar(existingPendingFees + feeAmount),
+    isDeferred: true,
+  };
+}
+
+export interface PendingGiftFeeSettlementResult {
+  settledFeeAmount: number;
+  finalWalletBalance: number;
+  remainingPendingGiftFees: number;
+}
+
+export function settlePendingGiftFeesOnRecharge(params: {
+  currentWalletBalance: number;
+  rechargeAmount: number;
+  pendingGiftFees?: number;
+}): PendingGiftFeeSettlementResult {
+  const currentBalance = roundCurrencySar(params.currentWalletBalance);
+  const rechargeAmount = Math.max(0, roundCurrencySar(params.rechargeAmount));
+  const pendingFees = Math.max(0, roundCurrencySar(params.pendingGiftFees ?? 0));
+  const balanceAfterRecharge = roundCurrencySar(currentBalance + rechargeAmount);
+
+  if (pendingFees <= 0 || balanceAfterRecharge <= 0) {
+    return {
+      settledFeeAmount: 0,
+      finalWalletBalance: balanceAfterRecharge,
+      remainingPendingGiftFees: pendingFees,
+    };
+  }
+
+  const settledFeeAmount = roundCurrencySar(Math.min(balanceAfterRecharge, pendingFees));
+  const finalWalletBalance = roundCurrencySar(balanceAfterRecharge - settledFeeAmount);
+  const remainingPendingGiftFees = roundCurrencySar(pendingFees - settledFeeAmount);
+
+  return {
+    settledFeeAmount,
+    finalWalletBalance,
+    remainingPendingGiftFees,
+  };
+}
+
+export function appendUsedGiftServiceId(
+  usedGiftServiceIds: string[] | undefined,
+  serviceId: string
+): string[] {
+  const list = Array.isArray(usedGiftServiceIds) ? usedGiftServiceIds : [];
+  if (!serviceId || list.includes(serviceId)) return list;
+  return [...list, serviceId];
+}
+
+export function hasClientUsedGiftService(params: {
+  serviceId: string;
+  isGiftService: boolean;
+  usedGiftServiceIds?: string[];
+  orders?: Array<{ posId: string; serviceId: string; status: string }>;
+  posId: string;
+}): boolean {
+  if (!params.isGiftService) return false;
+  if (Array.isArray(params.usedGiftServiceIds) && params.usedGiftServiceIds.includes(params.serviceId)) {
+    return true;
+  }
+  if (
+    Array.isArray(params.orders) &&
+    params.orders.some(
+      (o) => o.posId === params.posId && o.serviceId === params.serviceId && o.status === 'completed'
+    )
+  ) {
+    return true;
+  }
+  return false;
+}

@@ -310,7 +310,7 @@ export const initialCatalogs: Catalog[] = [
     id: 'cat-free-gifts',
     supplierId: 'sup-jamal-01',
     nameAr: 'كتالوج الهدايا المجانية',
-    descriptionAr: 'هدايا وعروض مجانية حصرية للعملاء الممنوحين ميزة الهدايا المجانية (سعر 0 ر.س + رسوم التطبيق بالنسبة المحددة من مدير التطبيق من سعر الرتبة الأصلي)',
+    descriptionAr: 'هدايا وعروض مجانية حصرية للعملاء الممنوحين ميزة الهدايا المجانية (السعر: 0.00 ر.س)',
     icon: 'Gift',
     serviceCount: 1,
     isFreeGiftsCatalog: true
@@ -514,7 +514,7 @@ export const initialServices: DigitalService[] = [
     catalogId: 'cat-free-gifts',
     supplierId: 'sup-jamal-01',
     nameAr: 'هدية شحن 60 شدة ببجي (عرض مجاني)',
-    descriptionAr: 'خدمة ضمن كتالوج الهدايا المجانية: تُصرف للعميل الذي يملك ميزة الهدايا المجانية بسعر 0 ر.س وتُحتسب رسوم التطبيق بالنسبة المحددة من مدير التطبيق من السعر الأصلي الخاص برتبته.',
+    descriptionAr: 'خدمة ضمن كتالوج الهدايا المجانية: تُصرف للعميل الذي يملك ميزة الهدايا المجانية بسعر 0.00 ر.س.',
     icon: 'Gift',
     isActive: true,
     deliveryMethods: ['player_id', 'voucher_code'],

@@ -15,13 +15,16 @@ import {
   getActiveDropdownOptions,
   matchesStatementTransactionType,
 } from '../../utils/platformSettings';
+import {
+  buildClientStatementEntries,
+  filterClientStatementDropdownOptions,
+} from '../../utils/clientStatement';
 import { 
   Eye,
   Search, 
   ArrowDownLeft, 
   ArrowUpRight, 
   ShoppingBag, 
-  Percent, 
   RefreshCw,
   Download,
   Loader2,
@@ -29,7 +32,7 @@ import {
 } from 'lucide-react';
 
 export const StatementView: React.FC = () => {
-  const { currentPos, accountingEntries, depositRequests, platformSettings, showToast } = useApp();
+  const { currentPos, accountingEntries, orders, depositRequests, platformSettings, showToast } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<StatementFilter>('all');
   const [selectedTransactionType, setSelectedTransactionType] = useState<string>('all');
@@ -37,7 +40,9 @@ export const StatementView: React.FC = () => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<GeneratedPdfResult | null>(null);
 
-  const statementTypeOptions = getActiveDropdownOptions(platformSettings.statementTransactionTypes);
+  const statementTypeOptions = filterClientStatementDropdownOptions(
+    getActiveDropdownOptions(platformSettings.statementTransactionTypes)
+  );
 
   const selectQuickFilter = (tab: StatementFilter) => {
     setActiveFilter(tab);
@@ -83,8 +88,9 @@ export const StatementView: React.FC = () => {
     return false;
   };
 
-  // Entries for current POS
-  const posEntries = accountingEntries.filter(entry => entry.posId === currentPos.id);
+  // Entries for current POS (fees hidden; folded into regular purchases/transfers, kept 0 for free gifts)
+  const rawPosEntries = accountingEntries.filter(entry => entry.posId === currentPos.id);
+  const posEntries = buildClientStatementEntries(rawPosEntries, orders);
 
   // Filter logic
   const matchedTypeOption = statementTypeOptions.find((o) => o.value === selectedTransactionType);
@@ -153,9 +159,6 @@ export const StatementView: React.FC = () => {
         } else if (entry.type === 'sale') {
           badge = 'بيع لزبون';
           badgeTone = 'purple';
-        } else if (entry.type === 'fee') {
-          badge = 'رسوم منصة';
-          badgeTone = 'slate';
         }
 
         const subParts: string[] = [];
@@ -458,13 +461,6 @@ export const StatementView: React.FC = () => {
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 inline-flex items-center gap-1">
                         <ArrowUpRight className="w-3 h-3" />
                         بيع لزبون
-                      </span>
-                    );
-                  } else if (entry.type === 'fee') {
-                    badge = (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-700/50 text-slate-300 inline-flex items-center gap-1">
-                        <Percent className="w-3 h-3" />
-                        رسوم منصة
                       </span>
                     );
                   } else {

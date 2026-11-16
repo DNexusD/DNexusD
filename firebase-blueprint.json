@@ -39,7 +39,12 @@
         "createdAt": { "type": "string" },
         "qrCodeValue": { "type": "string" },
         "logoUrl": { "type": "string" },
-        "canReceiveSupplierTransfers": { "type": "boolean" }
+        "canReceiveSupplierTransfers": { "type": "boolean" },
+        "canRequestLoans": { "type": "boolean" },
+        "canGetBonus": { "type": "boolean" },
+        "canViewGifts": { "type": "boolean" },
+        "pendingGiftFees": { "type": "number" },
+        "usedGiftServiceIds": { "type": "array" }
       },
       "required": ["id", "posCode", "tradeName", "ownerName", "phone", "supplierId", "tier", "walletBalance"]
     },
@@ -102,6 +107,9 @@
         "salePriceToCustomer": { "type": "number" },
         "feeAmount": { "type": "number" },
         "totalDeducted": { "type": "number" },
+        "isFreeGiftOrder": { "type": "boolean" },
+        "deferredFeeAmount": { "type": "number" },
+        "deferredFeeSettled": { "type": "boolean" },
         "paymentMethod": { "type": "string", "enum": ["wallet", "visa"] },
         "status": { "type": "string", "enum": ["completed", "in_progress", "pending_supplier", "failed"] },
         "supplierNotes": { "type": "string" },

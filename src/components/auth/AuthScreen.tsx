@@ -303,6 +303,23 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     await performOtpVerifyAndLogin(loginOtp);
   };
 
+  // Handle Google Account Login
+  const handleGoogleLogin = async () => {
+    setAuthError(null);
+    setIsLoggingInGoogle(true);
+    try {
+      const res = await loginWithGoogle();
+      if (!res.success && res.error) {
+        setAuthError(res.error);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'تعذر تسجيل الدخول باستخدام حساب جوجل';
+      setAuthError(msg);
+    } finally {
+      setIsLoggingInGoogle(false);
+    }
+  };
+
   const [registrationBanner, setRegistrationBanner] = useState<string | null>(null);
 
   // Handle Registration Submit
@@ -670,7 +687,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                     {/* Login Button */}
                     <button
                       type="submit"
-                      disabled={isLoggingIn}
+                      disabled={isLoggingIn || isLoggingInGoogle}
                       className="w-full py-2.5 sm:py-3 rounded-xl sm:rounded-2xl bg-gradient-to-r from-amber-500 via-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-amber-500/25 active:scale-[0.99] disabled:opacity-50"
                     >
                       {isLoggingIn ? (
@@ -682,6 +699,51 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                         <>
                           <ArrowRight className="w-4 h-4" />
                           <span>تسجيل الدخول ومتابعة العمليات</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Divider */}
+                    <div className="relative flex items-center py-0.5">
+                      <div className="flex-grow border-t border-slate-800" />
+                      <span className="shrink-0 mx-3 text-[11px] font-medium text-slate-400">أو</span>
+                      <div className="flex-grow border-t border-slate-800" />
+                    </div>
+
+                    {/* Google Sign-In Button */}
+                    <button
+                      type="button"
+                      data-testid="google-login-btn"
+                      onClick={handleGoogleLogin}
+                      disabled={isLoggingInGoogle || isLoggingIn}
+                      className="w-full py-2.5 sm:py-3 px-4 rounded-xl sm:rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs sm:text-sm flex items-center justify-center gap-2.5 transition-all shadow-md border border-slate-200 active:scale-[0.99] disabled:opacity-50 cursor-pointer"
+                    >
+                      {isLoggingInGoogle ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin text-slate-700" />
+                          <span>جاري تسجيل الدخول بحساب جوجل...</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                              fill="#4285F4"
+                              d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                            />
+                            <path
+                              fill="#34A853"
+                              d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                            />
+                            <path
+                              fill="#FBBC05"
+                              d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                            />
+                            <path
+                              fill="#EA4335"
+                              d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                            />
+                          </svg>
+                          <span>الدخول باستخدام حساب جوجل</span>
                         </>
                       )}
                     </button>

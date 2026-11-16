@@ -67,8 +67,13 @@ import {
   isAccountAssignedToPos
 } from '../utils/bankAccounts';
 import {
+  appendUsedGiftServiceId,
   calculateBaseSupplierFee,
-  calculateServicePurchasePricing
+  calculateServicePurchasePricing,
+  hasClientUsedGiftService,
+  isCatalogFreeGifts,
+  resolveGiftClaimFeePayment,
+  settlePendingGiftFeesOnRecharge,
 } from '../utils/pricing';
 import { sanitizeSupplierSocialLinks } from '../utils/socialLinks';
 import {
@@ -1257,10 +1262,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true };
     } catch (err: unknown) {
       console.error('Google Sign-in failed:', err);
-      const msg = err instanceof Error ? err.message : 'تعذر تسجيل الدخول عبر Google';
+      const fbErr = err as { code?: string; message?: string };
+      let msg = fbErr?.message || 'تعذر تسجيل الدخول عبر حساب جوجل';
+      if (fbErr?.code === 'auth/popup-closed-by-user') {
+        msg = 'تم إغلاق نافذة تسجيل الدخول بحساب جوجل قبل إتمام العملية.';
+      } else if (fbErr?.code === 'auth/cancelled-popup-request') {
+        msg = 'تم إلغاء طلب تسجيل الدخول السابق، يرجى المحاولة مرة أخرى.';
+      } else if (fbErr?.code === 'auth/popup-blocked') {
+        msg = 'قام المتصفح بحظر النافذة المنبثقة. يرجى السماح بالنوافذ المنبثقة والمحاولة مجدداً.';
+      } else if (fbErr?.code === 'auth/unauthorized-domain') {
+        msg = 'نطاق الموقع الحالي غير مضاف في النطاقات المصرح بها داخل إعدادات Firebase Auth.';
+      } else if (fbErr?.code === 'auth/network-request-failed') {
+        msg = 'تعذر الاتصال بخدمات جوجل، يرجى التحقق من اتصال الإنترنت.';
+      }
       showToast({
         type: 'error',
-        title: 'فشل تسجيل الدخول',
+        title: 'فشل تسجيل الدخول بحساب جوجل',
         description: msg
       });
       return { success: false, error: msg };
@@ -2036,6 +2053,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clientTier: currentPos.tier,
       purchaseUnit: effectiveUnit,
       clientCanViewGifts: Boolean(currentPos.canViewGifts),
+      clientPosId: currentPos.id,
+      service: liveService,
       catalog: serviceCatalog,
       supplier: activeOrderSupplier,
       superAdmin
@@ -2045,17 +2064,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const feeAmount = pricing.feeAmount;
     const totalDeduction = pricing.totalAmount;
 
-    // 3. Balance verification if paying via wallet
-    if (paymentMethod === 'wallet') {
+    // 2.5 If this is a Free Gift, prevent re-claiming a gift service that has already been completed by this client
+    if (
+      pricing.isFreeGiftApplied &&
+      hasClientUsedGiftService({
+        serviceId: liveService.id,
+        isGiftService: true,
+        usedGiftServiceIds: currentPos.usedGiftServiceIds,
+        orders,
+        posId: currentPos.id,
+      })
+    ) {
+      showToast({
+        type: 'info',
+        title: 'تم استلام الهدية مسبقاً',
+        description: 'لقد قمت باستخدام هذه الهدية المجانية وإتمامها بالفعل.',
+      });
+      return { success: false, error: 'gift_already_used' };
+    }
+
+    // 3. Balance verification for non-gift wallet purchases (free gifts are allowed even if wallet < app fee; fee is deferred silently)
+    if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet') {
       if (currentPos.walletBalance < totalDeduction) {
         showToast({
           type: 'error',
           title: 'الرصيد غير كافٍ',
-          description: `الرصيد غير كافٍ! رصيد محفظتك (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام العملية (${totalDeduction.toFixed(2)} ر.س شامل رسوم المنصة). يرجى إعادة شحن المحفظة.`
+          description: `الرصيد غير كافٍ! رصيد محفظتك (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام العملية (${totalDeduction.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
         });
         return { success: false, error: 'insufficient_balance' };
       }
     }
+
+    const giftFeeResolution = pricing.isFreeGiftApplied
+      ? resolveGiftClaimFeePayment({
+          isFreeGiftApplied: true,
+          walletBalance: currentPos.walletBalance,
+          feeAmount,
+          existingPendingFees: currentPos.pendingGiftFees,
+        })
+      : null;
+
+    const actualWalletDeduction = pricing.isFreeGiftApplied
+      ? giftFeeResolution!.walletDeductionNow
+      : (paymentMethod === 'wallet' ? totalDeduction : 0);
+    const adminFeeCollectedNow = pricing.isFreeGiftApplied
+      ? giftFeeResolution!.walletDeductionNow
+      : feeAmount;
+    const deferredFeeAdded = pricing.isFreeGiftApplied
+      ? giftFeeResolution!.deferredFeeAdded
+      : 0;
+    const nextPendingGiftFees = pricing.isFreeGiftApplied
+      ? giftFeeResolution!.newPendingGiftFees
+      : (currentPos.pendingGiftFees || 0);
 
     // 4. Handle stock & voucher code assignment/deduction atomically
     const stockDeduction = deductPackageStock({
@@ -2109,6 +2169,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? 'pending_supplier' 
       : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
 
+    const nextUsedGiftServiceIds =
+      pricing.isFreeGiftApplied && initialStatus === 'completed'
+        ? appendUsedGiftServiceId(currentPos.usedGiftServiceIds, liveService.id)
+        : currentPos.usedGiftServiceIds;
+
     const unitSuffix =
       purchaseOpts.allowPackage && effectiveUnit === 'package'
         ? ` - ${purchaseOpts.packageNameAr}`
@@ -2139,7 +2204,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       costPrice: unitPrice,
       salePriceToCustomer: resalePrice || totalDeduction * 1.15,
       feeAmount,
-      totalDeducted: totalDeduction,
+      totalDeducted: pricing.isFreeGiftApplied ? actualWalletDeduction : totalDeduction,
+      isFreeGiftOrder: pricing.isFreeGiftApplied || undefined,
+      deferredFeeAmount: deferredFeeAdded > 0 ? deferredFeeAdded : undefined,
+      deferredFeeSettled: deferredFeeAdded > 0 ? false : undefined,
       paymentMethod,
       status: initialStatus,
       customerName: customerName || 'عميل مباشر',
@@ -2149,33 +2217,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : undefined
     };
 
-    // Update balances
-    if (paymentMethod === 'wallet') {
-      setPosClients(prev => prev.map(p => {
-        if (p.id !== currentPos.id) return p;
-        return {
-          ...p,
-          walletBalance: parseFloat((p.walletBalance - totalDeduction).toFixed(2)),
-          totalSpent: parseFloat((p.totalSpent + unitPrice).toFixed(2)),
-          ordersCount: p.ordersCount + 1
-        };
-      }));
-    } else {
-      setPosClients(prev => prev.map(p => {
-        if (p.id !== currentPos.id) return p;
-        return {
-          ...p,
-          totalSpent: parseFloat((p.totalSpent + unitPrice).toFixed(2)),
-          ordersCount: p.ordersCount + 1
-        };
+    const nextPosWalletBalance = parseFloat((currentPos.walletBalance - actualWalletDeduction).toFixed(2));
+    const nextPosTotalSpent = parseFloat((currentPos.totalSpent + unitPrice).toFixed(2));
+    const nextPosOrdersCount = currentPos.ordersCount + 1;
+
+    // Update client balances, pending gift fees, and completed gift visibility
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== currentPos.id) return p;
+      return {
+        ...p,
+        walletBalance: nextPosWalletBalance,
+        totalSpent: nextPosTotalSpent,
+        ordersCount: nextPosOrdersCount,
+        pendingGiftFees: nextPendingGiftFees,
+        usedGiftServiceIds: nextUsedGiftServiceIds,
+      };
+    }));
+
+    // Add collected fee to Super Admin's wallet (deferred fees are added upon wallet recharge)
+    if (adminFeeCollectedNow > 0) {
+      setSuperAdmin(prev => ({
+        ...prev,
+        walletBalance: parseFloat((prev.walletBalance + adminFeeCollectedNow).toFixed(2))
       }));
     }
-
-    // Add fee to Super Admin's wallet
-    setSuperAdmin(prev => ({
-      ...prev,
-      walletBalance: parseFloat((prev.walletBalance + feeAmount).toFixed(2))
-    }));
 
     // Update Supplier revenue/balance
     setSuppliers(prev => prev.map(s => {
@@ -2191,12 +2256,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Record Accounting Entries for POS client
     const newAccountingEntries: AccountingEntry[] = [];
-    const balanceAfterPurchase = paymentMethod === 'wallet' 
-      ? parseFloat((currentPos.walletBalance - unitPrice).toFixed(2)) 
+    const balanceAfterPurchase = !pricing.isFreeGiftApplied && paymentMethod === 'wallet'
+      ? parseFloat((currentPos.walletBalance - unitPrice).toFixed(2))
       : currentPos.walletBalance;
 
     const purchaseTag = pricing.isFreeGiftApplied
-      ? ` [هدية مجانية من كتالوج الهدايا المجانية - السعر الأصلي للرتبة: ${pricing.originalTierPrice.toFixed(2)} ر.س]`
+      ? ` [هدية مجانية من كتالوج الهدايا المجانية]`
       : pricing.isZeroPriceFloorApplied
       ? ` [قيمة صفرية من المتجر - حد أدنى للعميل 0.50 ر.س]`
       : '';
@@ -2218,7 +2283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerName: customerName || 'عميل مباشر'
     });
 
-    if (paymentMethod === 'wallet' && feeAmount > 0) {
+    if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet' && feeAmount > 0) {
       const balanceAfterFee = parseFloat((balanceAfterPurchase - feeAmount).toFixed(2));
       newAccountingEntries.push({
         id: `acc-${Date.now()}-2`,
@@ -2227,12 +2292,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         referenceId: orderId,
         posId: currentPos.id,
         supplierId: supplier.id,
-        description: pricing.isFreeGiftApplied
-          ? `رسوم تطبيق (${pricing.appFeePercentageApplied}% من السعر الأصلي لرتبة ${currentPos.tier}: ${pricing.originalTierPrice.toFixed(2)} ر.س) على هدية مجانية (${feeAmount.toFixed(2)} ر.س)`
-          : pricing.isZeroPriceFloorApplied
+        description: pricing.isZeroPriceFloorApplied
           ? `رسوم الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س)`
           : `رسوم منصة تطبيق على عملية الشراء (${feeAmount.toFixed(2)} ر.س)`,
         debit: feeAmount,
+        credit: 0,
+        balanceAfter: balanceAfterFee
+      });
+    } else if (pricing.isFreeGiftApplied && actualWalletDeduction > 0) {
+      const balanceAfterFee = parseFloat((balanceAfterPurchase - actualWalletDeduction).toFixed(2));
+      newAccountingEntries.push({
+        id: `acc-${Date.now()}-2`,
+        date: formattedDate,
+        type: 'fee',
+        referenceId: orderId,
+        posId: currentPos.id,
+        supplierId: supplier.id,
+        description: `رسوم تطبيق على عملية (${service.nameAr})`,
+        debit: actualWalletDeduction,
         credit: 0,
         balanceAfter: balanceAfterFee
       });
@@ -2249,7 +2326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         description: `بيع للزبون (${customerName || 'مباشر'}) بقيمة ${resalePrice.toFixed(2)} ر.س (هامش ربح: ${(resalePrice - unitPrice).toFixed(2)} ر.س)`,
         debit: 0,
         credit: resalePrice,
-        balanceAfter: balanceAfterPurchase,
+        balanceAfter: nextPosWalletBalance,
         serviceName: service.nameAr,
         customerName: customerName || 'عميل مباشر'
       });
@@ -2257,55 +2334,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setAccountingEntries(prev => [...newAccountingEntries, ...prev]);
 
-    // Record entry in Admin Accounting Statement for collected platform fee
-    if (feeAmount > 0) {
-      const adminBalAfter = parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2));
-      setAdminAccountingEntries(prev => [
-        {
-          id: `adm-acc-${Date.now()}-fee`,
-          date: formattedDate,
-          type: 'fee_collected',
-          referenceId: orderId,
-          supplierId: supplier.id,
-          supplierName: `${supplier.name} (${supplier.storeName})`,
-          serviceId: service.id,
-          serviceName: service.nameAr,
-          posId: currentPos.id,
-          posCode: currentPos.posCode,
-          posName: currentPos.tradeName,
-          description: pricing.isFreeGiftApplied
-            ? `تحصيل رسوم هدية مجانية (${pricing.appFeePercentageApplied}% من ${pricing.originalTierPrice.toFixed(2)} ر.س = ${feeAmount.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
-            : pricing.isZeroPriceFloorApplied
-            ? `تحصيل الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
-            : `تحصيل رسوم منصة (${feeAmount.toFixed(2)} ر.س) على عملية شراء: ${service.nameAr} - ${pkg.name}`,
-          grossAmount: pricing.isFreeGiftApplied ? pricing.originalTierPrice : unitPrice,
-          feeAmount: feeAmount,
-          debit: 0,
-          credit: feeAmount,
-          balanceAfter: adminBalAfter,
-          notes: `تم الخصم من محفظة العميل (${currentPos.tradeName}) وتحويل الرسوم لمحفظة الإدارة`
-        },
-        ...prev
-      ]);
+    // Record entry in Admin Accounting Statement only when fee is actually collected now
+    let newAdminAccEntry: AdminAccountingEntry | null = null;
+    if (adminFeeCollectedNow > 0) {
+      const adminBalAfter = parseFloat((superAdmin.walletBalance + adminFeeCollectedNow).toFixed(2));
+      newAdminAccEntry = {
+        id: `adm-acc-${Date.now()}-fee`,
+        date: formattedDate,
+        type: 'fee_collected',
+        referenceId: orderId,
+        supplierId: supplier.id,
+        supplierName: `${supplier.name} (${supplier.storeName})`,
+        serviceId: service.id,
+        serviceName: service.nameAr,
+        posId: currentPos.id,
+        posCode: currentPos.posCode,
+        posName: currentPos.tradeName,
+        description: pricing.isFreeGiftApplied
+          ? `تحصيل رسوم هدية مجانية (${pricing.appFeePercentageApplied}% من ${pricing.originalTierPrice.toFixed(2)} ر.س = ${adminFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+          : pricing.isZeroPriceFloorApplied
+          ? `تحصيل الحد الأدنى للعملية الصفرية (${adminFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+          : `تحصيل رسوم منصة (${adminFeeCollectedNow.toFixed(2)} ر.س) على عملية شراء: ${service.nameAr} - ${pkg.name}`,
+        grossAmount: pricing.isFreeGiftApplied ? pricing.originalTierPrice : unitPrice,
+        feeAmount: adminFeeCollectedNow,
+        debit: 0,
+        credit: adminFeeCollectedNow,
+        balanceAfter: adminBalAfter,
+        notes: `تم الخصم من محفظة العميل (${currentPos.tradeName}) وتحويل الرسوم لمحفظة الإدارة`
+      };
+      setAdminAccountingEntries(prev => [newAdminAccEntry!, ...prev]);
     }
 
     // Persist to Firebase Firestore
     firestoreSync.saveOrder(newOrder).catch(console.error);
     firestoreSync.savePosClient({
       ...currentPos,
-      walletBalance: paymentMethod === 'wallet' ? parseFloat((currentPos.walletBalance - totalDeduction).toFixed(2)) : currentPos.walletBalance,
-      totalSpent: parseFloat((currentPos.totalSpent + unitPrice).toFixed(2)),
-      ordersCount: currentPos.ordersCount + 1
+      walletBalance: nextPosWalletBalance,
+      totalSpent: nextPosTotalSpent,
+      ordersCount: nextPosOrdersCount,
+      pendingGiftFees: nextPendingGiftFees,
+      usedGiftServiceIds: nextUsedGiftServiceIds,
     }).catch(console.error);
     firestoreSync.saveSupplier({
       ...supplier,
       walletBalance: parseFloat((supplier.walletBalance + unitPrice).toFixed(2))
     }).catch(console.error);
-    if (feeAmount > 0) {
+    if (adminFeeCollectedNow > 0) {
       firestoreSync.saveSuperAdmin({
         ...superAdmin,
-        walletBalance: parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2))
+        walletBalance: parseFloat((superAdmin.walletBalance + adminFeeCollectedNow).toFixed(2))
       }).catch(console.error);
+      if (newAdminAccEntry) {
+        firestoreSync.saveAdminAccountingEntry(newAdminAccEntry).catch(console.error);
+      }
     }
     for (const ent of newAccountingEntries) {
       firestoreSync.saveAccountingEntry(ent).catch(console.error);
@@ -2350,11 +2431,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         title: 'تم إرسال الطلب مع الأيدي إلى المتجر',
         description: `تم إرسال الأيدي (${deliveryDetails.playerId}) للمتجر بنجاح ليكمل الشحن من داخل اللعبة. سيتم إشعارك فور اكتمال الشحن.`
       });
+    } else if (pricing.isFreeGiftApplied) {
+      showToast({
+        type: 'success',
+        title: 'تم استلام الهدية المجانية بنجاح!',
+        description: `تم استلام وتنفيذ ${service.nameAr} بقيمة 0.00 ر.س.`
+      });
     } else {
       showToast({
         type: 'success',
         title: 'تمت العملية بنجاح!',
-        description: `تم شحن وتسليم ${service.nameAr} وخصم ${totalDeduction.toFixed(2)} ر.س (شامل الرسوم).`
+        description: `تم شحن وتسليم ${service.nameAr} وخصم ${totalDeduction.toFixed(2)} ر.س.`
       });
     }
 
@@ -2398,7 +2485,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast({
         type: 'error',
         title: 'الرصيد غير كافٍ',
-        description: `الرصيد غير كافٍ! رصيدك الحالي (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي للتحويل مع رسوم المنصة (${totalDeducted.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
+        description: `الرصيد غير كافٍ! رصيدك الحالي (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام التحويل (${totalDeducted.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
       });
       return { success: false, error: 'insufficient_balance' };
     }
@@ -2407,7 +2494,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
     const transferId = `trf-${Date.now().toString().slice(-6)}`;
 
-    // Deduct from sender, add to target
+    const targetSettlement = settlePendingGiftFeesOnRecharge({
+      currentWalletBalance: target.walletBalance,
+      rechargeAmount: amount,
+      pendingGiftFees: target.pendingGiftFees,
+    });
+    const totalFeeToAdmin = parseFloat((feeAmount + targetSettlement.settledFeeAmount).toFixed(2));
+
+    // Deduct from sender, add to target (and settle any pending deferred gift fees)
     setPosClients(prev => prev.map(p => {
       if (p.id === currentPos.id) {
         return {
@@ -2418,16 +2512,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (p.id === target.id) {
         return {
           ...p,
-          walletBalance: parseFloat((p.walletBalance + amount).toFixed(2))
+          walletBalance: targetSettlement.finalWalletBalance,
+          pendingGiftFees: targetSettlement.remainingPendingGiftFees,
         };
       }
       return p;
     }));
 
-    // Add fee to admin
+    // Add fee + any settled pending gift fees to admin
     setSuperAdmin(prev => ({
       ...prev,
-      walletBalance: parseFloat((prev.walletBalance + feeAmount).toFixed(2))
+      walletBalance: parseFloat((prev.walletBalance + totalFeeToAdmin).toFixed(2))
     }));
 
     // Accounting entries for sender & receiver
@@ -2466,15 +2561,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         description: `استلام تحويل رصيد من (${currentPos.tradeName} - ${currentPos.posCode})`,
         debit: 0,
         credit: amount,
-        balanceAfter: parseFloat((target.walletBalance + amount).toFixed(2))
+        balanceAfter: targetSettlement.finalWalletBalance
       },
       ...prev
     ]);
 
-    if (feeAmount > 0) {
-      const adminBalAfter = parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2));
-      setAdminAccountingEntries(prev => [
-        {
+    if (feeAmount > 0 || targetSettlement.settledFeeAmount > 0) {
+      const nextAdminEntries: AdminAccountingEntry[] = [];
+      let runningAdminBal = superAdmin.walletBalance;
+      if (feeAmount > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + feeAmount).toFixed(2));
+        nextAdminEntries.push({
           id: `adm-acc-${Date.now()}-trf`,
           date: formattedDate,
           type: 'fee_collected',
@@ -2489,11 +2586,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           feeAmount: feeAmount,
           debit: 0,
           credit: feeAmount,
-          balanceAfter: adminBalAfter,
+          balanceAfter: runningAdminBal,
           notes: `تحويل بقيمة ${amount.toFixed(2)} ر.س بين الوكيلين`
-        },
-        ...prev
-      ]);
+        });
+      }
+      if (targetSettlement.settledFeeAmount > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + targetSettlement.settledFeeAmount).toFixed(2));
+        const settledAdminEntry: AdminAccountingEntry = {
+          id: `adm-acc-${Date.now()}-gift-trf`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: transferId,
+          supplierId: target.supplierId,
+          supplierName: supplier.name,
+          posId: target.id,
+          posCode: target.posCode,
+          posName: target.tradeName,
+          description: `تحصيل رسوم تطبيق مؤجلة (${targetSettlement.settledFeeAmount.toFixed(2)} ر.س) بعد شحن محفظة ${target.tradeName}`,
+          grossAmount: targetSettlement.settledFeeAmount,
+          feeAmount: targetSettlement.settledFeeAmount,
+          debit: 0,
+          credit: targetSettlement.settledFeeAmount,
+          balanceAfter: runningAdminBal,
+          notes: `خصم تلقائي عند استلام تحويل رصيد للمحفظة`
+        };
+        nextAdminEntries.push(settledAdminEntry);
+        firestoreSync.saveAdminAccountingEntry(settledAdminEntry).catch(console.error);
+      }
+      setAdminAccountingEntries(prev => [...nextAdminEntries, ...prev]);
     }
 
     // Save balance transfer and updated balances in Firestore
@@ -2518,13 +2638,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     firestoreSync.savePosClient({
       ...target,
-      walletBalance: parseFloat((target.walletBalance + amount).toFixed(2))
+      walletBalance: targetSettlement.finalWalletBalance,
+      pendingGiftFees: targetSettlement.remainingPendingGiftFees,
     }).catch(console.error);
 
-    if (feeAmount > 0) {
+    if (totalFeeToAdmin > 0) {
       firestoreSync.saveSuperAdmin({
         ...superAdmin,
-        walletBalance: parseFloat((superAdmin.walletBalance + feeAmount).toFixed(2))
+        walletBalance: parseFloat((superAdmin.walletBalance + totalFeeToAdmin).toFixed(2))
       }).catch(console.error);
     }
 
@@ -2540,7 +2661,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم تحويل الرصيد وحفظه في القواعد الثلاث',
-      description: `تم إرسال ${amount.toFixed(2)} ر.س إلى ${target.tradeName} (${target.posCode}) ورسوم المنصة ${feeAmount.toFixed(2)} ر.س وحفظ العملية في كافة القواعد المرتبطة.`
+      description: `تم إرسال ${amount.toFixed(2)} ر.س إلى ${target.tradeName} (${target.posCode}) وحفظ العملية في كافة القواعد المرتبطة.`
     });
 
     return { success: true };
@@ -2987,20 +3108,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedDep : d));
 
     const targetPos = posClients.find(p => p.id === dep.posId);
-    const newBal = targetPos ? parseFloat((targetPos.walletBalance + dep.amount).toFixed(2)) : dep.amount;
+    const depositSettlement = targetPos
+      ? settlePendingGiftFeesOnRecharge({
+          currentWalletBalance: targetPos.walletBalance,
+          rechargeAmount: dep.amount,
+          pendingGiftFees: targetPos.pendingGiftFees,
+        })
+      : {
+          settledFeeAmount: 0,
+          finalWalletBalance: dep.amount,
+          remainingPendingGiftFees: 0,
+        };
+    const newBal = depositSettlement.finalWalletBalance;
 
     setPosClients(prev => prev.map(p => {
       if (p.id !== dep.posId) return p;
       return {
         ...p,
-        walletBalance: newBal
+        walletBalance: newBal,
+        pendingGiftFees: depositSettlement.remainingPendingGiftFees,
       };
     }));
 
     if (targetPos) {
       firestoreSync.savePosClient({
         ...targetPos,
-        walletBalance: newBal
+        walletBalance: newBal,
+        pendingGiftFees: depositSettlement.remainingPendingGiftFees,
       }).catch(console.error);
     }
     firestoreSync.saveDepositRequest(updatedDep).catch(console.error);
@@ -3025,30 +3159,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAccountingEntries(prev => [depAccEntry, ...prev]);
     firestoreSync.saveAccountingEntry(depAccEntry).catch(console.error);
 
-    // Record in Admin accounting log
-    setAdminAccountingEntries(prev => [
-      {
-        id: `adm-acc-${Date.now()}-dep`,
+    let nextAdminBalAfter = superAdmin.walletBalance;
+    const nextAdminEntries: AdminAccountingEntry[] = [];
+
+    if (depositSettlement.settledFeeAmount > 0) {
+      nextAdminBalAfter = parseFloat((superAdmin.walletBalance + depositSettlement.settledFeeAmount).toFixed(2));
+      setSuperAdmin(prev => ({
+        ...prev,
+        walletBalance: nextAdminBalAfter,
+      }));
+      firestoreSync.saveSuperAdmin({
+        ...superAdmin,
+        walletBalance: nextAdminBalAfter,
+      }).catch(console.error);
+
+      const settledFeeAdminEntry: AdminAccountingEntry = {
+        id: `adm-acc-${Date.now()}-gift-dep`,
         date: formattedDate,
-        type: 'deposit_received',
+        type: 'fee_collected',
         referenceId: dep.id,
         supplierId: dep.supplierId,
         supplierName: `${supplier.name} (${supplier.storeName})`,
         posId: dep.posId,
         posCode: dep.posCode,
         posName: dep.posName,
-        description: isLoan
-          ? `موافقة المتجر على طلب سلفة رصيد آجل بقيمة ${dep.amount.toFixed(2)} ر.س لنقطة البيع ${dep.posName}`
-          : `إشعار إيداع رصيد مسبق معتمد بقيمة ${dep.amount.toFixed(2)} ر.س (${dep.bankName} - حوالة ${dep.transferNumber})`,
-        grossAmount: dep.amount,
-        feeAmount: 0,
+        description: `تحصيل رسوم تطبيق مؤجلة (${depositSettlement.settledFeeAmount.toFixed(2)} ر.س) بعد شحن محفظة ${dep.posName}`,
+        grossAmount: depositSettlement.settledFeeAmount,
+        feeAmount: depositSettlement.settledFeeAmount,
         debit: 0,
-        credit: 0,
-        balanceAfter: superAdmin.walletBalance,
-        notes: `معتمد من المتجر ${supplier.name} لنقطة البيع ${dep.posName}`
-      },
-      ...prev
-    ]);
+        credit: depositSettlement.settledFeeAmount,
+        balanceAfter: nextAdminBalAfter,
+        notes: `خصم تلقائي عند شحن محفظة العميل (${dep.posName})`
+      };
+      nextAdminEntries.push(settledFeeAdminEntry);
+      firestoreSync.saveAdminAccountingEntry(settledFeeAdminEntry).catch(console.error);
+    }
+
+    // Record in Admin accounting log
+    nextAdminEntries.unshift({
+      id: `adm-acc-${Date.now()}-dep`,
+      date: formattedDate,
+      type: 'deposit_received',
+      referenceId: dep.id,
+      supplierId: dep.supplierId,
+      supplierName: `${supplier.name} (${supplier.storeName})`,
+      posId: dep.posId,
+      posCode: dep.posCode,
+      posName: dep.posName,
+      description: isLoan
+        ? `موافقة المتجر على طلب سلفة رصيد آجل بقيمة ${dep.amount.toFixed(2)} ر.س لنقطة البيع ${dep.posName}`
+        : `إشعار إيداع رصيد مسبق معتمد بقيمة ${dep.amount.toFixed(2)} ر.س (${dep.bankName} - حوالة ${dep.transferNumber})`,
+      grossAmount: dep.amount,
+      feeAmount: 0,
+      debit: 0,
+      credit: 0,
+      balanceAfter: nextAdminBalAfter,
+      notes: `معتمد من المتجر ${supplier.name} لنقطة البيع ${dep.posName}`
+    });
+    setAdminAccountingEntries(prev => [...nextAdminEntries, ...prev]);
 
     triggerConfetti();
     addNotification({
@@ -3696,6 +3864,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
     firestoreSync.saveOrder(updatedOrder).catch(console.error);
 
+    // If this completed order is a Free Gift, mark it as used so it hides from the client's store view
+    const orderService = services.find(s => s.id === targetOrder.serviceId);
+    const orderCatalog = orderService ? catalogs.find(c => c.id === orderService.catalogId) : undefined;
+    if (targetOrder.isFreeGiftOrder || isCatalogFreeGifts(orderCatalog)) {
+      setPosClients(prev => prev.map(p => {
+        if (p.id !== targetOrder.posId) return p;
+        const updatedPos: POSClient = {
+          ...p,
+          usedGiftServiceIds: appendUsedGiftServiceId(p.usedGiftServiceIds, targetOrder.serviceId),
+        };
+        firestoreSync.savePosClient(updatedPos).catch(console.error);
+        return updatedPos;
+      }));
+    }
+
     triggerConfetti();
     addNotification({
       posId: targetOrder.posId,
@@ -3719,20 +3902,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
 
-    // Refund customer
+    // Refund customer & cancel any unpaid deferred gift fee associated with this rejected order
+    const refundAmount = targetOrder.totalDeducted || 0;
+    const cancelDeferredFee =
+      targetOrder.deferredFeeAmount && !targetOrder.deferredFeeSettled
+        ? targetOrder.deferredFeeAmount
+        : 0;
+
     setPosClients(prev => prev.map(p => {
       if (p.id !== targetOrder.posId) return p;
+      const nextPending = cancelDeferredFee > 0
+        ? Math.max(0, parseFloat(((p.pendingGiftFees || 0) - cancelDeferredFee).toFixed(2)))
+        : p.pendingGiftFees;
       return {
         ...p,
-        walletBalance: parseFloat((p.walletBalance + targetOrder.totalDeducted).toFixed(2))
+        walletBalance: parseFloat((p.walletBalance + refundAmount).toFixed(2)),
+        pendingGiftFees: nextPending,
       };
     }));
 
     const clientToRefund = posClients.find(p => p.id === targetOrder.posId);
     if (clientToRefund) {
+      const nextPending = cancelDeferredFee > 0
+        ? Math.max(0, parseFloat(((clientToRefund.pendingGiftFees || 0) - cancelDeferredFee).toFixed(2)))
+        : clientToRefund.pendingGiftFees;
       firestoreSync.savePosClient({
         ...clientToRefund,
-        walletBalance: parseFloat((clientToRefund.walletBalance + targetOrder.totalDeducted).toFixed(2))
+        walletBalance: parseFloat((clientToRefund.walletBalance + refundAmount).toFixed(2)),
+        pendingGiftFees: nextPending,
       }).catch(console.error);
     }
 
@@ -3749,7 +3946,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: supplier.id,
       supplierName: supplier.name,
       title: 'إلغاء طلب وإعادة الرصيد',
-      message: `تم إلغاء الطلب #${targetOrder.id} واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س إلى محفظتك. السبب: ${reason || 'تعذر التنفيذ'}`,
+      message: targetOrder.isFreeGiftOrder
+        ? `تم إلغاء الطلب #${targetOrder.id}. السبب: ${reason || 'تعذر التنفيذ'}`
+        : `تم إلغاء الطلب #${targetOrder.id} واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س إلى محفظتك. السبب: ${reason || 'تعذر التنفيذ'}`,
       type: 'order_status',
       orderId: targetOrder.id
     });
@@ -3757,7 +3956,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'error',
       title: 'تم إلغاء الطلب وإعادة الرصيد',
-      description: `تم إلغاء الطلب واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س لمحفظة العميل.`
+      description: targetOrder.isFreeGiftOrder
+        ? `تم إلغاء الطلب #${targetOrder.id}.`
+        : `تم إلغاء الطلب واسترداد ${targetOrder.totalDeducted.toFixed(2)} ر.س لمحفظة العميل.`
     });
   };
 
@@ -4888,7 +5089,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const newBal = parseFloat((superAdmin.walletBalance - amount).toFixed(2));
+    const adminSettlement = settlePendingGiftFeesOnRecharge({
+      currentWalletBalance: target.walletBalance,
+      rechargeAmount: amount,
+      pendingGiftFees: target.pendingGiftFees,
+    });
+    const newBal = parseFloat((superAdmin.walletBalance - amount + adminSettlement.settledFeeAmount).toFixed(2));
     const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 16);
     const refId = `adm-trf-${Date.now().toString().slice(-4)}`;
 
@@ -4896,16 +5102,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       walletBalance: newBal
     }));
+    firestoreSync.saveSuperAdmin({
+      ...superAdmin,
+      walletBalance: newBal,
+    }).catch(console.error);
 
     setPosClients(prev => prev.map(p => {
       if (p.id !== target.id) return p;
-      return {
+      const updatedTarget: POSClient = {
         ...p,
-        walletBalance: parseFloat((p.walletBalance + amount).toFixed(2))
+        walletBalance: adminSettlement.finalWalletBalance,
+        pendingGiftFees: adminSettlement.remainingPendingGiftFees,
       };
+      firestoreSync.savePosClient(updatedTarget).catch(console.error);
+      return updatedTarget;
     }));
 
-    setAdminAccountingEntries(prev => [
+    const adminLogs: AdminAccountingEntry[] = [
       {
         id: `adm-acc-${Date.now()}-trf`,
         date: formattedDate,
@@ -4919,11 +5132,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         feeAmount: 0,
         debit: amount,
         credit: 0,
-        balanceAfter: newBal,
+        balanceAfter: parseFloat((superAdmin.walletBalance - amount).toFixed(2)),
         notes: `إيداع مباشر في محفظة نقطة البيع`
-      },
-      ...prev
-    ]);
+      }
+    ];
+    if (adminSettlement.settledFeeAmount > 0) {
+      const settledEntry: AdminAccountingEntry = {
+        id: `adm-acc-${Date.now()}-gift-adm`,
+        date: formattedDate,
+        type: 'fee_collected',
+        referenceId: refId,
+        supplierId: target.supplierId,
+        posId: target.id,
+        posCode: target.posCode,
+        posName: target.tradeName,
+        description: `تحصيل رسوم تطبيق مؤجلة (${adminSettlement.settledFeeAmount.toFixed(2)} ر.س) بعد شحن محفظة ${target.tradeName}`,
+        grossAmount: adminSettlement.settledFeeAmount,
+        feeAmount: adminSettlement.settledFeeAmount,
+        debit: 0,
+        credit: adminSettlement.settledFeeAmount,
+        balanceAfter: newBal,
+        notes: `خصم تلقائي عند شحن محفظة العميل من الإدارة`
+      };
+      adminLogs.unshift(settledEntry);
+      firestoreSync.saveAdminAccountingEntry(settledEntry).catch(console.error);
+    }
+
+    setAdminAccountingEntries(prev => [...adminLogs, ...prev]);
 
     triggerConfetti();
     showToast({

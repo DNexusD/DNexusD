@@ -70,7 +70,7 @@ import {
   resolvePackagePurchaseOptions,
 } from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
-import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
+import { isCatalogFreeGifts } from '../../utils/pricing';
 import {
   getCatalogsForSupplierView,
   canSupplierModifyCatalog,
@@ -83,7 +83,6 @@ export const SupplierDashboard: React.FC = () => {
     role,
     currentUser,
     supplier, 
-    superAdmin,
     catalogs, 
     services, 
     voucherWarehouses,
@@ -120,8 +119,6 @@ export const SupplierDashboard: React.FC = () => {
     () => getActiveDropdownOptions(platformSettings.statementTransactionTypes),
     [platformSettings.statementTransactionTypes]
   );
-
-  const effectiveAppFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
 
   const [showAddService, setShowAddService] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -1038,7 +1035,7 @@ export const SupplierDashboard: React.FC = () => {
                   {isGiftCat && (
                     <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-[10px] text-purple-300 font-semibold">
                       <Gift className="w-3 h-3" />
-                      <span>هدايا مجانية (0 ر.س + {effectiveAppFeePct}% رسوم الإدارة)</span>
+                      <span>هدايا مجانية (0.00 ر.س)</span>
                     </div>
                   )}
                   <div className="text-[11px] text-slate-400 line-clamp-1">{cat.descriptionAr}</div>
@@ -1091,7 +1088,7 @@ export const SupplierDashboard: React.FC = () => {
                           {isCatalogFreeGifts(cat) && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-semibold">
                               <Gift className="w-3 h-3" />
-                              <span>هدية مجانية (0 ر.س + {effectiveAppFeePct}% رسوم)</span>
+                              <span>هدية مجانية (0.00 ر.س)</span>
                             </span>
                           )}
                           {!srv.isActive && (
@@ -1159,19 +1156,19 @@ export const SupplierDashboard: React.FC = () => {
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-300">
-                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).regular} ر.س
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).regular} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-amber-400 font-semibold">
-                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).bronze} ر.س
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).bronze} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-200 font-semibold">
-                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).silver} ر.س
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).silver} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-yellow-400 font-semibold">
-                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).gold} ر.س
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).gold} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
-                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).vip} ر.س
+                                  {isCatalogFreeGifts(cat) ? '0.00 ر.س' : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).vip} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-left font-sans text-[11px]">
                                   {(() => {
@@ -1202,19 +1199,19 @@ export const SupplierDashboard: React.FC = () => {
                                     ↳ {opts.packageNameAr} ({opts.packageCodesCount} أكواد)
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {opts.packageTierPrices.regular} ر.س
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.regular} ر.س`}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {opts.packageTierPrices.bronze} ر.س
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.bronze} ر.س`}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {opts.packageTierPrices.silver} ر.س
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.silver} ر.س`}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {opts.packageTierPrices.gold} ر.س
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.gold} ر.س`}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200 font-bold">
-                                    {opts.packageTierPrices.vip} ر.س
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.vip} ر.س`}
                                   </td>
                                   <td className="py-2 px-3 text-left font-sans text-[10px] text-cyan-300">
                                     {opts.availablePackagesCount ?? 0} باقة متاحة
@@ -2589,7 +2586,7 @@ export const SupplierDashboard: React.FC = () => {
                     <span>تعيين ككتالوج الهدايا المجانية</span>
                   </div>
                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                    الخدمات داخل هذا الكاتالوج تصبح بسعر 0 ر.س للعملاء أصحاب ميزة الهدايا المجانية، وتُحتسب رسوم التطبيق بالنسبة المحددة من مدير التطبيق ({effectiveAppFeePct}%) من السعر الأصلي لرتبة العميل.
+                    الخدمات داخل هذا الكاتالوج تصبح بسعر 0.00 ر.س للعملاء أصحاب ميزة الهدايا المجانية.
                   </p>
                 </div>
               </label>

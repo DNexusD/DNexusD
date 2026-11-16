@@ -39,7 +39,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
       showToast({
         type: 'error',
         title: 'الرصيد غير كافٍ',
-        description: `الرصيد غير كافٍ! المبلغ المطلوب مع الرسوم ${totalDeducted.toFixed(2)} ر.س، ورصيدك ${currentPos.walletBalance.toFixed(2)} ر.س. يرجى إعادة شحن المحفظة.`
+        description: `الرصيد غير كافٍ! المبلغ الإجمالي المطلوب ${totalDeducted.toFixed(2)} ر.س، ورصيدك ${currentPos.walletBalance.toFixed(2)} ر.س. يرجى إعادة شحن المحفظة.`
       });
       return;
     }
@@ -78,7 +78,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
             </div>
             <div>
               <h3 className="font-bold text-base text-white">تحويل رصيد عبر المعرف أو الكيو أر</h3>
-              <p className="text-xs text-slate-400">تحويل مباشر بين العملاء مع احتساب رسوم المنصة</p>
+              <p className="text-xs text-slate-400">تحويل رصيد مباشر وفوري بين العملاء ونقاط البيع</p>
             </div>
           </div>
           <button
@@ -175,15 +175,11 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
             />
           </div>
 
-          {/* Fee Breakdown */}
+          {/* Transfer Amount Summary */}
           <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1.5">
             <div className="flex justify-between text-slate-400">
               <span>المبلغ المحول للمستلم:</span>
               <span className="font-mono tabular-nums text-white">{numAmount.toFixed(2)} ر.س</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>رسوم التحويل لمنصة التطبيق ({supplier.feePercentage}% {supplier.fixedFeeAmount > 0 ? `+ ${supplier.fixedFeeAmount} ر.س` : ''}):</span>
-              <span className="font-mono tabular-nums text-cyan-400">+{feeAmount.toFixed(2)} ر.س</span>
             </div>
             <div className="pt-2 border-t border-slate-800 flex justify-between font-bold text-sm text-white">
               <span>إجمالي الخصم من محفظتك:</span>

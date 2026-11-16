@@ -58,6 +58,7 @@ export const auth = getAuth(app);
 auth.languageCode = 'ar';
 export const functions = getFunctions(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export {
   httpsCallable,

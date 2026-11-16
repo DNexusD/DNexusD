@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { DeliveryMethod, AccountTier, ServicePackage } from '../../types';
-import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
+import { isCatalogFreeGifts } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
 import { X, Plus, Trash2, ArrowRight, Upload, Image as ImageIcon, Check, Sparkles, Gamepad2, CreditCard, Tv, Gift, Package } from 'lucide-react';
 
@@ -10,8 +10,7 @@ interface AddServiceModalProps {
 }
 
 export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => {
-  const { catalogs, supplier, superAdmin, posClients, voucherWarehouses, addService, showToast } = useApp();
-  const effectiveAppFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
+  const { catalogs, supplier, posClients, voucherWarehouses, addService, showToast } = useApp();
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
 
@@ -664,7 +663,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                   <div>
                     <span className="font-bold text-purple-300 block text-xs">إعدادات استهداف الهدايا المجانية:</span>
                     <p className="text-[11px] text-purple-200 mt-0.5">
-                      هذه الخدمة مجانية (0 ر.س للعميل)، وستُحتسب رسوم التطبيق بالنسبة المحددة (<strong className="text-purple-300">{effectiveAppFeePct}%</strong>) من السعر الأصلي. يحدد المتجر من يستهدف بالهدية:
+                      هذه الخدمة مجانية (السعر: 0.00 ر.س). يحدد المتجر من يستهدف بالهدية:
                     </p>
                   </div>
                 </div>

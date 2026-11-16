@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  appendUsedGiftServiceId,
   calculateBaseSupplierFee,
   calculateServicePurchasePricing,
   getEffectiveAppFeePercentage,
   getPackageTierPrice,
+  hasClientUsedGiftService,
   isCatalogFreeGifts,
+  resolveGiftClaimFeePayment,
+  settlePendingGiftFeesOnRecharge,
+  validateFreeGiftWalletBalance,
   ZERO_PRICE_CLIENT_FLOOR_SAR,
 } from './pricing';
 import { Catalog, ServicePackage, SuperAdmin, Supplier } from '../types';
@@ -281,4 +286,129 @@ test('getPackageTierPrice and calculateServicePurchasePricing use packageTierPri
   // Even if purchaseUnit defaults to single_code, package-only falls back to packageTierPrices
   assert.equal(getPackageTierPrice(packageOnlyPkg, 'silver', 'single_code'), 85);
 });
+
+test('validateFreeGiftWalletBalance allows claiming free gifts regardless of wallet balance', () => {
+  const emptyWallet = validateFreeGiftWalletBalance({
+    isFreeGiftApplied: true,
+    walletBalance: 0,
+    totalAmount: 0.6,
+  });
+  assert.equal(emptyWallet.allowed, true);
+
+  const sufficientWallet = validateFreeGiftWalletBalance({
+    isFreeGiftApplied: true,
+    walletBalance: 5,
+    totalAmount: 0.6,
+  });
+  assert.equal(sufficientWallet.allowed, true);
+});
+
+test('resolveGiftClaimFeePayment deducts fee immediately when wallet has enough, and defers silently when insufficient', () => {
+  // Sufficient wallet balance -> deduct immediately
+  const paidNow = resolveGiftClaimFeePayment({
+    isFreeGiftApplied: true,
+    walletBalance: 10,
+    feeAmount: 0.6,
+    existingPendingFees: 0,
+  });
+  assert.equal(paidNow.isDeferred, false);
+  assert.equal(paidNow.walletDeductionNow, 0.6);
+  assert.equal(paidNow.deferredFeeAdded, 0);
+  assert.equal(paidNow.newWalletBalance, 9.4);
+  assert.equal(paidNow.newPendingGiftFees, 0);
+
+  // Empty or insufficient wallet -> allow gift, keep wallet non-negative, record deferred fee
+  const deferredEmpty = resolveGiftClaimFeePayment({
+    isFreeGiftApplied: true,
+    walletBalance: 0,
+    feeAmount: 0.6,
+    existingPendingFees: 0,
+  });
+  assert.equal(deferredEmpty.isDeferred, true);
+  assert.equal(deferredEmpty.walletDeductionNow, 0);
+  assert.equal(deferredEmpty.deferredFeeAdded, 0.6);
+  assert.equal(deferredEmpty.newWalletBalance, 0);
+  assert.equal(deferredEmpty.newPendingGiftFees, 0.6);
+
+  // Partial insufficient wallet (0.25 < 0.60) -> keeps 0.25 and queues 0.60
+  const deferredPartial = resolveGiftClaimFeePayment({
+    isFreeGiftApplied: true,
+    walletBalance: 0.25,
+    feeAmount: 0.6,
+    existingPendingFees: 0.5,
+  });
+  assert.equal(deferredPartial.isDeferred, true);
+  assert.equal(deferredPartial.walletDeductionNow, 0);
+  assert.equal(deferredPartial.newWalletBalance, 0.25);
+  assert.equal(deferredPartial.newPendingGiftFees, 1.1);
+});
+
+test('settlePendingGiftFeesOnRecharge automatically deducts pending gift fees when wallet is topped up', () => {
+  const fullSettle = settlePendingGiftFeesOnRecharge({
+    currentWalletBalance: 0,
+    rechargeAmount: 10,
+    pendingGiftFees: 1.1,
+  });
+  assert.equal(fullSettle.settledFeeAmount, 1.1);
+  assert.equal(fullSettle.finalWalletBalance, 8.9);
+  assert.equal(fullSettle.remainingPendingGiftFees, 0);
+
+  const partialSettle = settlePendingGiftFeesOnRecharge({
+    currentWalletBalance: 0.2,
+    rechargeAmount: 0.5,
+    pendingGiftFees: 1.1,
+  });
+  assert.equal(partialSettle.settledFeeAmount, 0.7);
+  assert.equal(partialSettle.finalWalletBalance, 0);
+  assert.equal(partialSettle.remainingPendingGiftFees, 0.4);
+});
+
+test('hasClientUsedGiftService hides gift services once completed and preserves unfulfilled or non-gift services', () => {
+  assert.equal(
+    hasClientUsedGiftService({
+      serviceId: 'srv-gift-1',
+      isGiftService: true,
+      usedGiftServiceIds: [],
+      orders: [{ posId: 'pos-1', serviceId: 'srv-gift-1', status: 'pending_supplier' }],
+      posId: 'pos-1',
+    }),
+    false
+  );
+
+  assert.equal(
+    hasClientUsedGiftService({
+      serviceId: 'srv-gift-1',
+      isGiftService: true,
+      usedGiftServiceIds: [],
+      orders: [{ posId: 'pos-1', serviceId: 'srv-gift-1', status: 'completed' }],
+      posId: 'pos-1',
+    }),
+    true
+  );
+
+  assert.equal(
+    hasClientUsedGiftService({
+      serviceId: 'srv-gift-2',
+      isGiftService: true,
+      usedGiftServiceIds: appendUsedGiftServiceId(undefined, 'srv-gift-2'),
+      orders: [],
+      posId: 'pos-1',
+    }),
+    true
+  );
+
+  // Non-gift services stay visible even after completed orders
+  assert.equal(
+    hasClientUsedGiftService({
+      serviceId: 'srv-pubg',
+      isGiftService: false,
+      usedGiftServiceIds: ['srv-pubg'],
+      orders: [{ posId: 'pos-1', serviceId: 'srv-pubg', status: 'completed' }],
+      posId: 'pos-1',
+    }),
+    false
+  );
+});
+
+
 

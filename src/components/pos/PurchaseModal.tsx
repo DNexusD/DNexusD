@@ -24,7 +24,8 @@ import {
   Sparkles,
   MessageSquare,
   Gift,
-  Package
+  Package,
+  FileDown
 } from 'lucide-react';
 import { calculateServicePurchasePricing } from '../../utils/pricing';
 import {
@@ -34,6 +35,7 @@ import {
   mergeWarehouseOptionsIntoPackage,
   resolvePackagePurchaseOptions
 } from '../../utils/voucherWarehouses';
+import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 
 interface PurchaseModalProps {
   service: DigitalService;
@@ -136,11 +138,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const [orderProcessing, setOrderProcessing] = useState(false);
   const [orderStage, setOrderStage] = useState<'in_progress' | 'completed' | null>(null);
   const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
+  const [completedOrderDate, setCompletedOrderDate] = useState<string>('');
   const [completedVoucherCode, setCompletedVoucherCode] = useState<string | null>(null);
   const [completedVoucherCodes, setCompletedVoucherCodes] = useState<string[]>([]);
   const [completedDeductedCount, setCompletedDeductedCount] = useState<number>(1);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
+  const [isExportingVoucherPdf, setIsExportingVoucherPdf] = useState(false);
   const [verificationApprovalDone, setVerificationApprovalDone] = useState(selectedMethod !== 'account_login');
 
   // Current tier pricing calculation (with 0.5 SAR zero-price floor & Free Gifts admin fee % rule)
@@ -153,6 +157,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     clientTier: currentTier,
     purchaseUnit: effectivePurchaseUnit,
     clientCanViewGifts: Boolean(currentPos.canViewGifts),
+    clientPosId: currentPos.id,
+    service: liveService,
     catalog: serviceCatalog,
     supplier: activeSup,
     superAdmin
@@ -160,6 +166,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const unitPrice = selectedPricing.unitPrice;
   const feeAmount = selectedPricing.feeAmount;
   const totalAmount = selectedPricing.totalAmount;
+  const clientDisplayedTotal = selectedPricing.isFreeGiftApplied ? 0 : totalAmount;
 
   const selectedPkgStock = selectedPkg ? getPackageAvailableStock(selectedPkg, voucherWarehouses) : undefined;
   const selectedPkgIsOutOfStock = selectedPkg
@@ -251,7 +258,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       // Send whatever is typed in accountEmail and accountPassword directly to supplier
     }
 
-    if (paymentMethod === 'wallet' && currentPos.walletBalance < totalAmount) {
+    if (!selectedPricing.isFreeGiftApplied && paymentMethod === 'wallet' && currentPos.walletBalance < totalAmount) {
       showToast({
         type: 'error',
         title: 'الرصيد غير كافٍ',
@@ -303,6 +310,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       if (result.success) {
         setOrderStage('completed');
         setCompletedOrderId(result.orderId || 'ORD-DONE');
+        setCompletedOrderDate(new Date().toISOString().replace('T', ' ').substring(0, 16));
         const codesList = result.voucherCodes && result.voucherCodes.length > 0
           ? result.voucherCodes
           : result.voucherCode
@@ -318,11 +326,78 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   };
 
   const copyVoucherToClipboard = () => {
-    if (completedVoucherCode) {
-      navigator.clipboard.writeText(completedVoucherCode);
+    const textToCopy =
+      completedVoucherCodes.length > 0
+        ? completedVoucherCodes.join('\n')
+        : completedVoucherCode || '';
+    if (textToCopy) {
+      navigator.clipboard.writeText(textToCopy);
       setCopiedCode(true);
-      showToast({ type: 'success', title: 'تم النسخ', description: 'تم نسخ كود القسيمة للحافظة' });
+      showToast({
+        type: 'success',
+        title: 'تم النسخ',
+        description:
+          completedVoucherCodes.length > 1
+            ? `تم نسخ جميع الأكواد (${completedVoucherCodes.length}) للحافظة`
+            : 'تم نسخ كود القسيمة للحافظة'
+      });
       setTimeout(() => setCopiedCode(false), 3000);
+    }
+  };
+
+  const handleSaveVoucherPdf = async () => {
+    if (isExportingVoucherPdf || completedVoucherCodes.length === 0) return;
+    setIsExportingVoucherPdf(true);
+    try {
+      const result = await downloadVoucherCodesPdf({
+        orderId: completedOrderId || 'ORD-DONE',
+        orderDate: completedOrderDate || new Date().toISOString().replace('T', ' ').substring(0, 16),
+        serviceName: liveService.nameAr,
+        packageName: selectedPkg.name,
+        packageTitleAr: selectedPkgOpts?.packageNameAr,
+        packageDescription: selectedPkg.description,
+        purchaseUnit: effectivePurchaseUnit,
+        codes: completedVoucherCodes,
+        unitPrice: clientDisplayedTotal,
+        feeAmount: 0,
+        totalAmount: clientDisplayedTotal,
+        paymentMethod,
+        customerName: customerName.trim() || undefined,
+        customerPhone: customerPhone.trim() || undefined,
+        supplier: {
+          storeName: activeSup.storeName || activeSup.name,
+          name: activeSup.name,
+          phone: activeSup.phone,
+          email: activeSup.email,
+          country: activeSup.country,
+          city: activeSup.city,
+          logoUrl: activeSup.logoUrl,
+        },
+        client: {
+          tradeName: currentPos.tradeName,
+          ownerName: currentPos.ownerName,
+          posCode: currentPos.posCode,
+          phone: currentPos.phone,
+          email: currentPos.email,
+          country: currentPos.country,
+          city: currentPos.city,
+          tierNameAr: currentTierInfo.nameAr,
+          logoUrl: currentPos.logoUrl,
+        },
+      });
+      showToast({
+        type: 'success',
+        title: 'تم حفظ ملف الأكواد PDF',
+        description: `تم حفظ الملف (${result.filename}) متضمناً ${result.codesCount} ${result.codesCount === 1 ? 'كود' : 'أكواد'}.`,
+      });
+    } catch {
+      showToast({
+        type: 'error',
+        title: 'تعذر حفظ ملف PDF',
+        description: 'حدث خطأ أثناء تجهيز ملف PDF، يرجى المحاولة مرة أخرى.',
+      });
+    } finally {
+      setIsExportingVoucherPdf(false);
     }
   };
 
@@ -354,7 +429,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 {service.nameAr}
               </h3>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
-                <span>المتجر: {supplier.name}</span>
+                <span>المتجر: {activeSup.storeName || activeSup.name}</span>
                 <span>·</span>
                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${currentTierInfo.badgeColor} ${currentTierInfo.textColor}`}>
                   رتبتك: {currentTierInfo.nameAr}
@@ -383,7 +458,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 <h4 className="text-xl font-bold text-white">العملية قيد الإرسال...</h4>
                 <p className="text-sm text-slate-400 max-w-sm">
                   {selectedMethod === 'player_id' 
-                    ? `جاري خصم المبلغ وإرسال طلب الشحن مع الأيدي إلى المتجر (${supplier.name}) للشحن من اللعبة.`
+                    ? `جاري خصم المبلغ وإرسال طلب الشحن مع الأيدي إلى المتجر (${activeSup.storeName || activeSup.name}) للشحن من اللعبة.`
                     : 'يتم الآن إرسال بيانات الشراء والتحقق من حساب المستلم وخصم المبلغ.'}
                 </p>
               </div>
@@ -410,7 +485,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       تم إرسال الطلب مع الأيدي إلى المتجر بنجاح!
                     </h4>
                     <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
-                      تم استلام طلب الشحن وإرفاق معرّف اللاعب (الأيدي) وإرساله مباشرة إلى المتجر <strong className="text-amber-400">({supplier.name})</strong> ليكمل شحن الحساب من داخل اللعبة.
+                      تم استلام طلب الشحن وإرفاق معرّف اللاعب (الأيدي) وإرساله مباشرة إلى المتجر <strong className="text-amber-400">({activeSup.storeName || activeSup.name})</strong> ليكمل شحن الحساب من داخل اللعبة.
                     </p>
                   </div>
 
@@ -467,9 +542,15 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
 
                   <div className="space-y-1">
-                    <h4 className="text-[20px] font-bold text-white">تم إرسال الطلب بنجاح وانتظر إرسال كود التحقق</h4>
+                    <h4 className="text-[20px] font-bold text-white">
+                      {selectedMethod === 'voucher_code'
+                        ? completedVoucherCodes.length > 1 || effectivePurchaseUnit === 'package'
+                          ? `تم شراء باقة الأكواد (${completedVoucherCodes.length} أكواد) بنجاح`
+                          : 'تم شراء كود الشحن وتسليمه بنجاح'
+                        : 'تم إرسال الطلب بنجاح وانتظر إرسال كود التحقق'}
+                    </h4>
                     <p className="text-xs sm:text-sm text-cyan-300 font-medium">
-                      تمت عملية إرسال الطلب بنجاح، رقم الطلب #{completedOrderId}
+                      رقم الطلب #{completedOrderId}
                     </p>
                   </div>
 
@@ -478,31 +559,36 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                     <div className="w-full p-4 rounded-2xl bg-slate-950 border border-amber-500/40 space-y-3">
                       <div className="text-xs text-slate-400 flex items-center justify-between">
                         <span>
-                          {completedVoucherCodes.length > 1
-                            ? `أكواد الباقة المستلمة (${completedVoucherCodes.length} أكواد):`
+                          {completedVoucherCodes.length > 1 || effectivePurchaseUnit === 'package'
+                            ? `أكواد الباقة المستلمة (${completedVoucherCodes.length} ${completedVoucherCodes.length === 1 ? 'كود' : 'أكواد'}):`
                             : 'كود القسيمة الرقمية الجاهز للنسخ:'}
                         </span>
                         <span className="text-amber-400 font-bold">
-                          {completedVoucherCodes.length > 1 ? 'تسليم فوري باقة' : 'تسليم فوري كود'}
+                          {completedVoucherCodes.length > 1 || effectivePurchaseUnit === 'package'
+                            ? 'تسليم فوري باقة'
+                            : 'تسليم فوري كود'}
                         </span>
                       </div>
 
                       {completedVoucherCodes.length > 1 ? (
-                        <div className="space-y-2">
+                        <div className="space-y-2.5">
                           <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
                             {completedVoucherCodes.map((codeItem, idx) => (
                               <div
                                 key={`${codeItem}-${idx}`}
                                 className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs font-bold text-amber-300 select-all"
                               >
-                                <span dir="ltr">{codeItem}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-slate-500">#{idx + 1}</span>
+                                  <span dir="ltr">{codeItem}</span>
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => {
                                     navigator.clipboard.writeText(codeItem);
                                     showToast({ type: 'success', title: 'تم النسخ', description: `تم نسخ الكود #${idx + 1}` });
                                   }}
-                                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold flex items-center gap-1"
+                                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
                                 >
                                   <Copy className="w-3 h-3" />
                                   <span>نسخ</span>
@@ -510,27 +596,52 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               </div>
                             ))}
                           </div>
-                          <button
-                            type="button"
-                            onClick={copyVoucherToClipboard}
-                            className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>{copiedCode ? 'تم نسخ جميع الأكواد!' : `نسخ جميع الأكواد (${completedVoucherCodes.length})`}</span>
-                          </button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800 font-mono text-base font-bold text-amber-300 select-all">
-                          <span>{completedVoucherCode}</span>
+                          <span dir="ltr">{completedVoucherCode}</span>
                           <button
+                            type="button"
                             onClick={copyVoucherToClipboard}
-                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                           >
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>{copiedCode ? 'تم النسخ!' : 'نسخ الكود'}</span>
+                            <Copy className="w-3.5 h-3.5 text-amber-400" />
+                            <span>{copiedCode ? 'تم النسخ!' : 'نسخ'}</span>
                           </button>
                         </div>
                       )}
+
+                      {/* Primary Voucher Package Actions: Copy All (count) + Save PDF */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={copyVoucherToClipboard}
+                          className="w-full py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>
+                            {copiedCode
+                              ? `تم نسخ جميع الأكواد (${completedVoucherCodes.length})!`
+                              : `نسخ جميع الأكواد (${completedVoucherCodes.length})`}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleSaveVoucherPdf}
+                          disabled={isExportingVoucherPdf}
+                          className="w-full py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                        >
+                          {isExportingVoucherPdf ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileDown className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {isExportingVoucherPdf ? 'جاري تجهيز PDF...' : 'حفظ الأكواد كملف PDF'}
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </>
@@ -571,12 +682,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
                 )}
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
-                  <span>المتجر المسؤول عن شحن اللعبة:</span>
-                  <span className="font-semibold text-white">{supplier.name}</span>
+                  <span>المتجر البائع:</span>
+                  <span className="font-semibold text-white">{activeSup.storeName || activeSup.name}</span>
                 </div>
                 <div className="flex justify-between py-1.5 font-bold text-sm text-emerald-400">
                   <span>سعر الخدمة الإجمالي:</span>
-                  <span className="font-mono tabular-nums">{totalAmount.toFixed(2)} ر.س</span>
+                  <span className="font-mono tabular-nums">{clientDisplayedTotal.toFixed(2)} ر.س</span>
                 </div>
               </div>
 
@@ -707,6 +818,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       clientTier: currentTier,
                       purchaseUnit: 'single_code',
                       clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                      clientPosId: currentPos.id,
+                      service: liveService,
                       catalog: serviceCatalog,
                       supplier: activeSup,
                       superAdmin
@@ -717,6 +830,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           clientTier: currentTier,
                           purchaseUnit: 'package',
                           clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                          clientPosId: currentPos.id,
+                          service: liveService,
                           catalog: serviceCatalog,
                           supplier: activeSup,
                           superAdmin
@@ -727,7 +842,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       pkgOpts.allowSingleCode || !packagePricing
                         ? singlePricing
                         : packagePricing;
-                    const pkgTotalWithFee = displayPricing.totalAmount.toFixed(2);
+                    const pkgTotalWithFee = (displayPricing.isFreeGiftApplied ? 0 : displayPricing.totalAmount).toFixed(2);
                     const savings = Math.max(0, displayPricing.originalTierPrice - displayPricing.unitPrice);
 
                     return (
@@ -783,7 +898,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             )}
                             {displayPricing.isFreeGiftApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                                🎁 هدية مجانية (0 ر.س + {displayPricing.appFeePercentageApplied}% رسوم)
+                                🎁 هدية مجانية (0.00 ر.س)
                               </span>
                             ) : displayPricing.isZeroPriceFloorApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -799,8 +914,6 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               <span>السعر الأصلي لرتبتك: {displayPricing.originalTierPrice.toFixed(2)} ر.س</span>
                               <span>·</span>
                               <span>سعر الهدية: 0.00 ر.س</span>
-                              <span>·</span>
-                              <span>رسوم التطبيق ({displayPricing.appFeePercentageApplied}%): {displayPricing.feeAmount.toFixed(2)} ر.س</span>
                               {savings > 0 && (
                                 <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
                               )}
@@ -817,12 +930,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         <div className="text-left shrink-0 pl-2 space-y-0.5">
                           {pkgOpts.allowSingleCode && (
                             <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                              {singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span>
+                              {(singlePricing.isFreeGiftApplied ? 0 : singlePricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span>
                             </div>
                           )}
                           {pkgOpts.allowPackage && packagePricing && (
                             <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? 'text-cyan-300' : 'text-base text-amber-400'}`}>
-                              {packagePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span>
+                              {(packagePricing.isFreeGiftApplied ? 0 : packagePricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span>
                             </div>
                           )}
                           {!pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
@@ -844,6 +957,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   clientTier: currentTier,
                   purchaseUnit: 'single_code',
                   clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                  clientPosId: currentPos.id,
+                  service: liveService,
                   catalog: serviceCatalog,
                   supplier: activeSup,
                   superAdmin
@@ -853,6 +968,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   clientTier: currentTier,
                   purchaseUnit: 'package',
                   clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                  clientPosId: currentPos.id,
+                  service: liveService,
                   catalog: serviceCatalog,
                   supplier: activeSup,
                   superAdmin
@@ -892,7 +1009,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             </div>
                           </div>
                           <div className="font-mono font-bold text-sm text-amber-400 shrink-0">
-                            {singleOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                            {(singleOptPricing.isFreeGiftApplied ? 0 : singleOptPricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
                           </div>
                         </button>
                       )}
@@ -921,7 +1038,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             </div>
                           </div>
                           <div className="font-mono font-bold text-sm text-cyan-300 shrink-0">
-                            {packageOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                            {(packageOptPricing.isFreeGiftApplied ? 0 : packageOptPricing.totalAmount).toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
                           </div>
                       </button>
                     </div>
@@ -1160,7 +1277,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       type="number"
                       value={resalePrice}
                       onChange={e => setResalePrice(e.target.value ? Number(e.target.value) : '')}
-                      placeholder={`مثال: ${(unitPrice * 1.2).toFixed(0)} ر.س`}
+                      placeholder={`مثال: ${Math.max(1, clientDisplayedTotal * 1.2).toFixed(0)} ر.س`}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-500"
                     />
                   </div>
@@ -1272,10 +1389,6 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       <span>السعر الأصلي لرتبة ({currentTierInfo.nameAr}):</span>
                       <span className="font-mono line-through">{selectedPricing.originalTierPrice.toFixed(2)} ر.س</span>
                     </div>
-                    <div className="flex justify-between text-cyan-300 text-[11px]">
-                      <span>رسوم التطبيق ({selectedPricing.appFeePercentageApplied}% من السعر الأصلي للرتبة):</span>
-                      <span className="font-mono font-bold">{selectedPricing.feeAmount.toFixed(2)} ر.س</span>
-                    </div>
                   </>
                 )}
                 {selectedPricing.isZeroPriceFloorApplied && (
@@ -1293,7 +1406,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 <div className="flex justify-between font-bold text-sm text-white pt-1 border-t border-slate-800/70">
                   <span>سعر الخدمة الإجمالي للدفع:</span>
                   <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                    {totalAmount.toFixed(2)} ر.س
+                    {clientDisplayedTotal.toFixed(2)} ر.س
                   </span>
                 </div>
               </div>
@@ -1309,16 +1422,20 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 type="button"
                 disabled={orderProcessing || selectedPkgIsOutOfStock}
                 onClick={handleConfirmPurchase}
-                className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all ${
+                className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
                   selectedPkgIsOutOfStock
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    : selectedPricing.isFreeGiftApplied
+                    ? 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-white shadow-purple-500/20 active:scale-[0.98]'
                     : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 active:scale-[0.98]'
                 }`}
               >
                 <span>
                   {selectedPkgIsOutOfStock
                     ? 'نفد المخزون - غير متاح حالياً'
-                    : `تأكيد دفع ${totalAmount.toFixed(2)} ر.س وشحن فوري`}
+                    : selectedPricing.isFreeGiftApplied
+                    ? 'استلام الهدية المجانية (0.00 ر.س)'
+                    : `تأكيد دفع ${clientDisplayedTotal.toFixed(2)} ر.س وشحن فوري`}
                 </span>
               </button>
             </>

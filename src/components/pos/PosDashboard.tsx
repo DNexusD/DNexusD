@@ -29,7 +29,9 @@ import {
   ShieldCheck,
   Gift,
   Bell,
-  Package
+  Package,
+  FileDown,
+  Loader2
 } from 'lucide-react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
@@ -41,7 +43,7 @@ import { IncomingTransfersReviewView } from './IncomingTransfersReviewView';
 import { SupplierContactLinks } from '../common/SupplierContactLinks';
 import { getLoanRemainingAmount, isLoanDeposit } from '../../utils/loanRepayments';
 import { getIncomingLoanRepaymentsForPos, getIncomingTransfersForPos, hasSupplierTransferPrivilege } from '../../utils/bankAccounts';
-import { calculateServicePurchasePricing, getEffectiveAppFeePercentage, isCatalogFreeGifts } from '../../utils/pricing';
+import { calculateServicePurchasePricing, hasClientUsedGiftService, isCatalogFreeGifts } from '../../utils/pricing';
 import { getCatalogsForPosView } from '../../utils/platformSettings';
 import {
   getPackageAvailableStock,
@@ -49,10 +51,10 @@ import {
   mergeWarehouseOptionsIntoPackage,
   resolvePackagePurchaseOptions,
 } from '../../utils/voucherWarehouses';
+import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 
 export const PosDashboard: React.FC = () => {
   const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
-  const giftAppFeePct = getEffectiveAppFeePercentage(currentPosSupplier || supplier, superAdmin);
 
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
   const [searchService, setSearchService] = useState('');
@@ -64,6 +66,7 @@ export const PosDashboard: React.FC = () => {
   const [showQrModal, setShowQrModal] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [copiedPosCode, setCopiedPosCode] = useState(false);
+  const [exportingOrderPdfId, setExportingOrderPdfId] = useState<string | null>(null);
 
   const tier = TIERS_CONFIG[currentPos.tier];
   const canReceiveSupplierTransfers = hasSupplierTransferPrivilege(currentPos, supplierBankAccounts);
@@ -78,7 +81,31 @@ export const PosDashboard: React.FC = () => {
 
   const activePosSupplierId = (currentPosSupplier || supplier).id;
   const visibleCatalogs = getCatalogsForPosView(catalogs, activePosSupplierId, Boolean(currentPos.canViewGifts));
-  const freeGiftsCatalog = visibleCatalogs.find(c => isCatalogFreeGifts(c));
+  const giftCatalogs = visibleCatalogs.filter(c => isCatalogFreeGifts(c));
+  const freeGiftsCatalog = giftCatalogs[0];
+  const freeGiftsTargetId = freeGiftsCatalog?.id || 'free_gifts';
+  const freeGiftsCount = services.filter(srv => {
+    if (!srv.isActive) return false;
+    if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
+    const srvCat = catalogs.find(c => c.id === srv.catalogId);
+    const isGift = isCatalogFreeGifts(srvCat);
+    if (!isGift || !currentPos.canViewGifts) return false;
+    if (
+      hasClientUsedGiftService({
+        serviceId: srv.id,
+        isGiftService: true,
+        usedGiftServiceIds: currentPos.usedGiftServiceIds,
+        orders,
+        posId: currentPos.id,
+      })
+    ) {
+      return false;
+    }
+    return true;
+  }).length;
+  const isFreeGiftsSelected =
+    selectedCatalogId === 'free_gifts' ||
+    giftCatalogs.some(c => c.id === selectedCatalogId);
 
   useEffect(() => {
     if (activeNavTab === 'incoming_transfers' && !canReceiveSupplierTransfers) {
@@ -95,7 +122,7 @@ export const PosDashboard: React.FC = () => {
   useEffect(() => {
     if (!currentPos.canViewGifts && selectedCatalogId !== 'all') {
       const selCat = catalogs.find(c => c.id === selectedCatalogId);
-      if (isCatalogFreeGifts(selCat)) {
+      if (selectedCatalogId === 'free_gifts' || isCatalogFreeGifts(selCat)) {
         setSelectedCatalogId('all');
       }
     }
@@ -154,13 +181,97 @@ export const PosDashboard: React.FC = () => {
     setTimeout(() => setCopiedPosCode(false), 2500);
   };
 
+  const handleDownloadOrderVoucherPdf = async (
+    order: typeof orders[0],
+    codesList: string[]
+  ) => {
+    if (exportingOrderPdfId || codesList.length === 0) return;
+    setExportingOrderPdfId(order.id);
+    try {
+      const orderSup = currentPosSupplier || supplier;
+      const srv = services.find((s) => s.id === order.serviceId);
+      const srvCat = srv ? catalogs.find((c) => c.id === srv.catalogId) : undefined;
+      const isFreeGiftOrder = Boolean(order.isFreeGiftOrder || (srvCat && isCatalogFreeGifts(srvCat) && order.costPrice === 0));
+      const rawPkg = srv?.packages.find((p) => p.id === order.packageId);
+      const pkg = rawPkg ? mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses) : undefined;
+      const pkgOpts = pkg ? resolvePackagePurchaseOptions(pkg, voucherWarehouses) : undefined;
+      const clientOrderTotal = isFreeGiftOrder ? 0 : order.totalDeducted;
+
+      const result = await downloadVoucherCodesPdf({
+        orderId: order.id,
+        orderDate: order.date,
+        serviceName: order.serviceName,
+        packageName: order.packageName,
+        packageTitleAr: pkgOpts?.packageNameAr,
+        packageDescription: pkg?.description,
+        purchaseUnit: order.purchaseUnit || (codesList.length > 1 ? 'package' : 'single_code'),
+        codes: codesList,
+        unitPrice: clientOrderTotal,
+        feeAmount: 0,
+        totalAmount: clientOrderTotal,
+        paymentMethod: order.paymentMethod,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        supplier: {
+          storeName: orderSup.storeName || orderSup.name,
+          name: orderSup.name,
+          phone: orderSup.phone,
+          email: orderSup.email,
+          country: orderSup.country,
+          city: orderSup.city,
+          logoUrl: orderSup.logoUrl,
+        },
+        client: {
+          tradeName: currentPos.tradeName,
+          ownerName: currentPos.ownerName,
+          posCode: currentPos.posCode,
+          phone: currentPos.phone,
+          email: currentPos.email,
+          country: currentPos.country,
+          city: currentPos.city,
+          tierNameAr: tier.nameAr,
+          logoUrl: currentPos.logoUrl,
+        },
+      });
+      showToast({
+        type: 'success',
+        title: 'تم حفظ ملف الأكواد PDF',
+        description: `تم تنزيل الملف (${result.filename}) متضمناً ${result.codesCount} ${result.codesCount === 1 ? 'كود' : 'أكواد'}.`,
+      });
+    } catch {
+      showToast({
+        type: 'error',
+        title: 'تعذر حفظ ملف PDF',
+        description: 'حدث خطأ أثناء تجهيز ملف PDF، يرجى المحاولة مرة أخرى.',
+      });
+    } finally {
+      setExportingOrderPdfId(null);
+    }
+  };
+
   // Filter services strictly by active POS supplier ID
   const filteredServices = services.filter(srv => {
     if (!srv.isActive) return false;
     if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
-    if (isCatalogFreeGifts(srvCat) && !currentPos.canViewGifts) return false;
-    if (selectedCatalogId !== 'all' && srv.catalogId !== selectedCatalogId) return false;
+    const isGift = isCatalogFreeGifts(srvCat);
+    if (isGift && !currentPos.canViewGifts) return false;
+    if (
+      hasClientUsedGiftService({
+        serviceId: srv.id,
+        isGiftService: isGift,
+        usedGiftServiceIds: currentPos.usedGiftServiceIds,
+        orders,
+        posId: currentPos.id,
+      })
+    ) {
+      return false;
+    }
+    if (isFreeGiftsSelected) {
+      if (!currentPos.canViewGifts || !isGift) return false;
+    } else if (selectedCatalogId !== 'all' && srv.catalogId !== selectedCatalogId) {
+      return false;
+    }
     if (searchService.trim()) {
       const q = searchService.toLowerCase();
       const matchName = srv.nameAr.toLowerCase().includes(q);
@@ -305,7 +416,7 @@ export const PosDashboard: React.FC = () => {
             >
               <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
                 <Gift className="w-4 h-4 text-purple-300" />
-                <span>🎁 هدايا وعروض مجانية متاحة (سعر 0 ر.س + {giftAppFeePct}% رسوم)</span>
+                <span>🎁 هدايا وعروض مجانية متاحة (السعر: 0.00 ر.س)</span>
               </div>
               <div className="text-[10px] text-purple-200/80 mt-0.5">
                 {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر أو تواصل معه لتفعيل هديتك والعرض المجاني المخصص لك.'}
@@ -546,53 +657,85 @@ export const PosDashboard: React.FC = () => {
       {/* TAB 1: STORE VIEW */}
       {activeNavTab === 'store' && (
         <div className="space-y-6">
-          {/* Catalogs Horizontal Selector & Search */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-1.5 pb-1 text-xs">
+          {/* Catalogs Horizontal Selector, Free Gifts & Search */}
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3 shadow-sm">
+            {/* Search Input Row */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchService}
+                  onChange={e => setSearchService(e.target.value)}
+                  placeholder="ابحث عن لعبة أو بطاقة أو هدية مجانية..."
+                  className="w-full bg-slate-950/90 border border-slate-800 rounded-xl pr-10 pl-9 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 transition-colors"
+                />
+                {searchService.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchService('')}
+                    title="مسح البحث"
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-400 px-3 py-2 rounded-xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between sm:justify-center gap-2 shrink-0">
+                <span>النتائج المتاحة:</span>
+                <span className="font-mono font-bold text-amber-400">{filteredServices.length}</span>
+              </div>
+            </div>
+
+            {/* Catalogs & Free Gifts Row */}
+            <div className="flex flex-wrap items-center gap-1.5 text-xs pt-0.5">
               <button
+                type="button"
                 onClick={() => setSelectedCatalogId('all')}
-                className={`px-3 py-1.5 rounded-xl font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
                   selectedCatalogId === 'all'
-                    ? 'bg-slate-200 text-slate-950 font-bold'
-                    : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-white'
+                    ? 'bg-slate-200 text-slate-950 font-bold shadow-sm'
+                    : 'bg-slate-950/80 text-slate-400 border border-slate-800 hover:text-white'
                 }`}
               >
                 جميع الكتالوجات
               </button>
 
-              {visibleCatalogs.map(cat => {
-                const isSelected = selectedCatalogId === cat.id;
-                const isGift = isCatalogFreeGifts(cat);
-                return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setSelectedCatalogId(cat.id)}
-                    className={`px-3 py-1.5 rounded-xl font-medium transition-colors flex items-center gap-1.5 ${
-                      isSelected
-                        ? isGift
-                          ? 'bg-purple-500 text-white font-bold shadow-sm'
-                          : 'bg-slate-200 text-slate-950 font-bold'
-                        : isGift
-                          ? 'bg-purple-950/50 text-purple-300 border border-purple-500/40 hover:bg-purple-900/60'
-                          : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-white'
+              <button
+                type="button"
+                onClick={() => {
+                  if (!currentPos.canViewGifts) {
+                    showToast({
+                      type: 'info',
+                      title: 'الهدايا المجانية',
+                      description: 'هذه الميزة مخصصة للحسابات المفعلة؛ تواصل مع المتجر لتفعيل الهدايا المجانية لحسابك.',
+                    });
+                    return;
+                  }
+                  setSelectedCatalogId(freeGiftsTargetId);
+                }}
+                className={`px-3 py-1.5 rounded-xl font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  isFreeGiftsSelected
+                    ? 'bg-purple-500 text-white font-bold shadow-sm'
+                    : currentPos.canViewGifts
+                      ? 'bg-purple-950/50 text-purple-300 border border-purple-500/40 hover:bg-purple-900/60'
+                      : 'bg-slate-950/80 text-purple-300/80 border border-purple-500/25 hover:border-purple-500/40 hover:text-purple-200'
+                }`}
+              >
+                <Gift className="w-3.5 h-3.5 shrink-0" />
+                <span>الهدايا المجانية</span>
+                {currentPos.canViewGifts && freeGiftsCount > 0 && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold ${
+                      isFreeGiftsSelected
+                        ? 'bg-white/20 text-white'
+                        : 'bg-purple-500/25 text-purple-200'
                     }`}
                   >
-                    {isGift && <Gift className="w-3.5 h-3.5 shrink-0" />}
-                    <span>{cat.nameAr}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="relative w-full sm:w-64">
-              <Search className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchService}
-                onChange={e => setSearchService(e.target.value)}
-                placeholder="ابحث عن لعبة أو بطاقة..."
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl pr-10 pl-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-              />
+                    {freeGiftsCount}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
 
@@ -648,8 +791,8 @@ export const PosDashboard: React.FC = () => {
                     })
                   : null;
 
-              const tierPriceWithFee = pricing.totalAmount.toFixed(2);
               const isGiftService = pricing.isFreeGiftApplied;
+              const tierPriceWithFee = (isGiftService ? 0 : pricing.totalAmount).toFixed(2);
 
               return (
                 <div
@@ -791,7 +934,7 @@ export const PosDashboard: React.FC = () => {
                             <span>سعر الباقة ({primaryOpts.packageCodesCount} أكواد):</span>
                           </span>
                           <span className={`text-lg font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-cyan-300'}`}>
-                            {packagePricing.totalAmount.toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
+                            {(isGiftService || packagePricing.isFreeGiftApplied ? 0 : packagePricing.totalAmount).toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
                           </span>
                         </div>
                       </div>
@@ -799,7 +942,7 @@ export const PosDashboard: React.FC = () => {
                       <div>
                         <span className="text-[10px] text-slate-400 block">
                           {isGiftService
-                            ? `سعر الخدمة 0 ر.س + رسوم التطبيق ${pricing.appFeePercentageApplied}%:`
+                            ? 'سعر الهدية المجانية:'
                             : primaryOpts && !primaryOpts.allowSingleCode && primaryOpts.allowPackage
                             ? `سعر الباقة (${primaryOpts.packageCodesCount} أكواد) لرتبتك:`
                             : pricing.isZeroPriceFloorApplied
@@ -834,6 +977,31 @@ export const PosDashboard: React.FC = () => {
               );
             })}
           </div>
+
+          {filteredServices.length === 0 && (
+            <div className="p-8 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-2.5">
+              <div className="text-sm font-bold text-slate-200">
+                {isFreeGiftsSelected
+                  ? 'لا توجد هدايا مجانية متاحة حالياً'
+                  : 'لا توجد خدمات مطابقة للبحث أو التصنيف المحدد'}
+              </div>
+              <p className="text-xs text-slate-400">
+                {isFreeGiftsSelected
+                  ? 'سيتم عرض الهدايا المجانية هنا بمجرد إضافتها من المتجر.'
+                  : 'جرب تغيير كلمة البحث أو اختيار جميع الكتالوجات.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCatalogId('all');
+                  setSearchService('');
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                عرض جميع الكتالوجات
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -962,21 +1130,43 @@ export const PosDashboard: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                navigator.clipboard.writeText(codesList.join('\n'));
-                                showToast({
-                                  type: 'success',
-                                  title: codesList.length > 1 ? 'تم نسخ جميع الأكواد' : 'تم نسخ الكود',
-                                  description: `تم نسخ ${codesList.length} كود للحافظة.`,
-                                });
-                              }}
-                              className="text-[10px] text-amber-300 hover:text-amber-200 flex items-center gap-1 cursor-pointer"
-                            >
-                              <Copy className="w-3 h-3" />
-                              <span>{codesList.length > 1 ? 'نسخ جميع الأكواد' : 'نسخ الكود'}</span>
-                            </button>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(codesList.join('\n'));
+                                  showToast({
+                                    type: 'success',
+                                    title: codesList.length > 1 ? `تم نسخ جميع الأكواد (${codesList.length})` : 'تم نسخ الكود',
+                                    description: `تم نسخ ${codesList.length} ${codesList.length === 1 ? 'كود' : 'أكواد'} للحافظة.`,
+                                  });
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-[10px] font-bold text-amber-300 flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>
+                                  {codesList.length > 1 || order.purchaseUnit === 'package'
+                                    ? `نسخ جميع الأكواد (${codesList.length})`
+                                    : 'نسخ الكود (1)'}
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadOrderVoucherPdf(order, codesList)}
+                                disabled={exportingOrderPdfId === order.id}
+                                className="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-60 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                {exportingOrderPdfId === order.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <FileDown className="w-3 h-3" />
+                                )}
+                                <span>
+                                  {exportingOrderPdfId === order.id ? 'جاري التجهيز...' : 'حفظ الأكواد PDF'}
+                                </span>
+                              </button>
+                            </div>
                           </div>
 
                           <div className="flex flex-wrap gap-1.5">
@@ -1012,7 +1202,12 @@ export const PosDashboard: React.FC = () => {
 
                   <div className="text-left sm:text-left shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
                     <div className="text-base font-bold font-mono text-white tabular-nums">
-                      {order.totalDeducted.toFixed(2)} ر.س
+                      {(() => {
+                        const orderSrv = services.find(s => s.id === order.serviceId);
+                        const orderCat = orderSrv ? catalogs.find(c => c.id === orderSrv.catalogId) : undefined;
+                        const isFreeGiftOrder = Boolean(order.isFreeGiftOrder || (orderCat && isCatalogFreeGifts(orderCat) && order.costPrice === 0));
+                        return (isFreeGiftOrder ? 0 : order.totalDeducted).toFixed(2);
+                      })()} ر.س
                     </div>
                   </div>
                 </div>
