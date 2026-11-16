@@ -1,4 +1,4 @@
-import { AccountTier, Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier } from '../types';
+import { AccountTier, Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier, WarehousePurchaseUnit } from '../types';
 
 export const ZERO_PRICE_CLIENT_FLOOR_SAR = 0.5;
 
@@ -23,14 +23,23 @@ export function isCatalogFreeGifts(catalog?: Catalog | null): boolean {
 
 export function getPackageTierPrice(
   pkg: ServicePackage | null | undefined,
-  tier: AccountTier
+  tier: AccountTier,
+  purchaseUnit: WarehousePurchaseUnit = 'single_code'
 ): number {
-  if (!pkg || !pkg.tierPrices) return 0;
-  const tierVal = pkg.tierPrices[tier];
+  if (!pkg) return 0;
+
+  const usePackagePrices =
+    (purchaseUnit === 'package' && Boolean(pkg.allowPackagePurchase) && Boolean(pkg.packageTierPrices)) ||
+    (pkg.allowSingleCodePurchase === false && Boolean(pkg.allowPackagePurchase) && Boolean(pkg.packageTierPrices));
+
+  const priceMap = usePackagePrices ? pkg.packageTierPrices : pkg.tierPrices;
+  if (!priceMap) return 0;
+
+  const tierVal = priceMap[tier];
   if (typeof tierVal === 'number' && Number.isFinite(tierVal) && tierVal >= 0) {
     return tierVal;
   }
-  const regularVal = pkg.tierPrices.regular;
+  const regularVal = priceMap.regular;
   if (typeof regularVal === 'number' && Number.isFinite(regularVal) && regularVal >= 0) {
     return regularVal;
   }
@@ -81,6 +90,7 @@ export function calculateBaseSupplierFee(
 export function calculateServicePurchasePricing(params: {
   pkg: ServicePackage | null | undefined;
   clientTier: AccountTier;
+  purchaseUnit?: WarehousePurchaseUnit;
   clientCanViewGifts?: boolean;
   clientPosId?: string;
   service?: DigitalService | null;
@@ -88,9 +98,9 @@ export function calculateServicePurchasePricing(params: {
   supplier?: Partial<Supplier> | null;
   superAdmin?: Partial<SuperAdmin> | null;
 }): ServicePricingBreakdown {
-  const { pkg, clientTier, clientCanViewGifts = false, clientPosId, service, catalog, supplier, superAdmin } = params;
+  const { pkg, clientTier, purchaseUnit = 'single_code', clientCanViewGifts = false, clientPosId, service, catalog, supplier, superAdmin } = params;
 
-  const originalTierPrice = getPackageTierPrice(pkg, clientTier);
+  const originalTierPrice = getPackageTierPrice(pkg, clientTier, purchaseUnit);
   const freeGiftCatalog = isCatalogFreeGifts(catalog);
   const appFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
 

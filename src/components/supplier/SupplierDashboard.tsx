@@ -64,7 +64,11 @@ import { OfficeEmployeesView } from './OfficeEmployeesView';
 import { BankAccountsView } from './BankAccountsView';
 import { SupplierNotificationsView } from './SupplierNotificationsView';
 import { VoucherWarehousesView } from './VoucherWarehousesView';
-import { getPackageAvailableStock } from '../../utils/voucherWarehouses';
+import {
+  getPackageAvailableStock,
+  mergeWarehouseOptionsIntoPackage,
+  resolvePackagePurchaseOptions,
+} from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
 import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
 import {
@@ -1130,49 +1134,96 @@ export const SupplierDashboard: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60 font-mono">
-                        {srv.packages.map(pkg => (
-                          <tr key={pkg.id} className="hover:bg-slate-950/40">
-                            <td className="py-2.5 px-3 font-sans font-medium text-white">
-                              {pkg.name}
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-slate-300">
-                              {pkg.tierPrices.regular} ر.س
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-amber-400 font-semibold">
-                              {pkg.tierPrices.bronze} ر.س
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-slate-200 font-semibold">
-                              {pkg.tierPrices.silver} ر.س
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-yellow-400 font-semibold">
-                              {pkg.tierPrices.gold} ر.س
-                            </td>
-                            <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
-                              {pkg.tierPrices.vip} ر.س
-                            </td>
-                            <td className="py-2.5 px-3 text-left font-sans text-[11px]">
-                              {(() => {
-                                const stock = getPackageAvailableStock(pkg, voucherWarehouses);
-                                const hasVouchers = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
-                                if (hasVouchers) {
-                                  return stock && stock > 0 ? (
-                                    <span className="text-amber-400 font-semibold">{stock} قسيمة جاهزة</span>
-                                  ) : (
-                                    <span className="text-rose-400 font-semibold">نفد المخزون (0 كود)</span>
-                                  );
-                                }
-                                if (typeof stock === 'number') {
-                                  return stock > 0 ? (
-                                    <span className="text-slate-300">المخزون: {stock}</span>
-                                  ) : (
-                                    <span className="text-rose-400 font-semibold">نفد المخزون</span>
-                                  );
-                                }
-                                return <span className="text-slate-400">شحن مباشر</span>;
-                              })()}
-                            </td>
-                          </tr>
-                        ))}
+                        {srv.packages.map(rawPkg => {
+                          const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
+                          const opts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
+                          const stock = getPackageAvailableStock(pkg, voucherWarehouses);
+                          const hasVouchers = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
+
+                          return (
+                            <React.Fragment key={pkg.id}>
+                              <tr className="hover:bg-slate-950/40">
+                                <td className="py-2.5 px-3 font-sans font-medium text-white">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span>{pkg.name}</span>
+                                    {opts.allowSingleCode && (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-bold">
+                                        {opts.allowPackage ? 'كود واحد' : 'بالكود'}
+                                      </span>
+                                    )}
+                                    {!opts.allowSingleCode && opts.allowPackage && (
+                                      <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 text-[9px] font-bold">
+                                        باقة فقط ({opts.packageCodesCount} أكواد)
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-slate-300">
+                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).regular} ر.س
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-amber-400 font-semibold">
+                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).bronze} ر.س
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-slate-200 font-semibold">
+                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).silver} ر.س
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-yellow-400 font-semibold">
+                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).gold} ر.س
+                                </td>
+                                <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
+                                  {(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).vip} ر.س
+                                </td>
+                                <td className="py-2.5 px-3 text-left font-sans text-[11px]">
+                                  {(() => {
+                                    if (hasVouchers) {
+                                      return stock && stock > 0 ? (
+                                        <span className="text-amber-400 font-semibold">
+                                          {stock} كود{opts.allowPackage ? ` · ${opts.availablePackagesCount ?? 0} باقة` : ''}
+                                        </span>
+                                      ) : (
+                                        <span className="text-rose-400 font-semibold">نفد المخزون (0 كود)</span>
+                                      );
+                                    }
+                                    if (typeof stock === 'number') {
+                                      return stock > 0 ? (
+                                        <span className="text-slate-300">المخزون: {stock}</span>
+                                      ) : (
+                                        <span className="text-rose-400 font-semibold">نفد المخزون</span>
+                                      );
+                                    }
+                                    return <span className="text-slate-400">شحن مباشر</span>;
+                                  })()}
+                                </td>
+                              </tr>
+
+                              {opts.allowSingleCode && opts.allowPackage && (
+                                <tr className="bg-cyan-950/15 hover:bg-cyan-950/25">
+                                  <td className="py-2 px-3 font-sans text-[11px] text-cyan-300">
+                                    ↳ {opts.packageNameAr} ({opts.packageCodesCount} أكواد)
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-cyan-200">
+                                    {opts.packageTierPrices.regular} ر.س
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-cyan-200">
+                                    {opts.packageTierPrices.bronze} ر.س
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-cyan-200">
+                                    {opts.packageTierPrices.silver} ر.س
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-cyan-200">
+                                    {opts.packageTierPrices.gold} ر.س
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-cyan-200 font-bold">
+                                    {opts.packageTierPrices.vip} ر.س
+                                  </td>
+                                  <td className="py-2 px-3 text-left font-sans text-[10px] text-cyan-300">
+                                    {opts.availablePackagesCount ?? 0} باقة متاحة
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

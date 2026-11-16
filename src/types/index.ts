@@ -136,20 +136,29 @@ export interface DeliveryMethodInfo {
   iconName: string;
 }
 
+export type TierPrices = {
+  regular: number;
+  bronze: number;
+  silver: number;
+  gold: number;
+  vip: number;
+};
+
+export type WarehousePurchaseUnit = 'single_code' | 'package';
+
 export interface ServicePackage {
   id: string;
   name: string;
   description?: string;
-  tierPrices: {
-    regular: number;
-    bronze: number;
-    silver: number;
-    gold: number;
-    vip: number;
-  };
+  tierPrices: TierPrices;
   availableStock?: number;
   vouchers?: string[];
   warehouseId?: string;
+  allowSingleCodePurchase?: boolean;
+  allowPackagePurchase?: boolean;
+  packageCodesCount?: number;
+  packageNameAr?: string;
+  packageTierPrices?: TierPrices;
 }
 
 export interface VoucherWarehouse {
@@ -164,13 +173,12 @@ export interface VoucherWarehouse {
   linkedServiceId?: string;
   linkedPackageId?: string;
   isPublishedAsService: boolean;
-  tierPrices: {
-    regular: number;
-    bronze: number;
-    silver: number;
-    gold: number;
-    vip: number;
-  };
+  allowSingleCodePurchase?: boolean;
+  allowPackagePurchase?: boolean;
+  packageCodesCount?: number;
+  packageNameAr?: string;
+  tierPrices: TierPrices;
+  packageTierPrices?: TierPrices;
   createdAt: string;
   updatedAt?: string;
 }
@@ -487,6 +495,8 @@ export interface Order {
   serviceName: string;
   packageId: string;
   packageName: string;
+  purchaseUnit?: WarehousePurchaseUnit;
+  quantityCodes?: number;
   deliveryMethod: DeliveryMethod;
   deliveryDetails: {
     playerId?: string;
@@ -496,6 +506,7 @@ export interface Order {
     verificationCodeEntered?: string;
     supplierReplyMessage?: string;
     voucherCode?: string;
+    voucherCodes?: string[];
     gameTransactionRef?: string;
     inGameChargeStatus?: 'waiting_charge' | 'charging_in_game' | 'completed_in_game';
     clientOtpReadConfirmation?: boolean;

@@ -28,7 +28,8 @@ import {
   HandCoins,
   ShieldCheck,
   Gift,
-  Bell
+  Bell,
+  Package
 } from 'lucide-react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
@@ -42,7 +43,12 @@ import { getLoanRemainingAmount, isLoanDeposit } from '../../utils/loanRepayment
 import { getIncomingLoanRepaymentsForPos, getIncomingTransfersForPos, hasSupplierTransferPrivilege } from '../../utils/bankAccounts';
 import { calculateServicePurchasePricing, getEffectiveAppFeePercentage, isCatalogFreeGifts } from '../../utils/pricing';
 import { getCatalogsForPosView } from '../../utils/platformSettings';
-import { getPackageAvailableStock, getServiceTotalStock } from '../../utils/voucherWarehouses';
+import {
+  getPackageAvailableStock,
+  getServiceTotalStock,
+  mergeWarehouseOptionsIntoPackage,
+  resolvePackagePurchaseOptions,
+} from '../../utils/voucherWarehouses';
 
 export const PosDashboard: React.FC = () => {
   const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
@@ -606,17 +612,41 @@ export const PosDashboard: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredServices.map(srv => {
               // Get primary package price for this tier including platform fee / free gift / 0.5 SAR floor rules
-              const primaryPkg = srv.packages[0];
+              const rawPrimaryPkg = srv.packages[0];
+              const primaryPkg = rawPrimaryPkg
+                ? mergeWarehouseOptionsIntoPackage(rawPrimaryPkg, voucherWarehouses)
+                : rawPrimaryPkg;
+              const primaryOpts = primaryPkg
+                ? resolvePackagePurchaseOptions(primaryPkg, voucherWarehouses)
+                : null;
               const srvCatalog = catalogs.find(c => c.id === srv.catalogId);
               const activeSup = currentPosSupplier || supplier;
+              const defaultUnit = primaryOpts?.defaultPurchaseUnit || 'single_code';
               const pricing = calculateServicePurchasePricing({
                 pkg: primaryPkg,
                 clientTier: currentPos.tier,
+                purchaseUnit: defaultUnit,
                 clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                clientPosId: currentPos.id,
+                service: srv,
                 catalog: srvCatalog,
                 supplier: activeSup,
                 superAdmin
               });
+              const packagePricing =
+                primaryOpts?.allowPackage && primaryOpts?.allowSingleCode
+                  ? calculateServicePurchasePricing({
+                      pkg: primaryPkg,
+                      clientTier: currentPos.tier,
+                      purchaseUnit: 'package',
+                      clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                      clientPosId: currentPos.id,
+                      service: srv,
+                      catalog: srvCatalog,
+                      supplier: activeSup,
+                      superAdmin
+                    })
+                  : null;
 
               const tierPriceWithFee = pricing.totalAmount.toFixed(2);
               const isGiftService = pricing.isFreeGiftApplied;
@@ -707,7 +737,9 @@ export const PosDashboard: React.FC = () => {
 
                     {srv.packages.some(p => Array.isArray(p.vouchers) || Boolean(p.warehouseId) || typeof p.availableStock === 'number') && (
                       <div className="flex flex-wrap gap-1.5 pt-0.5">
-                        {srv.packages.slice(0, 4).map(pkg => {
+                        {srv.packages.slice(0, 4).map(rawPkg => {
+                          const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
+                          const pkgOpts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
                           const stock = getPackageAvailableStock(pkg, voucherWarehouses);
                           const isVouch = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
                           if (typeof stock !== 'number') return null;
@@ -722,7 +754,13 @@ export const PosDashboard: React.FC = () => {
                             >
                               <span className="truncate max-w-[140px]">{pkg.name}</span>
                               <span className="font-mono font-bold text-amber-400">
-                                {stock > 0 ? (isVouch ? `(${stock} كود)` : `(${stock})`) : '(نفد)'}
+                                {stock > 0
+                                  ? isVouch
+                                    ? pkgOpts.allowPackage
+                                      ? `(${stock} كود · ${pkgOpts.availablePackagesCount ?? 0} باقة)`
+                                      : `(${stock} كود)`
+                                    : `(${stock})`
+                                  : '(نفد)'}
                               </span>
                             </span>
                           );
@@ -739,11 +777,31 @@ export const PosDashboard: React.FC = () => {
                           اضغط شحن وشراء فوري لإستعراض الباقات والاسعار
                         </span>
                       </div>
+                    ) : primaryOpts?.allowSingleCode && primaryOpts?.allowPackage && packagePricing ? (
+                      <div className="flex flex-wrap items-center gap-4">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block">سعر الكود الواحد:</span>
+                          <span className={`text-lg font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-amber-400'}`}>
+                            {tierPriceWithFee} <span className="text-[11px] font-normal">ر.س</span>
+                          </span>
+                        </div>
+                        <div className="pr-3 border-r border-slate-800">
+                          <span className="text-[10px] text-cyan-300 flex items-center gap-1">
+                            <Package className="w-3 h-3" />
+                            <span>سعر الباقة ({primaryOpts.packageCodesCount} أكواد):</span>
+                          </span>
+                          <span className={`text-lg font-bold font-mono tabular-nums ${isGiftService ? 'text-purple-300' : 'text-cyan-300'}`}>
+                            {packagePricing.totalAmount.toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
+                          </span>
+                        </div>
+                      </div>
                     ) : (
                       <div>
                         <span className="text-[10px] text-slate-400 block">
                           {isGiftService
                             ? `سعر الخدمة 0 ر.س + رسوم التطبيق ${pricing.appFeePercentageApplied}%:`
+                            : primaryOpts && !primaryOpts.allowSingleCode && primaryOpts.allowPackage
+                            ? `سعر الباقة (${primaryOpts.packageCodesCount} أكواد) لرتبتك:`
                             : pricing.isZeroPriceFloorApplied
                             ? 'سعر باقة الأساس (الحد الأدنى):'
                             : 'سعر باقة الأساس لرتبتك:'}
@@ -885,17 +943,55 @@ export const PosDashboard: React.FC = () => {
                     )}
 
                     {/* Voucher Code delivery highlight */}
-                    {order.deliveryMethod === 'voucher_code' && order.deliveryDetails.voucherCode && (
-                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-amber-400 font-semibold text-[11px]">كود القسيمة:</span>
-                          <span className="font-mono text-amber-300 font-bold select-all text-xs bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
-                            {order.deliveryDetails.voucherCode}
-                          </span>
+                    {order.deliveryMethod === 'voucher_code' && (order.deliveryDetails.voucherCodes?.length || order.deliveryDetails.voucherCode) && (() => {
+                      const codesList =
+                        order.deliveryDetails.voucherCodes && order.deliveryDetails.voucherCodes.length > 0
+                          ? order.deliveryDetails.voucherCodes
+                          : (order.deliveryDetails.voucherCode || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+                      return (
+                        <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <span className="text-amber-400 font-semibold text-[11px]">
+                                {codesList.length > 1 ? `أكواد الباقة (${codesList.length} أكواد):` : 'كود القسيمة:'}
+                              </span>
+                              {order.purchaseUnit === 'package' && (
+                                <span className="px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold">
+                                  شراء بالباقة
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(codesList.join('\n'));
+                                showToast({
+                                  type: 'success',
+                                  title: codesList.length > 1 ? 'تم نسخ جميع الأكواد' : 'تم نسخ الكود',
+                                  description: `تم نسخ ${codesList.length} كود للحافظة.`,
+                                });
+                              }}
+                              className="text-[10px] text-amber-300 hover:text-amber-200 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Copy className="w-3 h-3" />
+                              <span>{codesList.length > 1 ? 'نسخ جميع الأكواد' : 'نسخ الكود'}</span>
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5">
+                            {codesList.map((code, idx) => (
+                              <span
+                                key={`${order.id}-code-${idx}`}
+                                className="font-mono text-amber-300 font-bold select-all text-xs bg-slate-900 px-2.5 py-1 rounded border border-slate-700"
+                              >
+                                {code}
+                              </span>
+                            ))}
+                          </div>
                         </div>
-                        <span className="text-[10px] text-slate-400">كود فوري جاهز للنسخ</span>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     <div className="text-slate-400 text-[11px] flex flex-wrap items-center gap-3">
                       {order.customerName && (

@@ -233,3 +233,52 @@ test('Standard positive price calculation uses supplier fee configuration', () =
   assert.equal(standard.isFreeGiftApplied, false);
   assert.equal(standard.isZeroPriceFloorApplied, false);
 });
+
+test('getPackageTierPrice and calculateServicePurchasePricing use packageTierPrices for package purchases', () => {
+  const dualPkg: ServicePackage = {
+    id: 'pkg-dual',
+    name: 'قسائم ستور',
+    allowSingleCodePurchase: true,
+    allowPackagePurchase: true,
+    packageCodesCount: 5,
+    tierPrices: {
+      regular: 20,
+      bronze: 19,
+      silver: 18,
+      gold: 17,
+      vip: 16,
+    },
+    packageTierPrices: {
+      regular: 95,
+      bronze: 90,
+      silver: 85,
+      gold: 80,
+      vip: 75,
+    },
+  };
+
+  assert.equal(getPackageTierPrice(dualPkg, 'vip', 'single_code'), 16);
+  assert.equal(getPackageTierPrice(dualPkg, 'vip', 'package'), 75);
+
+  const pkgCalc = calculateServicePurchasePricing({
+    pkg: dualPkg,
+    clientTier: 'gold',
+    purchaseUnit: 'package',
+    catalog: standardCatalog,
+    supplier: sampleSupplier,
+    superAdmin: sampleSuperAdmin,
+  });
+
+  assert.equal(pkgCalc.originalTierPrice, 80);
+  assert.equal(pkgCalc.feeAmount, 0.8);
+  assert.equal(pkgCalc.totalAmount, 80.8);
+
+  const packageOnlyPkg: ServicePackage = {
+    ...dualPkg,
+    allowSingleCodePurchase: false,
+    allowPackagePurchase: true,
+  };
+  // Even if purchaseUnit defaults to single_code, package-only falls back to packageTierPrices
+  assert.equal(getPackageTierPrice(packageOnlyPkg, 'silver', 'single_code'), 85);
+});
+

@@ -28,12 +28,16 @@ import {
   PlatformInterfaceSettings,
   AdminAccount,
   AdminPermissions,
-  VoucherWarehouse
+  VoucherWarehouse,
+  TierPrices,
+  WarehousePurchaseUnit
 } from '../types';
 import {
   deductPackageStock,
   mergeCodesIntoWarehouse,
+  mergeWarehouseOptionsIntoPackage,
   parseVoucherCodesInput,
+  resolvePackagePurchaseOptions,
   syncWarehouseIntoService
 } from '../utils/voucherWarehouses';
 import {
@@ -208,6 +212,7 @@ interface AppContextType {
   executePurchase: (params: {
     service: DigitalService;
     pkg: ServicePackage;
+    purchaseUnit?: WarehousePurchaseUnit;
     deliveryMethod: DeliveryMethod;
     deliveryDetails: {
       playerId?: string;
@@ -221,7 +226,7 @@ interface AppContextType {
     customerName?: string;
     customerPhone?: string;
     resalePrice?: number;
-  }) => Promise<{ success: boolean; orderId?: string; error?: string; voucherCode?: string; isPendingSupplier?: boolean }>;
+  }) => Promise<{ success: boolean; orderId?: string; error?: string; voucherCode?: string; voucherCodes?: string[]; deductedCount?: number; isPendingSupplier?: boolean }>;
   
   executeBalanceTransfer: (params: {
     targetPosCode: string;
@@ -306,20 +311,19 @@ interface AppContextType {
     catalogId?: string;
     description?: string;
     rawCodes?: string;
-    tierPrices: {
-      regular: number;
-      bronze: number;
-      silver: number;
-      gold: number;
-      vip: number;
-    };
+    allowSingleCodePurchase?: boolean;
+    allowPackagePurchase?: boolean;
+    packageCodesCount?: number;
+    packageNameAr?: string;
+    tierPrices: TierPrices;
+    packageTierPrices?: TierPrices;
     publishImmediately?: boolean;
     targetServiceId?: string;
     newServiceNameAr?: string;
   }) => { warehouse: VoucherWarehouse; addedCount: number };
   addCodesToWarehouse: (warehouseId: string, rawCodes: string) => { addedCount: number; skippedDuplicates: number };
   removeCodeFromWarehouse: (warehouseId: string, codeIndex: number) => void;
-  updateVoucherWarehouse: (warehouseId: string, updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'tierPrices'>>) => void;
+  updateVoucherWarehouse: (warehouseId: string, updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices'>>) => void;
   publishWarehouseAsService: (warehouseId: string, options: { catalogId: string; serviceId?: string; serviceNameAr?: string }) => void;
   unpublishWarehouseFromService: (warehouseId: string) => void;
   deleteVoucherWarehouse: (warehouseId: string) => void;
@@ -2001,6 +2005,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const executePurchase = async (params: {
     service: DigitalService;
     pkg: ServicePackage;
+    purchaseUnit?: WarehousePurchaseUnit;
     deliveryMethod: DeliveryMethod;
     deliveryDetails: {
       playerId?: string;
@@ -2015,14 +2020,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customerPhone?: string;
     resalePrice?: number;
   }) => {
-    const { service, pkg, deliveryMethod, deliveryDetails, paymentMethod, customerName, customerPhone, resalePrice } = params;
+    const { service, pkg, purchaseUnit, deliveryMethod, deliveryDetails, paymentMethod, customerName, customerPhone, resalePrice } = params;
     
-    // 1. Resolve catalog and compute pricing (including 0.5 SAR zero-price floor & Free Gifts Catalog admin-fee-% rule)
-    const serviceCatalog = catalogs.find(c => c.id === service.catalogId);
+    // 1. Resolve live service/package + linked warehouse purchase options & pricing
+    const liveService = services.find(s => s.id === service.id) || service;
+    const rawLivePkg = liveService.packages.find(p => p.id === pkg.id) || pkg;
+    const effectivePkg = mergeWarehouseOptionsIntoPackage(rawLivePkg, voucherWarehouses);
+    const purchaseOpts = resolvePackagePurchaseOptions(effectivePkg, voucherWarehouses);
+    const effectiveUnit: WarehousePurchaseUnit = purchaseUnit || purchaseOpts.defaultPurchaseUnit;
+
+    const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
     const activeOrderSupplier = currentPosSupplier || supplier;
     const pricing = calculateServicePurchasePricing({
-      pkg,
+      pkg: effectivePkg,
       clientTier: currentPos.tier,
+      purchaseUnit: effectiveUnit,
       clientCanViewGifts: Boolean(currentPos.canViewGifts),
       catalog: serviceCatalog,
       supplier: activeOrderSupplier,
@@ -2046,24 +2058,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 4. Handle stock & voucher code assignment/deduction atomically
-    const liveService = services.find(s => s.id === service.id) || service;
     const stockDeduction = deductPackageStock({
       service: liveService,
-      pkgId: pkg.id,
+      pkgId: effectivePkg.id,
       deliveryMethod,
-      warehouses: voucherWarehouses
+      warehouses: voucherWarehouses,
+      purchaseUnit: effectiveUnit
     });
 
     if (stockDeduction.outOfStock) {
       showToast({
         type: 'error',
         title: 'نفد المخزون',
-        description: `عذراً، نفد مخزون "${pkg.name}" حالياً. يرجى اختيار باقة أخرى أو التواصل مع المتجر لتعبئة المخزون.`
+        description:
+          effectiveUnit === 'package'
+            ? `عذراً، المخزون المتوفر في "${effectivePkg.name}" غير كافٍ لتسليم باقة كاملة (${purchaseOpts.packageCodesCount} أكواد).`
+            : `عذراً، نفد مخزون "${effectivePkg.name}" حالياً. يرجى اختيار باقة أخرى أو التواصل مع المتجر لتعبئة المخزون.`
       });
       return { success: false, error: 'out_of_stock' };
     }
 
-    const assignedVoucher = stockDeduction.assignedVoucher || deliveryDetails.voucherCode;
+    const assignedVouchers =
+      stockDeduction.assignedVouchers && stockDeduction.assignedVouchers.length > 0
+        ? stockDeduction.assignedVouchers
+        : deliveryDetails.voucherCode
+        ? [deliveryDetails.voucherCode]
+        : undefined;
+    const assignedVoucher =
+      stockDeduction.assignedVoucher ||
+      (assignedVouchers ? assignedVouchers.join('\n') : undefined) ||
+      deliveryDetails.voucherCode;
 
     if (stockDeduction.updatedService !== liveService) {
       setServices(prev => prev.map(s => s.id === liveService.id ? stockDeduction.updatedService : s));
@@ -2085,6 +2109,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? 'pending_supplier' 
       : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
 
+    const unitSuffix =
+      purchaseOpts.allowPackage && effectiveUnit === 'package'
+        ? ` - ${purchaseOpts.packageNameAr}`
+        : purchaseOpts.allowPackage && effectiveUnit === 'single_code'
+        ? ' (كود واحد)'
+        : '';
+
     const newOrder: Order = {
       id: orderId,
       date: formattedDate,
@@ -2092,14 +2123,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posCode: currentPos.posCode,
       posName: currentPos.tradeName,
       supplierId: supplier.id,
-      serviceId: service.id,
-      serviceName: service.nameAr,
-      packageId: pkg.id,
-      packageName: pkg.name,
+      serviceId: liveService.id,
+      serviceName: liveService.nameAr,
+      packageId: effectivePkg.id,
+      packageName: `${effectivePkg.name}${unitSuffix}`,
+      purchaseUnit: effectiveUnit,
+      quantityCodes: stockDeduction.deductedCount,
       deliveryMethod,
       deliveryDetails: {
         ...deliveryDetails,
         voucherCode: assignedVoucher,
+        voucherCodes: assignedVouchers,
         inGameChargeStatus: deliveryMethod === 'player_id' ? 'waiting_charge' : undefined
       },
       costPrice: unitPrice,
@@ -2327,7 +2361,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { 
       success: true, 
       orderId, 
-      voucherCode: assignedVoucher, 
+      voucherCode: assignedVoucher,
+      voucherCodes: assignedVouchers,
+      deductedCount: stockDeduction.deductedCount,
       isPendingSupplier: initialStatus === 'pending_supplier' 
     };
   };
@@ -4394,6 +4430,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Create a new DigitalService for this warehouse / category
     const newSrvId = `srv-wh-${Date.now()}`;
     const newPkgId = `pkg-${wh.id}`;
+    const allowPackage = Boolean(wh.allowPackagePurchase);
+    const allowSingle =
+      wh.allowSingleCodePurchase === false && allowPackage
+        ? false
+        : wh.allowSingleCodePurchase !== false;
     const newSrv: DigitalService = {
       id: newSrvId,
       catalogId: targetCatalogId,
@@ -4409,6 +4450,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: wh.nameAr,
           description: wh.description || `فئة ${wh.categoryName}`,
           tierPrices: { ...wh.tierPrices },
+          packageTierPrices: wh.packageTierPrices ? { ...wh.packageTierPrices } : undefined,
+          allowSingleCodePurchase: allowSingle,
+          allowPackagePurchase: allowPackage,
+          packageCodesCount: wh.packageCodesCount,
+          packageNameAr: wh.packageNameAr,
           vouchers: [...wh.codes],
           availableStock: wh.codes.length,
           warehouseId: wh.id
@@ -4443,13 +4489,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     catalogId?: string;
     description?: string;
     rawCodes?: string;
-    tierPrices: {
-      regular: number;
-      bronze: number;
-      silver: number;
-      gold: number;
-      vip: number;
-    };
+    allowSingleCodePurchase?: boolean;
+    allowPackagePurchase?: boolean;
+    packageCodesCount?: number;
+    packageNameAr?: string;
+    tierPrices: TierPrices;
+    packageTierPrices?: TierPrices;
     publishImmediately?: boolean;
     targetServiceId?: string;
     newServiceNameAr?: string;
@@ -4457,6 +4502,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const parsed = parseVoucherCodesInput(input.rawCodes || '');
     const nowIso = new Date().toISOString();
     const whId = `wh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const allowPackage = Boolean(input.allowPackagePurchase);
+    const allowSingle =
+      input.allowSingleCodePurchase === false && allowPackage
+        ? false
+        : input.allowSingleCodePurchase !== false;
+    const normalizedPkgCount =
+      allowPackage
+        ? Math.max(1, Math.floor(Number(input.packageCodesCount) || 5))
+        : undefined;
+
     let warehouse: VoucherWarehouse = {
       id: whId,
       supplierId: supplier.id,
@@ -4467,7 +4522,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       codes: parsed.codes,
       usedCodesCount: 0,
       isPublishedAsService: false,
+      allowSingleCodePurchase: allowSingle,
+      allowPackagePurchase: allowPackage,
+      packageCodesCount: normalizedPkgCount,
+      packageNameAr: allowPackage ? (input.packageNameAr?.trim() || undefined) : undefined,
       tierPrices: { ...input.tierPrices },
+      packageTierPrices: allowPackage && input.packageTierPrices
+        ? { ...input.packageTierPrices }
+        : undefined,
       createdAt: nowIso.substring(0, 10),
       updatedAt: nowIso
     };
@@ -4562,13 +4624,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateVoucherWarehouse = (
     warehouseId: string,
-    updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'tierPrices'>>
+    updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices'>>
   ) => {
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
+    const mergedAllowPackage = updates.allowPackagePurchase !== undefined
+      ? Boolean(updates.allowPackagePurchase)
+      : Boolean(targetWh.allowPackagePurchase);
+    const mergedAllowSingle = updates.allowSingleCodePurchase !== undefined
+      ? (updates.allowSingleCodePurchase === false && mergedAllowPackage ? false : updates.allowSingleCodePurchase !== false)
+      : (targetWh.allowSingleCodePurchase === false && mergedAllowPackage ? false : targetWh.allowSingleCodePurchase !== false);
+
     const updatedWh: VoucherWarehouse = {
       ...targetWh,
       ...updates,
+      allowSingleCodePurchase: mergedAllowSingle,
+      allowPackagePurchase: mergedAllowPackage,
+      packageCodesCount: mergedAllowPackage
+        ? Math.max(1, Math.floor(Number(updates.packageCodesCount ?? targetWh.packageCodesCount ?? 5) || 5))
+        : targetWh.packageCodesCount,
       updatedAt: new Date().toISOString()
     };
     setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));

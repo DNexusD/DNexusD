@@ -4,7 +4,8 @@ import {
   DigitalService, 
   ServicePackage, 
   DeliveryMethod, 
-  TIERS_CONFIG 
+  TIERS_CONFIG,
+  WarehousePurchaseUnit
 } from '../../types';
 import { 
   X, 
@@ -22,10 +23,17 @@ import {
   Printer,
   Sparkles,
   MessageSquare,
-  Gift
+  Gift,
+  Package
 } from 'lucide-react';
 import { calculateServicePurchasePricing } from '../../utils/pricing';
-import { getPackageAvailableStock, isPackageOutOfStock, isPackageVoucherBacked } from '../../utils/voucherWarehouses';
+import {
+  getPackageAvailableStock,
+  isPackageOutOfStock,
+  isPackageVoucherBacked,
+  mergeWarehouseOptionsIntoPackage,
+  resolvePackagePurchaseOptions
+} from '../../utils/voucherWarehouses';
 
 interface PurchaseModalProps {
   service: DigitalService;
@@ -42,8 +50,23 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   
   // Selected Package ID (resolved live against liveService so stock decrements immediately)
   const [selectedPkgId, setSelectedPkgId] = useState<string>(liveService.packages[0]?.id || '');
-  const selectedPkg: ServicePackage =
+  const rawSelectedPkg: ServicePackage | undefined =
     liveService.packages.find(p => p.id === selectedPkgId) || liveService.packages[0];
+  const selectedPkg: ServicePackage = rawSelectedPkg
+    ? mergeWarehouseOptionsIntoPackage(rawSelectedPkg, voucherWarehouses)
+    : liveService.packages[0];
+  const selectedPkgOpts = selectedPkg
+    ? resolvePackagePurchaseOptions(selectedPkg, voucherWarehouses)
+    : undefined;
+  const [selectedPurchaseUnit, setSelectedPurchaseUnit] = useState<WarehousePurchaseUnit>(
+    selectedPkgOpts?.defaultPurchaseUnit || 'single_code'
+  );
+  const effectivePurchaseUnit: WarehousePurchaseUnit =
+    selectedPurchaseUnit === 'package' && selectedPkgOpts?.allowPackage
+      ? 'package'
+      : selectedPkgOpts?.allowSingleCode
+      ? 'single_code'
+      : selectedPkgOpts?.defaultPurchaseUnit || 'single_code';
 
   // Method 1: Player ID inputs
   const [playerId, setPlayerId] = useState('');
@@ -114,6 +137,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const [orderStage, setOrderStage] = useState<'in_progress' | 'completed' | null>(null);
   const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
   const [completedVoucherCode, setCompletedVoucherCode] = useState<string | null>(null);
+  const [completedVoucherCodes, setCompletedVoucherCodes] = useState<string[]>([]);
+  const [completedDeductedCount, setCompletedDeductedCount] = useState<number>(1);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [verificationApprovalDone, setVerificationApprovalDone] = useState(selectedMethod !== 'account_login');
@@ -126,6 +151,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const selectedPricing = calculateServicePurchasePricing({
     pkg: selectedPkg,
     clientTier: currentTier,
+    purchaseUnit: effectivePurchaseUnit,
     clientCanViewGifts: Boolean(currentPos.canViewGifts),
     catalog: serviceCatalog,
     supplier: activeSup,
@@ -136,7 +162,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const totalAmount = selectedPricing.totalAmount;
 
   const selectedPkgStock = selectedPkg ? getPackageAvailableStock(selectedPkg, voucherWarehouses) : undefined;
-  const selectedPkgIsOutOfStock = selectedPkg ? isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses) : true;
+  const selectedPkgIsOutOfStock = selectedPkg
+    ? isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses, effectivePurchaseUnit)
+    : true;
 
   // Handle Verify Player ID
   const handleVerifyPlayerId = () => {
@@ -255,6 +283,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       const result = await executePurchase({
         service: liveService,
         pkg: selectedPkg,
+        purchaseUnit: effectivePurchaseUnit,
         deliveryMethod: selectedMethod,
         deliveryDetails: {
           playerId: selectedMethod === 'player_id' ? playerId : undefined,
@@ -274,7 +303,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       if (result.success) {
         setOrderStage('completed');
         setCompletedOrderId(result.orderId || 'ORD-DONE');
-        setCompletedVoucherCode(result.voucherCode || 'CODE-READY');
+        const codesList = result.voucherCodes && result.voucherCodes.length > 0
+          ? result.voucherCodes
+          : result.voucherCode
+          ? [result.voucherCode]
+          : ['CODE-READY'];
+        setCompletedVoucherCodes(codesList);
+        setCompletedVoucherCode(result.voucherCode || codesList.join('\n'));
+        setCompletedDeductedCount(result.deductedCount || codesList.length || 1);
       } else {
         setOrderStage(null);
       }
@@ -441,19 +477,60 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   {selectedMethod === 'voucher_code' && (
                     <div className="w-full p-4 rounded-2xl bg-slate-950 border border-amber-500/40 space-y-3">
                       <div className="text-xs text-slate-400 flex items-center justify-between">
-                        <span>كود القسيمة الرقمية الجاهز للنسخ:</span>
-                        <span className="text-amber-400 font-bold">تسليم فوري كود</span>
+                        <span>
+                          {completedVoucherCodes.length > 1
+                            ? `أكواد الباقة المستلمة (${completedVoucherCodes.length} أكواد):`
+                            : 'كود القسيمة الرقمية الجاهز للنسخ:'}
+                        </span>
+                        <span className="text-amber-400 font-bold">
+                          {completedVoucherCodes.length > 1 ? 'تسليم فوري باقة' : 'تسليم فوري كود'}
+                        </span>
                       </div>
-                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800 font-mono text-base font-bold text-amber-300 select-all">
-                        <span>{completedVoucherCode}</span>
-                        <button
-                          onClick={copyVoucherToClipboard}
-                          className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>{copiedCode ? 'تم النسخ!' : 'نسخ الكود'}</span>
-                        </button>
-                      </div>
+
+                      {completedVoucherCodes.length > 1 ? (
+                        <div className="space-y-2">
+                          <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                            {completedVoucherCodes.map((codeItem, idx) => (
+                              <div
+                                key={`${codeItem}-${idx}`}
+                                className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-xs font-bold text-amber-300 select-all"
+                              >
+                                <span dir="ltr">{codeItem}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(codeItem);
+                                    showToast({ type: 'success', title: 'تم النسخ', description: `تم نسخ الكود #${idx + 1}` });
+                                  }}
+                                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold flex items-center gap-1"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>نسخ</span>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={copyVoucherToClipboard}
+                            className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>{copiedCode ? 'تم نسخ جميع الأكواد!' : `نسخ جميع الأكواد (${completedVoucherCodes.length})`}</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800 font-mono text-base font-bold text-amber-300 select-all">
+                          <span>{completedVoucherCode}</span>
+                          <button
+                            onClick={copyVoucherToClipboard}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>{copiedCode ? 'تم النسخ!' : 'نسخ الكود'}</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
@@ -466,9 +543,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <span className="font-semibold text-white">{service.nameAr}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
-                  <span>الباقة:</span>
+                  <span>الباقة / الفئة:</span>
                   <span className="font-semibold text-white">
                     {selectedPkg.name}
+                    {completedDeductedCount > 1 && (
+                      <span className="mr-1.5 text-cyan-300 font-mono text-[11px]">
+                        ({completedDeductedCount} أكواد)
+                      </span>
+                    )}
                     {selectedPkgStock !== undefined && (
                       <span className={`mr-2 font-mono text-[11px] ${selectedPkgStock > 0 ? 'text-amber-400' : 'text-rose-400'}`}>
                         ({isPackageVoucherBacked(selectedPkg, voucherWarehouses) ? `المتبقي: ${selectedPkgStock} كود` : `المخزون المتبقي: ${selectedPkgStock}`})
@@ -609,36 +691,58 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               {/* Step 2: Choose Package */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  2. اختر باقة الشحن:
+                  2. اختر باقة / فئة الشحن:
                 </label>
                 <div className="space-y-2">
-                  {liveService.packages.map(pkg => {
+                  {liveService.packages.map(rawPkg => {
+                    const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
+                    const pkgOpts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
                     const isSelected = selectedPkg?.id === pkg.id;
                     const pkgStock = getPackageAvailableStock(pkg, voucherWarehouses);
                     const pkgIsVoucher = isPackageVoucherBacked(pkg, voucherWarehouses);
                     const pkgOutOfStock = isPackageOutOfStock(pkg, selectedMethod, voucherWarehouses);
-                    const pkgPricing = calculateServicePurchasePricing({
+
+                    const singlePricing = calculateServicePurchasePricing({
                       pkg,
                       clientTier: currentTier,
+                      purchaseUnit: 'single_code',
                       clientCanViewGifts: Boolean(currentPos.canViewGifts),
                       catalog: serviceCatalog,
                       supplier: activeSup,
                       superAdmin
                     });
+                    const packagePricing = pkgOpts.allowPackage
+                      ? calculateServicePurchasePricing({
+                          pkg,
+                          clientTier: currentTier,
+                          purchaseUnit: 'package',
+                          clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                          catalog: serviceCatalog,
+                          supplier: activeSup,
+                          superAdmin
+                        })
+                      : null;
 
-                    const pkgTotalWithFee = pkgPricing.totalAmount.toFixed(2);
-                    const savings = Math.max(0, pkgPricing.originalTierPrice - pkgPricing.unitPrice);
+                    const displayPricing =
+                      pkgOpts.allowSingleCode || !packagePricing
+                        ? singlePricing
+                        : packagePricing;
+                    const pkgTotalWithFee = displayPricing.totalAmount.toFixed(2);
+                    const savings = Math.max(0, displayPricing.originalTierPrice - displayPricing.unitPrice);
 
                     return (
                       <button
                         key={pkg.id}
                         type="button"
-                        onClick={() => setSelectedPkgId(pkg.id)}
-                        className={`w-full p-3.5 rounded-2xl border text-right transition-all flex items-center justify-between ${
+                        onClick={() => {
+                          setSelectedPkgId(pkg.id);
+                          setSelectedPurchaseUnit(pkgOpts.defaultPurchaseUnit);
+                        }}
+                        className={`w-full p-3.5 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 ${
                           pkgOutOfStock
                             ? 'bg-rose-950/20 border-rose-500/40 text-slate-400 opacity-85'
                             : isSelected
-                            ? pkgPricing.isFreeGiftApplied
+                            ? displayPricing.isFreeGiftApplied
                               ? 'bg-purple-500/15 border-purple-500 ring-1 ring-purple-500/30 text-white'
                               : 'bg-amber-500/15 border-amber-500 ring-1 ring-amber-500/30 text-white'
                             : 'bg-slate-950/50 border-slate-800 text-slate-300 hover:border-slate-700'
@@ -663,11 +767,25 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                                 </span>
                               </span>
                             )}
-                            {pkgPricing.isFreeGiftApplied ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                                🎁 هدية مجانية (0 ر.س + {pkgPricing.appFeePercentageApplied}% رسوم)
+                            {pkgOpts.allowPackage && typeof pkgOpts.availablePackagesCount === 'number' && (
+                              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                                pkgOpts.availablePackagesCount > 0
+                                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                                  : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                              }`}>
+                                <Package className="w-3 h-3" />
+                                <span>
+                                  {pkgOpts.availablePackagesCount > 0
+                                    ? `${pkgOpts.availablePackagesCount} باقة (${pkgOpts.packageCodesCount} أكواد/باقة)`
+                                    : `أقل من باقة (${pkgOpts.packageCodesCount} أكواد)`}
+                                </span>
                               </span>
-                            ) : pkgPricing.isZeroPriceFloorApplied ? (
+                            )}
+                            {displayPricing.isFreeGiftApplied ? (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                🎁 هدية مجانية (0 ر.س + {displayPricing.appFeePercentageApplied}% رسوم)
+                              </span>
+                            ) : displayPricing.isZeroPriceFloorApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 قيمة دنيا 0.50 ر.س
                               </span>
@@ -676,13 +794,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           {pkg.description && (
                             <div className="text-xs text-slate-400">{pkg.description}</div>
                           )}
-                          {pkgPricing.isFreeGiftApplied ? (
+                          {displayPricing.isFreeGiftApplied ? (
                             <div className="text-[10px] text-purple-300/90 flex items-center gap-2 pt-0.5 flex-wrap">
-                              <span>السعر الأصلي لرتبتك: {pkgPricing.originalTierPrice.toFixed(2)} ر.س</span>
+                              <span>السعر الأصلي لرتبتك: {displayPricing.originalTierPrice.toFixed(2)} ر.س</span>
                               <span>·</span>
                               <span>سعر الهدية: 0.00 ر.س</span>
                               <span>·</span>
-                              <span>رسوم التطبيق ({pkgPricing.appFeePercentageApplied}%): {pkgPricing.feeAmount.toFixed(2)} ر.س</span>
+                              <span>رسوم التطبيق ({displayPricing.appFeePercentageApplied}%): {displayPricing.feeAmount.toFixed(2)} ر.س</span>
                               {savings > 0 && (
                                 <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
                               )}
@@ -690,20 +808,126 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           ) : (
                             <div className="text-[10px] text-slate-400 pt-0.5">
                               سعر رتبة حسابك ({currentTierInfo.nameAr})
+                              {pkgOpts.allowSingleCode && pkgOpts.allowPackage && ' · متاح الشراء بالكود الواحد أو بالباقة'}
+                              {!pkgOpts.allowSingleCode && pkgOpts.allowPackage && ` · شراء بالباقة (${pkgOpts.packageCodesCount} أكواد)`}
                             </div>
                           )}
                         </div>
 
-                        <div className="text-left shrink-0 pl-2">
-                          <div className={`text-base font-bold font-mono ${pkgPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
-                            {pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span>
-                          </div>
+                        <div className="text-left shrink-0 pl-2 space-y-0.5">
+                          {pkgOpts.allowSingleCode && (
+                            <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
+                              {singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span>
+                            </div>
+                          )}
+                          {pkgOpts.allowPackage && packagePricing && (
+                            <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? 'text-cyan-300' : 'text-base text-amber-400'}`}>
+                              {packagePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span>
+                            </div>
+                          )}
+                          {!pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
+                            <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
+                              {pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span>
+                            </div>
+                          )}
                         </div>
                       </button>
                     );
                   })}
                 </div>
               </div>
+
+              {/* Step 2B: Purchase Unit Selector (Single Code vs Package) when package mode is enabled */}
+              {selectedPkgOpts && selectedPkgOpts.allowPackage && (() => {
+                const singleOptPricing = calculateServicePurchasePricing({
+                  pkg: selectedPkg,
+                  clientTier: currentTier,
+                  purchaseUnit: 'single_code',
+                  clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                  catalog: serviceCatalog,
+                  supplier: activeSup,
+                  superAdmin
+                });
+                const packageOptPricing = calculateServicePurchasePricing({
+                  pkg: selectedPkg,
+                  clientTier: currentTier,
+                  purchaseUnit: 'package',
+                  clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                  catalog: serviceCatalog,
+                  supplier: activeSup,
+                  superAdmin
+                });
+                const codesAvailable = selectedPkgOpts.availableCodesCount;
+                const pkgsAvailable = selectedPkgOpts.availablePackagesCount;
+                const singleBlocked = isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses, 'single_code');
+                const pkgBlocked = isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses, 'package');
+
+                return (
+                  <div className="p-3.5 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-2.5">
+                    <label className="block text-xs font-bold text-cyan-300">
+                      اختر وحدة الشراء من المخزن:
+                    </label>
+                    <div className={`grid grid-cols-1 ${selectedPkgOpts.allowSingleCode ? 'sm:grid-cols-2' : ''} gap-2`}>
+                      {selectedPkgOpts.allowSingleCode && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPurchaseUnit('single_code')}
+                          className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                            effectivePurchaseUnit === 'single_code'
+                              ? 'bg-amber-500/15 border-amber-500 ring-1 ring-amber-500/40 text-white'
+                              : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-xs flex items-center gap-1.5 text-white">
+                              <Ticket className="w-3.5 h-3.5 text-amber-400" />
+                              <span>شراء كود واحد (1 كود)</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {typeof codesAvailable === 'number'
+                                ? singleBlocked
+                                  ? 'نفد المخزون'
+                                  : `متوفر ${codesAvailable} كود`
+                                : 'تسليم كود فوري'}
+                            </div>
+                          </div>
+                          <div className="font-mono font-bold text-sm text-amber-400 shrink-0">
+                            {singleOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                          </div>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPurchaseUnit('package')}
+                        className={`p-3 rounded-xl border text-right transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                          effectivePurchaseUnit === 'package'
+                            ? 'bg-cyan-500/15 border-cyan-500 ring-1 ring-cyan-500/40 text-white'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-xs flex items-center gap-1.5 text-white">
+                              <Package className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>{selectedPkgOpts.packageNameAr}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              <span>{selectedPkgOpts.packageCodesCount} أكواد دفعة واحدة</span>
+                              {typeof pkgsAvailable === 'number' && (
+                                <span className={`mr-1 font-mono ${pkgBlocked ? 'text-rose-400' : 'text-cyan-300'}`}>
+                                  · {pkgBlocked ? 'غير كافٍ لباقة' : `${pkgsAvailable} باقة متاحة`}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="font-mono font-bold text-sm text-cyan-300 shrink-0">
+                            {packageOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span>
+                          </div>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Step 3: Input Delivery Specific Fields */}
               <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">

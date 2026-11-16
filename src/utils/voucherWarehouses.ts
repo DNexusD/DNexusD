@@ -2,7 +2,9 @@ import {
   DeliveryMethod,
   DigitalService,
   ServicePackage,
+  TierPrices,
   VoucherWarehouse,
+  WarehousePurchaseUnit,
 } from '../types';
 
 export function parseVoucherCodesInput(raw: string): {
@@ -95,25 +97,138 @@ export function isPackageVoucherBacked(
   );
 }
 
+export interface ResolvedPackagePurchaseOptions {
+  allowSingleCode: boolean;
+  allowPackage: boolean;
+  packageCodesCount: number;
+  packageNameAr: string;
+  singleCodeTierPrices: TierPrices;
+  packageTierPrices: TierPrices;
+  availableCodesCount: number | undefined;
+  availablePackagesCount: number | undefined;
+  defaultPurchaseUnit: WarehousePurchaseUnit;
+  linkedWarehouse?: VoucherWarehouse;
+}
+
+export function resolvePackagePurchaseOptions(
+  pkg: ServicePackage,
+  warehouses?: VoucherWarehouse[]
+): ResolvedPackagePurchaseOptions {
+  const linkedWh = getPackageLinkedWarehouse(pkg, warehouses);
+  const rawAllowSingle = linkedWh
+    ? linkedWh.allowSingleCodePurchase
+    : pkg.allowSingleCodePurchase;
+  const rawAllowPackage = linkedWh
+    ? linkedWh.allowPackagePurchase
+    : pkg.allowPackagePurchase;
+
+  const allowPackage = Boolean(rawAllowPackage);
+  // Default single code to true unless explicitly disabled AND package mode is enabled
+  const allowSingleCode =
+    rawAllowSingle === false && allowPackage ? false : rawAllowSingle !== false;
+
+  const rawCodesCount = Number(
+    linkedWh?.packageCodesCount ?? pkg.packageCodesCount ?? 5
+  );
+  const packageCodesCount =
+    Number.isFinite(rawCodesCount) && rawCodesCount >= 1
+      ? Math.floor(rawCodesCount)
+      : 5;
+
+  const packageNameAr =
+    (linkedWh?.packageNameAr ?? pkg.packageNameAr)?.trim() ||
+    `باقة (${packageCodesCount} أكواد)`;
+
+  const singleCodeTierPrices = linkedWh?.tierPrices || pkg.tierPrices;
+  const packageTierPrices =
+    linkedWh?.packageTierPrices ||
+    pkg.packageTierPrices ||
+    singleCodeTierPrices;
+
+  const availableCodesCount = getPackageAvailableStock(pkg, warehouses);
+  const availablePackagesCount =
+    typeof availableCodesCount === 'number'
+      ? Math.floor(availableCodesCount / packageCodesCount)
+      : undefined;
+
+  const defaultPurchaseUnit: WarehousePurchaseUnit = allowSingleCode
+    ? 'single_code'
+    : 'package';
+
+  return {
+    allowSingleCode,
+    allowPackage,
+    packageCodesCount,
+    packageNameAr,
+    singleCodeTierPrices,
+    packageTierPrices,
+    availableCodesCount,
+    availablePackagesCount,
+    defaultPurchaseUnit,
+    linkedWarehouse: linkedWh,
+  };
+}
+
+/**
+ * Merges live warehouse purchase mode settings & pricing onto a ServicePackage
+ * so UI components and pricing helpers see up-to-date warehouse configurations.
+ */
+export function mergeWarehouseOptionsIntoPackage(
+  pkg: ServicePackage,
+  warehouses?: VoucherWarehouse[]
+): ServicePackage {
+  const linkedWh = getPackageLinkedWarehouse(pkg, warehouses);
+  if (!linkedWh) return pkg;
+  return {
+    ...pkg,
+    tierPrices: { ...linkedWh.tierPrices },
+    packageTierPrices: linkedWh.packageTierPrices
+      ? { ...linkedWh.packageTierPrices }
+      : pkg.packageTierPrices,
+    allowSingleCodePurchase: linkedWh.allowSingleCodePurchase !== false,
+    allowPackagePurchase: Boolean(linkedWh.allowPackagePurchase),
+    packageCodesCount: linkedWh.packageCodesCount ?? pkg.packageCodesCount,
+    packageNameAr: linkedWh.packageNameAr ?? pkg.packageNameAr,
+    vouchers: [...linkedWh.codes],
+    availableStock: linkedWh.codes.length,
+  };
+}
+
 export function isPackageOutOfStock(
   pkg: ServicePackage,
   deliveryMethod?: DeliveryMethod,
-  warehouses?: VoucherWarehouse[]
+  warehouses?: VoucherWarehouse[],
+  purchaseUnit?: WarehousePurchaseUnit
 ): boolean {
-  const linkedWh = getPackageLinkedWarehouse(pkg, warehouses);
-  if (linkedWh) {
-    return linkedWh.codes.length <= 0;
+  const opts = resolvePackagePurchaseOptions(pkg, warehouses);
+  const stock = opts.availableCodesCount;
+
+  if (typeof stock !== 'number') {
+    return false;
   }
-  if (Array.isArray(pkg.vouchers)) {
-    return pkg.vouchers.length <= 0;
+
+  if (purchaseUnit === 'single_code') {
+    return !opts.allowSingleCode || stock < 1;
   }
-  if (deliveryMethod === 'voucher_code' && pkg.availableStock === 0) {
+
+  if (purchaseUnit === 'package') {
+    return !opts.allowPackage || stock < opts.packageCodesCount;
+  }
+
+  // No specific unit requested: out of stock only if no enabled unit can be satisfied
+  if (opts.allowSingleCode || opts.allowPackage) {
+    const canBuySingle = opts.allowSingleCode && stock >= 1;
+    const canBuyPkg = opts.allowPackage && stock >= opts.packageCodesCount;
+    if (isPackageVoucherBacked(pkg, warehouses) || deliveryMethod === 'voucher_code') {
+      return !(canBuySingle || canBuyPkg);
+    }
+    return stock <= 0;
+  }
+
+  if (deliveryMethod === 'voucher_code' && stock <= 0) {
     return true;
   }
-  if (typeof pkg.availableStock === 'number') {
-    return pkg.availableStock <= 0;
-  }
-  return false;
+  return stock <= 0;
 }
 
 export function getServiceTotalStock(
@@ -129,12 +244,14 @@ export function getServiceTotalStock(
 export interface DeductStockResult {
   outOfStock: boolean;
   assignedVoucher?: string;
+  assignedVouchers?: string[];
+  deductedCount: number;
   updatedService: DigitalService;
   updatedWarehouse?: VoucherWarehouse;
 }
 
 /**
- * Atomically deducts 1 unit (voucher code or package stock) from a service package
+ * Atomically deducts 1 code (single_code) or N codes (package) from a service package
  * and any linked VoucherWarehouse upon purchase.
  */
 export function deductPackageStock(params: {
@@ -142,30 +259,52 @@ export function deductPackageStock(params: {
   pkgId: string;
   deliveryMethod: DeliveryMethod;
   warehouses?: VoucherWarehouse[];
+  purchaseUnit?: WarehousePurchaseUnit;
   nowIso?: string;
 }): DeductStockResult {
-  const { service, pkgId, deliveryMethod, warehouses = [], nowIso = new Date().toISOString() } = params;
+  const {
+    service,
+    pkgId,
+    deliveryMethod,
+    warehouses = [],
+    purchaseUnit,
+    nowIso = new Date().toISOString(),
+  } = params;
   const targetPkg = service.packages.find((p) => p.id === pkgId);
   if (!targetPkg) {
-    return { outOfStock: true, updatedService: service };
+    return { outOfStock: true, deductedCount: 0, updatedService: service };
   }
 
-  const linkedWh = getPackageLinkedWarehouse(targetPkg, warehouses);
+  const opts = resolvePackagePurchaseOptions(targetPkg, warehouses);
+  const effectiveUnit: WarehousePurchaseUnit =
+    purchaseUnit || opts.defaultPurchaseUnit;
+
+  // Validate requested unit is permitted on this package/warehouse
+  if (effectiveUnit === 'single_code' && !opts.allowSingleCode) {
+    return { outOfStock: true, deductedCount: 0, updatedService: service };
+  }
+  if (effectiveUnit === 'package' && !opts.allowPackage) {
+    return { outOfStock: true, deductedCount: 0, updatedService: service };
+  }
+
+  const codesToDeduct =
+    effectiveUnit === 'package' ? opts.packageCodesCount : 1;
+
+  const linkedWh = opts.linkedWarehouse;
 
   // Case 1: Linked Voucher Warehouse
   if (linkedWh) {
     const sourceCodes = linkedWh.codes;
-    if (sourceCodes.length <= 0) {
-      return { outOfStock: true, updatedService: service };
+    if (sourceCodes.length < codesToDeduct) {
+      return { outOfStock: true, deductedCount: 0, updatedService: service };
     }
 
-    const assignedCode = deliveryMethod === 'voucher_code' ? sourceCodes[0] : undefined;
-    // Deduct 1 code when purchasing voucher_code, OR deduct 1 stock unit if direct package backed by warehouse
-    const nextCodes = sourceCodes.slice(1);
+    const assignedCodes = sourceCodes.slice(0, codesToDeduct);
+    const nextCodes = sourceCodes.slice(codesToDeduct);
     const updatedWarehouse: VoucherWarehouse = {
       ...linkedWh,
       codes: nextCodes,
-      usedCodesCount: (linkedWh.usedCodesCount || 0) + 1,
+      usedCodesCount: (linkedWh.usedCodesCount || 0) + codesToDeduct,
       updatedAt: nowIso,
     };
 
@@ -183,7 +322,9 @@ export function deductPackageStock(params: {
 
     return {
       outOfStock: false,
-      assignedVoucher: assignedCode ?? sourceCodes[0],
+      assignedVoucher: assignedCodes.join('\n'),
+      assignedVouchers: assignedCodes,
+      deductedCount: codesToDeduct,
       updatedService,
       updatedWarehouse,
     };
@@ -192,11 +333,11 @@ export function deductPackageStock(params: {
   // Case 2: Package with explicit vouchers array
   if (Array.isArray(targetPkg.vouchers)) {
     if (deliveryMethod === 'voucher_code') {
-      if (targetPkg.vouchers.length <= 0) {
-        return { outOfStock: true, updatedService: service };
+      if (targetPkg.vouchers.length < codesToDeduct) {
+        return { outOfStock: true, deductedCount: 0, updatedService: service };
       }
-      const assignedVoucher = targetPkg.vouchers[0];
-      const nextVouchers = targetPkg.vouchers.slice(1);
+      const assignedCodes = targetPkg.vouchers.slice(0, codesToDeduct);
+      const nextVouchers = targetPkg.vouchers.slice(codesToDeduct);
       const updatedService: DigitalService = {
         ...service,
         packages: service.packages.map((p) => {
@@ -210,7 +351,9 @@ export function deductPackageStock(params: {
       };
       return {
         outOfStock: false,
-        assignedVoucher,
+        assignedVoucher: assignedCodes.join('\n'),
+        assignedVouchers: assignedCodes,
+        deductedCount: codesToDeduct,
         updatedService,
       };
     }
@@ -221,29 +364,31 @@ export function deductPackageStock(params: {
         ? targetPkg.availableStock
         : targetPkg.vouchers.length;
 
-    if (currentStock <= 0) {
-      return { outOfStock: true, updatedService: service };
+    if (currentStock < codesToDeduct) {
+      return { outOfStock: true, deductedCount: 0, updatedService: service };
     }
 
-    const nextStock = Math.max(0, currentStock - 1);
+    const nextStock = Math.max(0, currentStock - codesToDeduct);
     const updatedService: DigitalService = {
       ...service,
       packages: service.packages.map((p) =>
         p.id === pkgId ? { ...p, availableStock: nextStock } : p
       ),
     };
-    return { outOfStock: false, updatedService };
+    return { outOfStock: false, deductedCount: codesToDeduct, updatedService };
   }
 
   // Case 3: Package with numeric availableStock (no explicit vouchers list)
   if (typeof targetPkg.availableStock === 'number') {
-    if (targetPkg.availableStock <= 0) {
-      return { outOfStock: true, updatedService: service };
+    if (targetPkg.availableStock < codesToDeduct) {
+      return { outOfStock: true, deductedCount: 0, updatedService: service };
     }
-    const nextStock = Math.max(0, targetPkg.availableStock - 1);
+    const nextStock = Math.max(0, targetPkg.availableStock - codesToDeduct);
     const generatedVoucher =
       deliveryMethod === 'voucher_code'
-        ? `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`
+        ? Array.from({ length: codesToDeduct }, () =>
+            `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`
+          ).join('\n')
         : undefined;
 
     const updatedService: DigitalService = {
@@ -255,6 +400,8 @@ export function deductPackageStock(params: {
     return {
       outOfStock: false,
       assignedVoucher: generatedVoucher,
+      assignedVouchers: generatedVoucher ? generatedVoucher.split('\n') : undefined,
+      deductedCount: codesToDeduct,
       updatedService,
     };
   }
@@ -268,12 +415,14 @@ export function deductPackageStock(params: {
   return {
     outOfStock: false,
     assignedVoucher: generatedVoucher,
+    assignedVouchers: generatedVoucher ? [generatedVoucher] : undefined,
+    deductedCount: 1,
     updatedService: service,
   };
 }
 
 /**
- * Syncs a warehouse's codes, name, and tier prices into the matching service package.
+ * Syncs a warehouse's codes, name, purchase modes, and tier prices into the matching service package.
  */
 export function syncWarehouseIntoService(
   service: DigitalService,
@@ -283,11 +432,24 @@ export function syncWarehouseIntoService(
     (p) => p.id === warehouse.linkedPackageId || p.warehouseId === warehouse.id
   );
 
+  const allowPackage = Boolean(warehouse.allowPackagePurchase);
+  const allowSingle =
+    warehouse.allowSingleCodePurchase === false && allowPackage
+      ? false
+      : warehouse.allowSingleCodePurchase !== false;
+
   const syncedPkg: ServicePackage = {
     id: warehouse.linkedPackageId || `pkg-${warehouse.id}`,
     name: warehouse.nameAr,
     description: warehouse.description || `فئة ${warehouse.categoryName}`,
     tierPrices: { ...warehouse.tierPrices },
+    packageTierPrices: warehouse.packageTierPrices
+      ? { ...warehouse.packageTierPrices }
+      : undefined,
+    allowSingleCodePurchase: allowSingle,
+    allowPackagePurchase: allowPackage,
+    packageCodesCount: warehouse.packageCodesCount,
+    packageNameAr: warehouse.packageNameAr,
     vouchers: [...warehouse.codes],
     availableStock: warehouse.codes.length,
     warehouseId: warehouse.id,

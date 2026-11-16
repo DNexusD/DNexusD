@@ -7,6 +7,8 @@ import {
   isPackageOutOfStock,
   deductPackageStock,
   syncWarehouseIntoService,
+  resolvePackagePurchaseOptions,
+  mergeWarehouseOptionsIntoPackage,
 } from './voucherWarehouses.ts';
 import type { DigitalService, VoucherWarehouse } from '../types/index.ts';
 
@@ -85,6 +87,8 @@ test('deductPackageStock pops first voucher code and updates both service and li
 
   assert.equal(res.outOfStock, false);
   assert.equal(res.assignedVoucher, 'CODE-1');
+  assert.deepEqual(res.assignedVouchers, ['CODE-1']);
+  assert.equal(res.deductedCount, 1);
   assert.deepEqual(res.updatedService.packages[0].vouchers, ['CODE-2', 'CODE-3']);
   assert.equal(res.updatedService.packages[0].availableStock, 2);
   assert.deepEqual(res.updatedWarehouse?.codes, ['CODE-2', 'CODE-3']);
@@ -141,15 +145,94 @@ test('deductPackageStock decrements availableStock for non-voucher package purch
   assert.equal(res.updatedService.packages[0].availableStock, 9);
 });
 
-test('syncWarehouseIntoService updates linked package codes, stock, and prices', () => {
+test('syncWarehouseIntoService updates linked package codes, stock, purchase modes, and prices', () => {
   const wh = makeWarehouse({
-    codes: ['X1', 'X2', 'X3', 'X4'],
+    codes: ['X1', 'X2', 'X3', 'X4', 'X5', 'X6'],
     tierPrices: { regular: 95, bronze: 90, silver: 85, gold: 80, vip: 75 },
+    allowSingleCodePurchase: true,
+    allowPackagePurchase: true,
+    packageCodesCount: 3,
+    packageNameAr: 'باقة التوفير 3 أكواد',
+    packageTierPrices: { regular: 270, bronze: 255, silver: 240, gold: 225, vip: 210 },
   });
   const srv = makeService();
   const synced = syncWarehouseIntoService(srv, wh);
 
-  assert.deepEqual(synced.packages[0].vouchers, ['X1', 'X2', 'X3', 'X4']);
-  assert.equal(synced.packages[0].availableStock, 4);
+  assert.deepEqual(synced.packages[0].vouchers, ['X1', 'X2', 'X3', 'X4', 'X5', 'X6']);
+  assert.equal(synced.packages[0].availableStock, 6);
   assert.equal(synced.packages[0].tierPrices.vip, 75);
+  assert.equal(synced.packages[0].allowSingleCodePurchase, true);
+  assert.equal(synced.packages[0].allowPackagePurchase, true);
+  assert.equal(synced.packages[0].packageCodesCount, 3);
+  assert.equal(synced.packages[0].packageNameAr, 'باقة التوفير 3 أكواد');
+  assert.equal(synced.packages[0].packageTierPrices?.vip, 210);
 });
+
+test('deductPackageStock deducts packageCodesCount codes when purchaseUnit is package', () => {
+  const wh = makeWarehouse({
+    codes: ['C1', 'C2', 'C3', 'C4', 'C5'],
+    usedCodesCount: 2,
+    allowSingleCodePurchase: true,
+    allowPackagePurchase: true,
+    packageCodesCount: 3,
+    packageTierPrices: { regular: 220, bronze: 210, silver: 200, gold: 190, vip: 180 },
+  });
+  const srv = makeService();
+
+  const res = deductPackageStock({
+    service: srv,
+    pkgId: 'pkg-psn-20',
+    deliveryMethod: 'voucher_code',
+    warehouses: [wh],
+    purchaseUnit: 'package',
+    nowIso: '2026-11-16T04:00:00Z',
+  });
+
+  assert.equal(res.outOfStock, false);
+  assert.equal(res.deductedCount, 3);
+  assert.deepEqual(res.assignedVouchers, ['C1', 'C2', 'C3']);
+  assert.equal(res.assignedVoucher, 'C1\nC2\nC3');
+  assert.deepEqual(res.updatedWarehouse?.codes, ['C4', 'C5']);
+  assert.equal(res.updatedWarehouse?.usedCodesCount, 5);
+  assert.deepEqual(res.updatedService.packages[0].vouchers, ['C4', 'C5']);
+  assert.equal(res.updatedService.packages[0].availableStock, 2);
+});
+
+test('package-only mode enforces stock >= packageCodesCount and blocks single-code purchase', () => {
+  const wh = makeWarehouse({
+    codes: ['C1', 'C2'],
+    allowSingleCodePurchase: false,
+    allowPackagePurchase: true,
+    packageCodesCount: 3,
+    packageTierPrices: { regular: 220, bronze: 210, silver: 200, gold: 190, vip: 180 },
+  });
+  const srv = makeService();
+  const mergedPkg = mergeWarehouseOptionsIntoPackage(srv.packages[0], [wh]);
+  const opts = resolvePackagePurchaseOptions(mergedPkg, [wh]);
+
+  assert.equal(opts.allowSingleCode, false);
+  assert.equal(opts.allowPackage, true);
+  assert.equal(opts.defaultPurchaseUnit, 'package');
+  assert.equal(opts.availablePackagesCount, 0);
+  assert.equal(isPackageOutOfStock(mergedPkg, 'voucher_code', [wh], 'package'), true);
+  assert.equal(isPackageOutOfStock(mergedPkg, 'voucher_code', [wh]), true);
+
+  const singleAttempt = deductPackageStock({
+    service: srv,
+    pkgId: 'pkg-psn-20',
+    deliveryMethod: 'voucher_code',
+    warehouses: [wh],
+    purchaseUnit: 'single_code',
+  });
+  assert.equal(singleAttempt.outOfStock, true);
+
+  const pkgAttempt = deductPackageStock({
+    service: srv,
+    pkgId: 'pkg-psn-20',
+    deliveryMethod: 'voucher_code',
+    warehouses: [wh],
+    purchaseUnit: 'package',
+  });
+  assert.equal(pkgAttempt.outOfStock, true);
+});
+

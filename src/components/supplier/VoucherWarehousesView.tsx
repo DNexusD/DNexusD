@@ -77,6 +77,15 @@ export const VoucherWarehousesView: React.FC = () => {
   const [priceSilver, setPriceSilver] = useState(80);
   const [priceGold, setPriceGold] = useState(70);
   const [priceVip, setPriceVip] = useState(60);
+  const [allowSingleCode, setAllowSingleCode] = useState(true);
+  const [allowPackage, setAllowPackage] = useState(false);
+  const [newPackageCodesCount, setNewPackageCodesCount] = useState(5);
+  const [newPackageNameAr, setNewPackageNameAr] = useState('');
+  const [pkgPriceRegular, setPkgPriceRegular] = useState(450);
+  const [pkgPriceBronze, setPkgPriceBronze] = useState(410);
+  const [pkgPriceSilver, setPkgPriceSilver] = useState(370);
+  const [pkgPriceGold, setPkgPriceGold] = useState(330);
+  const [pkgPriceVip, setPkgPriceVip] = useState(280);
   const [publishImmediately, setPublishImmediately] = useState(true);
   const [publishCatalogId, setPublishCatalogId] = useState(
     supplierCatalogs[0]?.id || ''
@@ -112,12 +121,23 @@ export const VoucherWarehousesView: React.FC = () => {
   const [editingWarehouse, setEditingWarehouse] = useState<VoucherWarehouse | null>(null);
   const [editName, setEditName] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editAllowSingle, setEditAllowSingle] = useState(true);
+  const [editAllowPackage, setEditAllowPackage] = useState(false);
+  const [editPackageCodesCount, setEditPackageCodesCount] = useState(5);
+  const [editPackageNameAr, setEditPackageNameAr] = useState('');
   const [editPrices, setEditPrices] = useState({
     regular: 100,
     bronze: 90,
     silver: 80,
     gold: 70,
     vip: 60
+  });
+  const [editPackagePrices, setEditPackagePrices] = useState({
+    regular: 450,
+    bronze: 410,
+    silver: 370,
+    gold: 330,
+    vip: 280
   });
 
   const filteredWarehouses = useMemo(() => {
@@ -160,12 +180,25 @@ export const VoucherWarehousesView: React.FC = () => {
       return;
     }
 
+    if (!allowSingleCode && !allowPackage) {
+      showToast({
+        type: 'error',
+        title: 'اختر طريقة شراء',
+        description: 'يرجى تفعيل الشراء بالكود الواحد أو بالباقة (أو كليهما).'
+      });
+      return;
+    }
+
     createVoucherWarehouse({
       nameAr: newName,
       categoryName: newCategory,
       catalogId: publishCatalogId || supplierCatalogs[0]?.id,
       description: newDescription,
       rawCodes: newRawCodes,
+      allowSingleCodePurchase: allowSingleCode,
+      allowPackagePurchase: allowPackage,
+      packageCodesCount: allowPackage ? Math.max(1, Math.floor(newPackageCodesCount || 5)) : undefined,
+      packageNameAr: allowPackage ? newPackageNameAr.trim() || undefined : undefined,
       tierPrices: {
         regular: priceRegular,
         bronze: priceBronze,
@@ -173,6 +206,15 @@ export const VoucherWarehousesView: React.FC = () => {
         gold: priceGold,
         vip: priceVip
       },
+      packageTierPrices: allowPackage
+        ? {
+            regular: pkgPriceRegular,
+            bronze: pkgPriceBronze,
+            silver: pkgPriceSilver,
+            gold: pkgPriceGold,
+            vip: pkgPriceVip
+          }
+        : undefined,
       publishImmediately,
       targetServiceId:
         publishImmediately && publishMode === 'existing_service'
@@ -188,6 +230,7 @@ export const VoucherWarehousesView: React.FC = () => {
     setNewCategory('');
     setNewDescription('');
     setNewRawCodes('');
+    setNewPackageNameAr('');
     setPublishNewServiceName('');
     setShowCreateForm(false);
   };
@@ -225,16 +268,46 @@ export const VoucherWarehousesView: React.FC = () => {
     setEditingWarehouse(wh);
     setEditName(wh.nameAr);
     setEditCategory(wh.categoryName);
+    const pkgOn = Boolean(wh.allowPackagePurchase);
+    const singleOn = wh.allowSingleCodePurchase === false && pkgOn ? false : wh.allowSingleCodePurchase !== false;
+    setEditAllowSingle(singleOn);
+    setEditAllowPackage(pkgOn);
+    setEditPackageCodesCount(wh.packageCodesCount || 5);
+    setEditPackageNameAr(wh.packageNameAr || '');
     setEditPrices({ ...wh.tierPrices });
+    setEditPackagePrices(
+      wh.packageTierPrices
+        ? { ...wh.packageTierPrices }
+        : {
+            regular: wh.tierPrices.regular * (wh.packageCodesCount || 5),
+            bronze: wh.tierPrices.bronze * (wh.packageCodesCount || 5),
+            silver: wh.tierPrices.silver * (wh.packageCodesCount || 5),
+            gold: wh.tierPrices.gold * (wh.packageCodesCount || 5),
+            vip: wh.tierPrices.vip * (wh.packageCodesCount || 5)
+          }
+    );
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingWarehouse || !editName.trim() || !editCategory.trim()) return;
+    if (!editAllowSingle && !editAllowPackage) {
+      showToast({
+        type: 'error',
+        title: 'اختر طريقة شراء',
+        description: 'يرجى تفعيل الشراء بالكود الواحد أو بالباقة (أو كليهما).'
+      });
+      return;
+    }
     updateVoucherWarehouse(editingWarehouse.id, {
       nameAr: editName.trim(),
       categoryName: editCategory.trim(),
-      tierPrices: editPrices
+      allowSingleCodePurchase: editAllowSingle,
+      allowPackagePurchase: editAllowPackage,
+      packageCodesCount: editAllowPackage ? Math.max(1, Math.floor(editPackageCodesCount || 5)) : undefined,
+      packageNameAr: editAllowPackage ? (editPackageNameAr.trim() || undefined) : undefined,
+      tierPrices: editPrices,
+      packageTierPrices: editAllowPackage ? editPackagePrices : undefined
     });
     setEditingWarehouse(null);
   };
@@ -373,68 +446,191 @@ export const VoucherWarehousesView: React.FC = () => {
             />
           </div>
 
-          {/* 5-tier pricing */}
-          <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-2.5">
-            <span className="block text-[11px] font-bold text-amber-400">
-              تسعير فئة المخزن حسب رتب العملاء (ر.س):
-            </span>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
-              <div>
-                <span className="block text-[10px] text-slate-400 mb-1">عادي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceRegular}
-                  onChange={(e) => setPriceRegular(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
-                />
-              </div>
-              <div>
-                <span className="block text-[10px] text-amber-500 mb-1">نحاسي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceBronze}
-                  onChange={(e) => setPriceBronze(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-amber-400 text-xs"
-                />
-              </div>
-              <div>
-                <span className="block text-[10px] text-slate-300 mb-1">فضي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceSilver}
-                  onChange={(e) => setPriceSilver(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-slate-200 text-xs"
-                />
-              </div>
-              <div>
-                <span className="block text-[10px] text-yellow-400 mb-1">ذهبي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceGold}
-                  onChange={(e) => setPriceGold(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-yellow-300 text-xs"
-                />
-              </div>
-              <div className="col-span-2 sm:col-span-1">
-                <span className="block text-[10px] text-purple-400 font-bold mb-1">مميز VIP</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceVip}
-                  onChange={(e) => setPriceVip(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-900 border border-purple-500/50 rounded-lg py-1.5 text-center font-mono font-bold text-purple-300 text-xs"
-                />
+          {/* Purchase Modes & Dual Pricing (Single Code vs Package) */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-amber-400">
+                تحديد إمكانية الشراء والتسعير (بالكود الواحد أو بالباقة أو كليهما):
+              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-white font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={allowSingleCode}
+                    onChange={(e) => setAllowSingleCode(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                  <span>إتاحة الشراء بالكود الواحد</span>
+                </label>
+
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-cyan-300 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={allowPackage}
+                    onChange={(e) => setAllowPackage(e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500 rounded"
+                  />
+                  <span>إتاحة الشراء بالباقة</span>
+                </label>
               </div>
             </div>
+
+            {allowSingleCode && (
+              <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
+                <span className="block text-[11px] font-bold text-amber-300">
+                  أسعار الكود الواحد حسب رتب العملاء (ر.س):
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                  <div>
+                    <span className="block text-[10px] text-slate-400 mb-1">عادي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={priceRegular}
+                      onChange={(e) => setPriceRegular(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-amber-500 mb-1">نحاسي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={priceBronze}
+                      onChange={(e) => setPriceBronze(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-amber-400 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-300 mb-1">فضي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={priceSilver}
+                      onChange={(e) => setPriceSilver(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-slate-200 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-yellow-400 mb-1">ذهبي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={priceGold}
+                      onChange={(e) => setPriceGold(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-yellow-300 text-xs"
+                    />
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <span className="block text-[10px] text-purple-400 font-bold mb-1">مميز VIP</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={priceVip}
+                      onChange={(e) => setPriceVip(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-purple-500/50 rounded-lg py-1.5 text-center font-mono font-bold text-purple-300 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {allowPackage && (
+              <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-cyan-300 mb-1">
+                      عدد الأكواد في الباقة الواحدة:
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newPackageCodesCount}
+                      onChange={(e) => setNewPackageCodesCount(Math.max(1, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-cyan-500/40 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-cyan-300 mb-1">
+                      مسمى الباقة (اختياري):
+                    </label>
+                    <input
+                      type="text"
+                      value={newPackageNameAr}
+                      onChange={(e) => setNewPackageNameAr(e.target.value)}
+                      placeholder={`مثال: باقة (${newPackageCodesCount} أكواد)`}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                </div>
+
+                <span className="block text-[11px] font-bold text-cyan-300">
+                  أسعار الباقة ({newPackageCodesCount} أكواد) حسب رتب العملاء (ر.س):
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                  <div>
+                    <span className="block text-[10px] text-slate-400 mb-1">عادي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={pkgPriceRegular}
+                      onChange={(e) => setPkgPriceRegular(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-amber-500 mb-1">نحاسي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={pkgPriceBronze}
+                      onChange={(e) => setPkgPriceBronze(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-amber-400 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-300 mb-1">فضي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={pkgPriceSilver}
+                      onChange={(e) => setPkgPriceSilver(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-slate-200 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-yellow-400 mb-1">ذهبي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={pkgPriceGold}
+                      onChange={(e) => setPkgPriceGold(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-yellow-300 text-xs"
+                    />
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <span className="block text-[10px] text-purple-400 font-bold mb-1">مميز VIP</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={pkgPriceVip}
+                      onChange={(e) => setPkgPriceVip(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-purple-500/50 rounded-lg py-1.5 text-center font-mono font-bold text-purple-300 text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Initial Codes */}
@@ -645,6 +841,19 @@ export const VoucherWarehousesView: React.FC = () => {
                           مخزن داخلي فقط
                         </span>
                       )}
+                      {(wh.allowSingleCodePurchase !== false || !wh.allowPackagePurchase) && (
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800 text-amber-300 border border-slate-700 text-[10px] font-semibold">
+                          شراء بالكود
+                        </span>
+                      )}
+                      {wh.allowPackagePurchase && (
+                        <span className="px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px] font-semibold flex items-center gap-1">
+                          <Package className="w-3 h-3" />
+                          <span>
+                            شراء بالباقة ({wh.packageCodesCount || 5} أكواد · {Math.floor(wh.codes.length / (wh.packageCodesCount || 5))} باقة متاحة)
+                          </span>
+                        </span>
+                      )}
                     </div>
                     <h3 className="font-bold text-sm text-white">{wh.nameAr}</h3>
                     {linkedService && (
@@ -672,28 +881,65 @@ export const VoucherWarehousesView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Pricing strip */}
-                <div className="grid grid-cols-5 gap-1.5 text-center p-2 rounded-xl bg-slate-950 border border-slate-800/80 text-[10px]">
-                  <div>
-                    <span className="text-slate-500 block">عادي</span>
-                    <span className="font-mono font-bold text-white">{wh.tierPrices.regular}</span>
-                  </div>
-                  <div>
-                    <span className="text-amber-500 block">نحاسي</span>
-                    <span className="font-mono font-bold text-amber-400">{wh.tierPrices.bronze}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-300 block">فضي</span>
-                    <span className="font-mono font-bold text-slate-200">{wh.tierPrices.silver}</span>
-                  </div>
-                  <div>
-                    <span className="text-yellow-400 block">ذهبي</span>
-                    <span className="font-mono font-bold text-yellow-300">{wh.tierPrices.gold}</span>
-                  </div>
-                  <div>
-                    <span className="text-purple-400 block">VIP</span>
-                    <span className="font-mono font-bold text-purple-300">{wh.tierPrices.vip}</span>
-                  </div>
+                {/* Pricing strips */}
+                <div className="space-y-2">
+                  {(wh.allowSingleCodePurchase !== false || !wh.allowPackagePurchase) && (
+                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
+                      <div className="text-[10px] font-bold text-amber-400">أسعار الكود الواحد (ر.س):</div>
+                      <div className="grid grid-cols-5 gap-1.5 text-center text-[10px]">
+                        <div>
+                          <span className="text-slate-500 block">عادي</span>
+                          <span className="font-mono font-bold text-white">{wh.tierPrices.regular}</span>
+                        </div>
+                        <div>
+                          <span className="text-amber-500 block">نحاسي</span>
+                          <span className="font-mono font-bold text-amber-400">{wh.tierPrices.bronze}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-300 block">فضي</span>
+                          <span className="font-mono font-bold text-slate-200">{wh.tierPrices.silver}</span>
+                        </div>
+                        <div>
+                          <span className="text-yellow-400 block">ذهبي</span>
+                          <span className="font-mono font-bold text-yellow-300">{wh.tierPrices.gold}</span>
+                        </div>
+                        <div>
+                          <span className="text-purple-400 block">VIP</span>
+                          <span className="font-mono font-bold text-purple-300">{wh.tierPrices.vip}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {wh.allowPackagePurchase && wh.packageTierPrices && (
+                    <div className="p-2 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-1">
+                      <div className="text-[10px] font-bold text-cyan-300">
+                        أسعار {wh.packageNameAr?.trim() || `الباقة (${wh.packageCodesCount || 5} أكواد)`} (ر.س):
+                      </div>
+                      <div className="grid grid-cols-5 gap-1.5 text-center text-[10px]">
+                        <div>
+                          <span className="text-slate-500 block">عادي</span>
+                          <span className="font-mono font-bold text-white">{wh.packageTierPrices.regular}</span>
+                        </div>
+                        <div>
+                          <span className="text-amber-500 block">نحاسي</span>
+                          <span className="font-mono font-bold text-amber-400">{wh.packageTierPrices.bronze}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-300 block">فضي</span>
+                          <span className="font-mono font-bold text-slate-200">{wh.packageTierPrices.silver}</span>
+                        </div>
+                        <div>
+                          <span className="text-yellow-400 block">ذهبي</span>
+                          <span className="font-mono font-bold text-yellow-300">{wh.packageTierPrices.gold}</span>
+                        </div>
+                        <div>
+                          <span className="text-purple-400 block">VIP</span>
+                          <span className="font-mono font-bold text-purple-300">{wh.packageTierPrices.vip}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Actions row */}
@@ -992,35 +1238,131 @@ export const VoucherWarehousesView: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-5 gap-2 text-center">
-              {(['regular', 'bronze', 'silver', 'gold', 'vip'] as const).map((tierKey) => (
-                <div key={tierKey}>
-                  <span className="block text-[10px] text-slate-400 mb-1">
-                    {tierKey === 'regular'
-                      ? 'عادي'
-                      : tierKey === 'bronze'
-                      ? 'نحاسي'
-                      : tierKey === 'silver'
-                      ? 'فضي'
-                      : tierKey === 'gold'
-                      ? 'ذهبي'
-                      : 'VIP'}
-                  </span>
+            <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-white font-semibold">
                   <input
-                    type="number"
-                    min={0}
-                    step="any"
-                    value={editPrices[tierKey]}
-                    onChange={(e) =>
-                      setEditPrices((prev) => ({
-                        ...prev,
-                        [tierKey]: Math.max(0, Number(e.target.value))
-                      }))
-                    }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
+                    type="checkbox"
+                    checked={editAllowSingle}
+                    onChange={(e) => setEditAllowSingle(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
                   />
+                  <span>إتاحة الشراء بالكود الواحد</span>
+                </label>
+
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-cyan-300 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={editAllowPackage}
+                    onChange={(e) => setEditAllowPackage(e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500 rounded"
+                  />
+                  <span>إتاحة الشراء بالباقة</span>
+                </label>
+              </div>
+
+              {editAllowSingle && (
+                <div className="space-y-1.5">
+                  <span className="block text-[11px] font-bold text-amber-300">
+                    أسعار الكود الواحد (ر.س):
+                  </span>
+                  <div className="grid grid-cols-5 gap-2 text-center">
+                    {(['regular', 'bronze', 'silver', 'gold', 'vip'] as const).map((tierKey) => (
+                      <div key={tierKey}>
+                        <span className="block text-[10px] text-slate-400 mb-1">
+                          {tierKey === 'regular'
+                            ? 'عادي'
+                            : tierKey === 'bronze'
+                            ? 'نحاسي'
+                            : tierKey === 'silver'
+                            ? 'فضي'
+                            : tierKey === 'gold'
+                            ? 'ذهبي'
+                            : 'VIP'}
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          value={editPrices[tierKey]}
+                          onChange={(e) =>
+                            setEditPrices((prev) => ({
+                              ...prev,
+                              [tierKey]: Math.max(0, Number(e.target.value))
+                            }))
+                          }
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
+
+              {editAllowPackage && (
+                <div className="p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-cyan-300 mb-1">
+                        عدد الأكواد في الباقة الواحدة:
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={editPackageCodesCount}
+                        onChange={(e) => setEditPackageCodesCount(Math.max(1, Number(e.target.value)))}
+                        className="w-full bg-slate-950 border border-cyan-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-cyan-300 mb-1">
+                        مسمى الباقة (اختياري):
+                      </label>
+                      <input
+                        type="text"
+                        value={editPackageNameAr}
+                        onChange={(e) => setEditPackageNameAr(e.target.value)}
+                        placeholder={`مثال: باقة (${editPackageCodesCount} أكواد)`}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <span className="block text-[11px] font-bold text-cyan-300">
+                    أسعار الباقة ({editPackageCodesCount} أكواد) (ر.س):
+                  </span>
+                  <div className="grid grid-cols-5 gap-2 text-center">
+                    {(['regular', 'bronze', 'silver', 'gold', 'vip'] as const).map((tierKey) => (
+                      <div key={tierKey}>
+                        <span className="block text-[10px] text-slate-400 mb-1">
+                          {tierKey === 'regular'
+                            ? 'عادي'
+                            : tierKey === 'bronze'
+                            ? 'نحاسي'
+                            : tierKey === 'silver'
+                            ? 'فضي'
+                            : tierKey === 'gold'
+                            ? 'ذهبي'
+                            : 'VIP'}
+                        </span>
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          value={editPackagePrices[tierKey]}
+                          onChange={(e) =>
+                            setEditPackagePrices((prev) => ({
+                              ...prev,
+                              [tierKey]: Math.max(0, Number(e.target.value))
+                            }))
+                          }
+                          className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-cyan-300 text-xs"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
