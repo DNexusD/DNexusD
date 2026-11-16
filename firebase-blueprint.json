@@ -256,6 +256,28 @@
       },
       "required": ["id", "catalogId", "supplierId", "nameAr", "isActive"]
     },
+    "VoucherWarehouse": {
+      "title": "VoucherWarehouse",
+      "description": "Category-based voucher code warehouse managed by supplier and linkable to services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "nameAr": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "catalogId": { "type": "string" },
+        "description": { "type": "string" },
+        "codes": { "type": "array" },
+        "usedCodesCount": { "type": "number" },
+        "linkedServiceId": { "type": "string" },
+        "linkedPackageId": { "type": "string" },
+        "isPublishedAsService": { "type": "boolean" },
+        "tierPrices": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "supplierId", "nameAr", "categoryName", "codes", "usedCodesCount", "isPublishedAsService", "createdAt"]
+    },
     "AccountingEntry": {
       "title": "AccountingEntry",
       "description": "Accounting ledger transaction entry for clients and suppliers",
@@ -374,6 +396,10 @@
     "/services/{serviceId}": {
       "schema": { "$ref": "#/entities/DigitalService" },
       "description": "Digital services with tiered pricing and delivery options"
+    },
+    "/voucherWarehouses/{warehouseId}": {
+      "schema": { "$ref": "#/entities/VoucherWarehouse" },
+      "description": "Supplier voucher code warehouses organized by category"
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },

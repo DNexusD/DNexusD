@@ -27,8 +27,15 @@ import {
   PlatformDropdownListKey,
   PlatformInterfaceSettings,
   AdminAccount,
-  AdminPermissions
+  AdminPermissions,
+  VoucherWarehouse
 } from '../types';
+import {
+  deductPackageStock,
+  mergeCodesIntoWarehouse,
+  parseVoucherCodesInput,
+  syncWarehouseIntoService
+} from '../utils/voucherWarehouses';
 import {
   getFirstAllowedAdminTab,
   resolveEffectiveAdminPermissions,
@@ -167,6 +174,7 @@ interface AppContextType {
   superAdmin: SuperAdmin;
   catalogs: Catalog[];
   services: DigitalService[];
+  voucherWarehouses: VoucherWarehouse[];
   depositRequests: DepositRequest[];
   loanRepaymentRequests: LoanRepaymentRequest[];
   supplierBankAccounts: SupplierBankAccount[];
@@ -290,6 +298,31 @@ interface AppContextType {
   addService: (service: Omit<DigitalService, 'id' | 'supplierId' | 'isActive'>) => void;
   updateService: (id: string, updates: Partial<Omit<DigitalService, 'id' | 'supplierId'>>) => void;
   deleteService: (id: string) => void;
+
+  // Voucher Warehouses (مخازن الأكواد حسب الفئة)
+  createVoucherWarehouse: (input: {
+    nameAr: string;
+    categoryName: string;
+    catalogId?: string;
+    description?: string;
+    rawCodes?: string;
+    tierPrices: {
+      regular: number;
+      bronze: number;
+      silver: number;
+      gold: number;
+      vip: number;
+    };
+    publishImmediately?: boolean;
+    targetServiceId?: string;
+    newServiceNameAr?: string;
+  }) => { warehouse: VoucherWarehouse; addedCount: number };
+  addCodesToWarehouse: (warehouseId: string, rawCodes: string) => { addedCount: number; skippedDuplicates: number };
+  removeCodeFromWarehouse: (warehouseId: string, codeIndex: number) => void;
+  updateVoucherWarehouse: (warehouseId: string, updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'tierPrices'>>) => void;
+  publishWarehouseAsService: (warehouseId: string, options: { catalogId: string; serviceId?: string; serviceNameAr?: string }) => void;
+  unpublishWarehouseFromService: (warehouseId: string) => void;
+  deleteVoucherWarehouse: (warehouseId: string) => void;
 
   // Platform Interface Settings, Fixed Admin Catalogs & Dynamic Dropdowns
   platformSettings: PlatformInterfaceSettings;
@@ -440,6 +473,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
     return initialServices;
+  });
+
+  const [voucherWarehouses, setVoucherWarehouses] = useState<VoucherWarehouse[]>(() => {
+    const saved = localStorage.getItem('digipos_voucher_warehouses_v1');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as VoucherWarehouse[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch {
+        // fallback
+      }
+    }
+    // Seed warehouses from initial services that carry voucher codes
+    const seeded: VoucherWarehouse[] = [];
+    for (const srv of initialServices) {
+      if (!srv.deliveryMethods.includes('voucher_code')) continue;
+      for (const pkg of srv.packages) {
+        if (Array.isArray(pkg.vouchers) && pkg.vouchers.length > 0) {
+          seeded.push({
+            id: `wh-${pkg.id}`,
+            supplierId: srv.supplierId,
+            nameAr: pkg.name,
+            categoryName: srv.nameAr,
+            catalogId: srv.catalogId,
+            description: pkg.description || srv.descriptionAr,
+            codes: [...pkg.vouchers],
+            usedCodesCount: 0,
+            linkedServiceId: srv.id,
+            linkedPackageId: pkg.id,
+            isPublishedAsService: true,
+            tierPrices: { ...pkg.tierPrices },
+            createdAt: '2026-11-16'
+          });
+        }
+      }
+    }
+    return seeded;
   });
   
   const [depositRequests, setDepositRequests] = useState<DepositRequest[]>(() => {
@@ -882,6 +954,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleFirestoreError(err, OperationType.LIST, 'services');
     });
 
+    // 8b. Voucher Warehouses live sync
+    const unsubWarehouses = onSnapshot(collection(db, 'voucherWarehouses'), (snapshot) => {
+      if (!snapshot.empty) {
+        const whMap = new Map<string, VoucherWarehouse>();
+        snapshot.forEach(docSnap => {
+          const wh = docSnap.data() as VoucherWarehouse;
+          if (wh && wh.id) {
+            whMap.set(wh.id, wh);
+          }
+        });
+        setVoucherWarehouses(Array.from(whMap.values()));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'voucherWarehouses');
+    });
+
     // 9. Platform Interface Settings live sync
     const unsubPlatformSettings = onSnapshot(doc(db, 'system', 'platformSettings'), (docSnap) => {
       if (docSnap.exists()) {
@@ -934,6 +1022,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubBankAccounts();
       unsubCatalogs();
       unsubServices();
+      unsubWarehouses();
       unsubPlatformSettings();
       unsubSuperAdmin();
     };
@@ -966,6 +1055,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem('digipos_services_v2', JSON.stringify(services));
   }, [services]);
+  useEffect(() => {
+    localStorage.setItem('digipos_voucher_warehouses_v1', JSON.stringify(voucherWarehouses));
+  }, [voucherWarehouses]);
   useEffect(() => {
     localStorage.setItem('digipos_deposits_v2', JSON.stringify(depositRequests));
   }, [depositRequests]);
@@ -1953,28 +2045,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 4. Handle voucher stock code assignment
-    let assignedVoucher = deliveryDetails.voucherCode;
-    if (deliveryMethod === 'voucher_code' && !assignedVoucher) {
-      if (pkg.vouchers && pkg.vouchers.length > 0) {
-        assignedVoucher = pkg.vouchers[0];
-        setServices(prev => prev.map(s => {
-          if (s.id !== service.id) return s;
-          return {
-            ...s,
-            packages: s.packages.map(p => {
-              if (p.id !== pkg.id) return p;
-              return {
-                ...p,
-                vouchers: (p.vouchers || []).slice(1),
-                availableStock: Math.max(0, (p.availableStock || 1) - 1)
-              };
-            })
-          };
-        }));
-      } else {
-        assignedVoucher = `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`;
-      }
+    // 4. Handle stock & voucher code assignment/deduction atomically
+    const liveService = services.find(s => s.id === service.id) || service;
+    const stockDeduction = deductPackageStock({
+      service: liveService,
+      pkgId: pkg.id,
+      deliveryMethod,
+      warehouses: voucherWarehouses
+    });
+
+    if (stockDeduction.outOfStock) {
+      showToast({
+        type: 'error',
+        title: 'نفد المخزون',
+        description: `عذراً، نفد مخزون "${pkg.name}" حالياً. يرجى اختيار باقة أخرى أو التواصل مع المتجر لتعبئة المخزون.`
+      });
+      return { success: false, error: 'out_of_stock' };
+    }
+
+    const assignedVoucher = stockDeduction.assignedVoucher || deliveryDetails.voucherCode;
+
+    if (stockDeduction.updatedService !== liveService) {
+      setServices(prev => prev.map(s => s.id === liveService.id ? stockDeduction.updatedService : s));
+      firestoreSync.saveService(stockDeduction.updatedService).catch(console.error);
+    }
+
+    if (stockDeduction.updatedWarehouse) {
+      const nextWh = stockDeduction.updatedWarehouse;
+      setVoucherWarehouses(prev => prev.map(w => w.id === nextWh.id ? nextWh : w));
+      firestoreSync.saveVoucherWarehouse(nextWh).catch(console.error);
     }
 
     const orderId = `ord-${Date.now().toString().slice(-6)}`;
@@ -4257,6 +4356,316 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  // --- Voucher Warehouses Management (مخازن الأكواد حسب الفئة) ---
+  const publishWarehouseInternal = (
+    wh: VoucherWarehouse,
+    options: { catalogId: string; serviceId?: string; serviceNameAr?: string }
+  ): VoucherWarehouse => {
+    const targetCatalogId = options.catalogId || wh.catalogId || catalogs[0]?.id || 'cat-cards';
+    const existingTargetService = options.serviceId
+      ? services.find(s => s.id === options.serviceId)
+      : wh.linkedServiceId
+      ? services.find(s => s.id === wh.linkedServiceId)
+      : undefined;
+
+    if (existingTargetService) {
+      const updatedSrv = syncWarehouseIntoService(
+        { ...existingTargetService, catalogId: targetCatalogId, isActive: true },
+        wh
+      );
+      const linkedPkg = updatedSrv.packages.find(
+        p => p.warehouseId === wh.id || p.id === wh.linkedPackageId
+      );
+      const updatedWh: VoucherWarehouse = {
+        ...wh,
+        catalogId: targetCatalogId,
+        linkedServiceId: updatedSrv.id,
+        linkedPackageId: linkedPkg?.id || wh.linkedPackageId || `pkg-${wh.id}`,
+        isPublishedAsService: true,
+        updatedAt: new Date().toISOString()
+      };
+      setServices(prev => prev.map(s => (s.id === updatedSrv.id ? updatedSrv : s)));
+      firestoreSync.saveService(updatedSrv).catch(console.error);
+      setVoucherWarehouses(prev => prev.map(w => (w.id === updatedWh.id ? updatedWh : w)));
+      firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+      return updatedWh;
+    }
+
+    // Create a new DigitalService for this warehouse / category
+    const newSrvId = `srv-wh-${Date.now()}`;
+    const newPkgId = `pkg-${wh.id}`;
+    const newSrv: DigitalService = {
+      id: newSrvId,
+      catalogId: targetCatalogId,
+      supplierId: supplier.id,
+      nameAr: options.serviceNameAr?.trim() || wh.categoryName || wh.nameAr,
+      descriptionAr: wh.description || `خدمة أكواد وقسائم رقمية فورية - فئة ${wh.categoryName}`,
+      icon: 'Ticket',
+      deliveryMethods: ['voucher_code'],
+      isActive: true,
+      packages: [
+        {
+          id: newPkgId,
+          name: wh.nameAr,
+          description: wh.description || `فئة ${wh.categoryName}`,
+          tierPrices: { ...wh.tierPrices },
+          vouchers: [...wh.codes],
+          availableStock: wh.codes.length,
+          warehouseId: wh.id
+        }
+      ]
+    };
+
+    const updatedWh: VoucherWarehouse = {
+      ...wh,
+      catalogId: targetCatalogId,
+      linkedServiceId: newSrvId,
+      linkedPackageId: newPkgId,
+      isPublishedAsService: true,
+      updatedAt: new Date().toISOString()
+    };
+
+    setServices(prev => [...prev, newSrv]);
+    firestoreSync.saveService(newSrv).catch(console.error);
+    setCatalogs(prev =>
+      prev.map(c =>
+        c.id === targetCatalogId ? { ...c, serviceCount: (c.serviceCount || 0) + 1 } : c
+      )
+    );
+    setVoucherWarehouses(prev => prev.map(w => (w.id === updatedWh.id ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+    return updatedWh;
+  };
+
+  const createVoucherWarehouse = (input: {
+    nameAr: string;
+    categoryName: string;
+    catalogId?: string;
+    description?: string;
+    rawCodes?: string;
+    tierPrices: {
+      regular: number;
+      bronze: number;
+      silver: number;
+      gold: number;
+      vip: number;
+    };
+    publishImmediately?: boolean;
+    targetServiceId?: string;
+    newServiceNameAr?: string;
+  }) => {
+    const parsed = parseVoucherCodesInput(input.rawCodes || '');
+    const nowIso = new Date().toISOString();
+    const whId = `wh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    let warehouse: VoucherWarehouse = {
+      id: whId,
+      supplierId: supplier.id,
+      nameAr: input.nameAr.trim(),
+      categoryName: input.categoryName.trim(),
+      catalogId: input.catalogId,
+      description: input.description?.trim() || undefined,
+      codes: parsed.codes,
+      usedCodesCount: 0,
+      isPublishedAsService: false,
+      tierPrices: { ...input.tierPrices },
+      createdAt: nowIso.substring(0, 10),
+      updatedAt: nowIso
+    };
+
+    setVoucherWarehouses(prev => [warehouse, ...prev]);
+    firestoreSync.saveVoucherWarehouse(warehouse).catch(console.error);
+
+    if (input.publishImmediately) {
+      warehouse = publishWarehouseInternal(warehouse, {
+        catalogId: input.catalogId || catalogs[0]?.id || 'cat-cards',
+        serviceId: input.targetServiceId || undefined,
+        serviceNameAr: input.newServiceNameAr
+      });
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم إنشاء مخزن الأكواد بنجاح',
+      description: `تم إنشاء مخزن "${warehouse.nameAr}" (${parsed.codes.length} كود)${warehouse.isPublishedAsService ? ' وعرضه كخدمة للعملاء' : ''}.`
+    });
+
+    return { warehouse, addedCount: parsed.codes.length };
+  };
+
+  const addCodesToWarehouse = (warehouseId: string, rawCodes: string) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return { addedCount: 0, skippedDuplicates: 0 };
+
+    const { nextCodes, addedCount, skippedDuplicates } = mergeCodesIntoWarehouse(
+      targetWh.codes,
+      rawCodes
+    );
+
+    if (addedCount === 0) {
+      showToast({
+        type: 'info',
+        title: 'لم يتم إضافة أكواد جديدة',
+        description: skippedDuplicates > 0 ? 'جميع الأكواد المدخلة موجودة مسبقاً في المخزن.' : 'يرجى إدخال أكواد صالحة.'
+      });
+      return { addedCount: 0, skippedDuplicates };
+    }
+
+    const updatedWh: VoucherWarehouse = {
+      ...targetWh,
+      codes: nextCodes,
+      updatedAt: new Date().toISOString()
+    };
+
+    setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+
+    // Sync linked service package if published
+    if (updatedWh.linkedServiceId) {
+      const linkedSrv = services.find(s => s.id === updatedWh.linkedServiceId);
+      if (linkedSrv) {
+        const syncedSrv = syncWarehouseIntoService(linkedSrv, updatedWh);
+        setServices(prev => prev.map(s => (s.id === syncedSrv.id ? syncedSrv : s)));
+        firestoreSync.saveService(syncedSrv).catch(console.error);
+      }
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تمت تعبئة المخزن بالأكواد',
+      description: `تمت إضافة ${addedCount} كود لمخزن "${updatedWh.nameAr}"${skippedDuplicates > 0 ? ` (تم تجاهل ${skippedDuplicates} مكرر)` : ''}.`
+    });
+
+    return { addedCount, skippedDuplicates };
+  };
+
+  const removeCodeFromWarehouse = (warehouseId: string, codeIndex: number) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return;
+    const nextCodes = targetWh.codes.filter((_, idx) => idx !== codeIndex);
+    const updatedWh: VoucherWarehouse = {
+      ...targetWh,
+      codes: nextCodes,
+      updatedAt: new Date().toISOString()
+    };
+    setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+
+    if (updatedWh.linkedServiceId) {
+      const linkedSrv = services.find(s => s.id === updatedWh.linkedServiceId);
+      if (linkedSrv) {
+        const syncedSrv = syncWarehouseIntoService(linkedSrv, updatedWh);
+        setServices(prev => prev.map(s => (s.id === syncedSrv.id ? syncedSrv : s)));
+        firestoreSync.saveService(syncedSrv).catch(console.error);
+      }
+    }
+  };
+
+  const updateVoucherWarehouse = (
+    warehouseId: string,
+    updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'tierPrices'>>
+  ) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return;
+    const updatedWh: VoucherWarehouse = {
+      ...targetWh,
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+
+    if (updatedWh.linkedServiceId) {
+      const linkedSrv = services.find(s => s.id === updatedWh.linkedServiceId);
+      if (linkedSrv) {
+        const syncedSrv = syncWarehouseIntoService(linkedSrv, updatedWh);
+        setServices(prev => prev.map(s => (s.id === syncedSrv.id ? syncedSrv : s)));
+        firestoreSync.saveService(syncedSrv).catch(console.error);
+      }
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث بيانات المخزن',
+      description: `تم حفظ تعديلات "${updatedWh.nameAr}" بنجاح.`
+    });
+  };
+
+  const publishWarehouseAsService = (
+    warehouseId: string,
+    options: { catalogId: string; serviceId?: string; serviceNameAr?: string }
+  ) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return;
+    const updatedWh = publishWarehouseInternal(targetWh, options);
+    showToast({
+      type: 'success',
+      title: 'تم عرض المخزن كخدمة للعملاء',
+      description: `تم نشر "${updatedWh.nameAr}" ضمن الفئة والكتالوج المحدد بنجاح.`
+    });
+  };
+
+  const unpublishWarehouseFromService = (warehouseId: string) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return;
+    const updatedWh: VoucherWarehouse = {
+      ...targetWh,
+      isPublishedAsService: false,
+      updatedAt: new Date().toISOString()
+    };
+    setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+
+    if (targetWh.linkedServiceId) {
+      const linkedSrv = services.find(s => s.id === targetWh.linkedServiceId);
+      if (linkedSrv) {
+        const remainingPkgs = linkedSrv.packages.filter(
+          p => p.warehouseId !== warehouseId && p.id !== targetWh.linkedPackageId
+        );
+        if (remainingPkgs.length === 0) {
+          const updatedSrv = { ...linkedSrv, isActive: false };
+          setServices(prev => prev.map(s => (s.id === linkedSrv.id ? updatedSrv : s)));
+          firestoreSync.saveService(updatedSrv).catch(console.error);
+        } else {
+          const updatedSrv = { ...linkedSrv, packages: remainingPkgs };
+          setServices(prev => prev.map(s => (s.id === linkedSrv.id ? updatedSrv : s)));
+          firestoreSync.saveService(updatedSrv).catch(console.error);
+        }
+      }
+    }
+
+    showToast({
+      type: 'info',
+      title: 'تم إيقاف العرض كخدمة',
+      description: `تم إخفاء "${targetWh.nameAr}" من واجهة العملاء مع الاحتفاظ بأكواد المخزن.`
+    });
+  };
+
+  const deleteVoucherWarehouse = (warehouseId: string) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    setVoucherWarehouses(prev => prev.filter(w => w.id !== warehouseId));
+    firestoreSync.deleteVoucherWarehouse(warehouseId).catch(console.error);
+
+    if (targetWh?.linkedServiceId) {
+      const linkedSrv = services.find(s => s.id === targetWh.linkedServiceId);
+      if (linkedSrv) {
+        const updatedSrv: DigitalService = {
+          ...linkedSrv,
+          packages: linkedSrv.packages.map(p =>
+            p.warehouseId === warehouseId ? { ...p, warehouseId: undefined } : p
+          )
+        };
+        setServices(prev => prev.map(s => (s.id === linkedSrv.id ? updatedSrv : s)));
+        firestoreSync.saveService(updatedSrv).catch(console.error);
+      }
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم حذف المخزن',
+      description: 'تم حذف مخزن الأكواد بنجاح.'
+    });
+  };
+
   // Add Supplier by Super Admin
   const addSupplier = (newSupData: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => {
     const newId = `sup-${Date.now()}`;
@@ -4801,6 +5210,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         superAdmin,
         catalogs,
         services,
+        voucherWarehouses,
         depositRequests,
         loanRepaymentRequests,
         supplierBankAccounts,
@@ -4858,6 +5268,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addService,
         updateService,
         deleteService,
+        createVoucherWarehouse,
+        addCodesToWarehouse,
+        removeCodeFromWarehouse,
+        updateVoucherWarehouse,
+        publishWarehouseAsService,
+        unpublishWarehouseFromService,
+        deleteVoucherWarehouse,
         platformSettings,
         updatePlatformInterfaceSettings,
         addFixedCatalogByAdmin,

@@ -25,6 +25,7 @@ import {
   Gift
 } from 'lucide-react';
 import { calculateServicePurchasePricing } from '../../utils/pricing';
+import { getPackageAvailableStock, isPackageOutOfStock, isPackageVoucherBacked } from '../../utils/voucherWarehouses';
 
 interface PurchaseModalProps {
   service: DigitalService;
@@ -32,13 +33,17 @@ interface PurchaseModalProps {
 }
 
 export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }) => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, supplier, platformSettings, executePurchase, showToast } = useApp();
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, supplier, platformSettings, executePurchase, showToast } = useApp();
   
+  const liveService = services.find(s => s.id === service.id) || service;
+
   // Selected Delivery Method
-  const [selectedMethod, setSelectedMethod] = useState<DeliveryMethod>(service.deliveryMethods[0]);
+  const [selectedMethod, setSelectedMethod] = useState<DeliveryMethod>(liveService.deliveryMethods[0]);
   
-  // Selected Package
-  const [selectedPkg, setSelectedPkg] = useState<ServicePackage>(service.packages[0] || null);
+  // Selected Package ID (resolved live against liveService so stock decrements immediately)
+  const [selectedPkgId, setSelectedPkgId] = useState<string>(liveService.packages[0]?.id || '');
+  const selectedPkg: ServicePackage =
+    liveService.packages.find(p => p.id === selectedPkgId) || liveService.packages[0];
 
   // Method 1: Player ID inputs
   const [playerId, setPlayerId] = useState('');
@@ -129,6 +134,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const unitPrice = selectedPricing.unitPrice;
   const feeAmount = selectedPricing.feeAmount;
   const totalAmount = selectedPricing.totalAmount;
+
+  const selectedPkgStock = selectedPkg ? getPackageAvailableStock(selectedPkg, voucherWarehouses) : undefined;
+  const selectedPkgIsOutOfStock = selectedPkg ? isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses) : true;
 
   // Handle Verify Player ID
   const handleVerifyPlayerId = () => {
@@ -224,6 +232,15 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       return;
     }
 
+    if (selectedPkgIsOutOfStock) {
+      showToast({
+        type: 'error',
+        title: 'نفد المخزون',
+        description: `عذراً، نفد مخزون "${selectedPkg?.name || ''}" حالياً. يرجى اختيار باقة أخرى.`
+      });
+      return;
+    }
+
     setOrderProcessing(true);
     // Step 1: Notify user order is "قيد الإنجاز"
     setOrderStage('in_progress');
@@ -236,7 +253,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     // Simulate supplier fulfillment turnaround
     setTimeout(async () => {
       const result = await executePurchase({
-        service,
+        service: liveService,
         pkg: selectedPkg,
         deliveryMethod: selectedMethod,
         deliveryDetails: {
@@ -244,8 +261,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
           playerNickname: selectedMethod === 'player_id' ? playerNickname : undefined,
           accountEmail: selectedMethod === 'account_login' ? accountEmail : undefined,
           accountPassword: selectedMethod === 'account_login' ? accountPassword : undefined,
-          verificationCodeEntered: selectedMethod === 'account_login' ? verificationCode : undefined,
-          voucherCode: selectedMethod === 'voucher_code' ? (selectedPkg.vouchers?.[0]) : undefined
+          verificationCodeEntered: selectedMethod === 'account_login' ? verificationCode : undefined
         },
         paymentMethod,
         customerName: customerName.trim() || undefined,
@@ -451,7 +467,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                   <span>الباقة:</span>
-                  <span className="font-semibold text-white">{selectedPkg.name}</span>
+                  <span className="font-semibold text-white">
+                    {selectedPkg.name}
+                    {selectedPkgStock !== undefined && (
+                      <span className={`mr-2 font-mono text-[11px] ${selectedPkgStock > 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                        ({isPackageVoucherBacked(selectedPkg, voucherWarehouses) ? `المتبقي: ${selectedPkgStock} كود` : `المخزون المتبقي: ${selectedPkgStock}`})
+                      </span>
+                    )}
+                  </span>
                 </div>
                 {selectedMethod === 'player_id' && (
                   <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
@@ -589,8 +612,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   2. اختر باقة الشحن:
                 </label>
                 <div className="space-y-2">
-                  {service.packages.map(pkg => {
-                    const isSelected = selectedPkg.id === pkg.id;
+                  {liveService.packages.map(pkg => {
+                    const isSelected = selectedPkg?.id === pkg.id;
+                    const pkgStock = getPackageAvailableStock(pkg, voucherWarehouses);
+                    const pkgIsVoucher = isPackageVoucherBacked(pkg, voucherWarehouses);
+                    const pkgOutOfStock = isPackageOutOfStock(pkg, selectedMethod, voucherWarehouses);
                     const pkgPricing = calculateServicePurchasePricing({
                       pkg,
                       clientTier: currentTier,
@@ -607,9 +633,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       <button
                         key={pkg.id}
                         type="button"
-                        onClick={() => setSelectedPkg(pkg)}
+                        onClick={() => setSelectedPkgId(pkg.id)}
                         className={`w-full p-3.5 rounded-2xl border text-right transition-all flex items-center justify-between ${
-                          isSelected
+                          pkgOutOfStock
+                            ? 'bg-rose-950/20 border-rose-500/40 text-slate-400 opacity-85'
+                            : isSelected
                             ? pkgPricing.isFreeGiftApplied
                               ? 'bg-purple-500/15 border-purple-500 ring-1 ring-purple-500/30 text-white'
                               : 'bg-amber-500/15 border-amber-500 ring-1 ring-amber-500/30 text-white'
@@ -619,6 +647,22 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         <div className="space-y-0.5">
                           <div className="font-bold text-sm text-white flex items-center gap-2 flex-wrap">
                             <span>{pkg.name}</span>
+                            {pkgStock !== undefined && (
+                              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                                pkgStock > 0
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                              }`}>
+                                <Ticket className="w-3 h-3" />
+                                <span>
+                                  {pkgStock > 0
+                                    ? pkgIsVoucher
+                                      ? `${pkgStock} كود متوفر`
+                                      : `المخزون: ${pkgStock}`
+                                    : 'نفد المخزون'}
+                                </span>
+                              </span>
+                            )}
                             {pkgPricing.isFreeGiftApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
                                 🎁 هدية مجانية (0 ر.س + {pkgPricing.appFeePercentageApplied}% رسوم)
@@ -1030,14 +1074,28 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
               </div>
 
+              {selectedPkgIsOutOfStock && (
+                <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-300 font-semibold text-center">
+                  نفد المخزون من هذه الباقة/الفئة حالياً. يرجى اختيار باقة أخرى متوفرة أو التواصل مع المتجر.
+                </div>
+              )}
+
               {/* Confirm Purchase Button with clearly displayed price */}
               <button
                 type="button"
-                disabled={orderProcessing}
+                disabled={orderProcessing || selectedPkgIsOutOfStock}
                 onClick={handleConfirmPurchase}
-                className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all"
+                className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all ${
+                  selectedPkgIsOutOfStock
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 active:scale-[0.98]'
+                }`}
               >
-                <span>تأكيد دفع {totalAmount.toFixed(2)} ر.س وشحن فوري</span>
+                <span>
+                  {selectedPkgIsOutOfStock
+                    ? 'نفد المخزون - غير متاح حالياً'
+                    : `تأكيد دفع ${totalAmount.toFixed(2)} ر.س وشحن فوري`}
+                </span>
               </button>
             </>
           )}

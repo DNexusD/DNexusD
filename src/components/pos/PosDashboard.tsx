@@ -42,9 +42,10 @@ import { getLoanRemainingAmount, isLoanDeposit } from '../../utils/loanRepayment
 import { getIncomingLoanRepaymentsForPos, getIncomingTransfersForPos, hasSupplierTransferPrivilege } from '../../utils/bankAccounts';
 import { calculateServicePurchasePricing, getEffectiveAppFeePercentage, isCatalogFreeGifts } from '../../utils/pricing';
 import { getCatalogsForPosView } from '../../utils/platformSettings';
+import { getPackageAvailableStock, getServiceTotalStock } from '../../utils/voucherWarehouses';
 
 export const PosDashboard: React.FC = () => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
   const giftAppFeePct = getEffectiveAppFeePercentage(currentPosSupplier || supplier, superAdmin);
 
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
@@ -670,7 +671,7 @@ export const PosDashboard: React.FC = () => {
                       {srv.descriptionAr}
                     </p>
 
-                    {/* Delivery Methods Badges */}
+                    {/* Categories / Packages Stock Preview */}
                     <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px]">
                       {srv.deliveryMethods.map(m => (
                         <span key={m} className="px-2 py-0.5 rounded-md bg-slate-950 border border-slate-800 text-slate-300">
@@ -679,7 +680,55 @@ export const PosDashboard: React.FC = () => {
                           {m === 'voucher_code' && 'تسليم كود قسيمة'}
                         </span>
                       ))}
+                      {(() => {
+                        const totalStock = getServiceTotalStock(srv, voucherWarehouses);
+                        const hasVoucherCodes = srv.deliveryMethods.includes('voucher_code') || srv.packages.some(p => Array.isArray(p.vouchers) || Boolean(p.warehouseId));
+                        if (hasVoucherCodes) {
+                          return totalStock > 0 ? (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold font-mono">
+                              {totalStock} كود متوفر
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold">
+                              نفد المخزون
+                            </span>
+                          );
+                        }
+                        if (totalStock > 0) {
+                          return (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold font-mono">
+                              المخزون: {totalStock}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
+
+                    {srv.packages.some(p => Array.isArray(p.vouchers) || Boolean(p.warehouseId) || typeof p.availableStock === 'number') && (
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {srv.packages.slice(0, 4).map(pkg => {
+                          const stock = getPackageAvailableStock(pkg, voucherWarehouses);
+                          const isVouch = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
+                          if (typeof stock !== 'number') return null;
+                          return (
+                            <span
+                              key={pkg.id}
+                              className={`text-[10px] px-2 py-0.5 rounded-lg border flex items-center gap-1 ${
+                                stock > 0
+                                  ? 'bg-slate-950/80 border-slate-800 text-slate-300'
+                                  : 'bg-rose-950/40 border-rose-500/30 text-rose-300'
+                              }`}
+                            >
+                              <span className="truncate max-w-[140px]">{pkg.name}</span>
+                              <span className="font-mono font-bold text-amber-400">
+                                {stock > 0 ? (isVouch ? `(${stock} كود)` : `(${stock})`) : '(نفد)'}
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Pricing footer & CTA */}
@@ -921,7 +970,7 @@ export const PosDashboard: React.FC = () => {
       {/* Purchase Modal */}
       {activePurchaseService && (
         <PurchaseModal
-          service={activePurchaseService}
+          service={services.find(s => s.id === activePurchaseService.id) || activePurchaseService}
           onClose={() => setActivePurchaseService(null)}
         />
       )}

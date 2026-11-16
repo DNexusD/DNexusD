@@ -28,9 +28,10 @@ interface EditServiceModalProps {
 }
 
 export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onClose }) => {
-  const { catalogs, supplier, superAdmin, posClients, updateService, deleteService, showToast } = useApp();
+  const { catalogs, supplier, superAdmin, posClients, voucherWarehouses, updateService, deleteService, showToast } = useApp();
   const effectiveAppFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
+  const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
 
   const [catalogId, setCatalogId] = useState(service.catalogId || supplierCatalogs[0]?.id || '');
   const [nameAr, setNameAr] = useState(service.nameAr || '');
@@ -137,6 +138,32 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       return;
     }
     setPackages(prev => prev.filter(p => p.id !== pkgId));
+  };
+
+  const handleUpdatePackageStock = (pkgId: string, stock: number) => {
+    const safeStock = Math.max(0, Math.floor(Number.isFinite(stock) ? stock : 0));
+    setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, availableStock: safeStock } : p)));
+  };
+
+  const handleLinkPackageWarehouse = (pkgId: string, warehouseId: string) => {
+    if (!warehouseId) {
+      setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, warehouseId: undefined } : p)));
+      return;
+    }
+    const wh = supplierWarehouses.find(w => w.id === warehouseId);
+    if (!wh) return;
+    setPackages(prev =>
+      prev.map(p =>
+        p.id === pkgId
+          ? {
+              ...p,
+              warehouseId: wh.id,
+              vouchers: [...wh.codes],
+              availableStock: wh.codes.length
+            }
+          : p
+      )
+    );
   };
 
   const handleAddNewPackage = () => {
@@ -636,6 +663,46 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           className="w-full bg-purple-950/40 border border-purple-500/50 rounded-xl px-2 py-1 text-center font-mono text-purple-300 font-bold text-xs"
                         />
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Warehouse Link & Stock Control */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-800/70 text-[11px]">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">ربط بمخزن أكواد:</label>
+                      <select
+                        value={pkg.warehouseId || ''}
+                        onChange={e => handleLinkPackageWarehouse(pkg.id, e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white"
+                      >
+                        <option value="">-- بدون ربط بمخزن --</option>
+                        {supplierWarehouses.map(wh => (
+                          <option key={wh.id} value={wh.id}>
+                            {wh.categoryName} - {wh.nameAr} ({wh.codes.length} كود)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">
+                        {pkg.warehouseId || Array.isArray(pkg.vouchers)
+                          ? 'الأكواد المتوفرة حالياً:'
+                          : 'كمية المخزون المتوفرة:'}
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
+                        value={
+                          pkg.warehouseId
+                            ? supplierWarehouses.find(w => w.id === pkg.warehouseId)?.codes.length ?? pkg.vouchers?.length ?? 0
+                            : Array.isArray(pkg.vouchers)
+                            ? pkg.vouchers.length
+                            : pkg.availableStock ?? 50
+                        }
+                        onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"
+                      />
                     </div>
                   </div>
                 </div>

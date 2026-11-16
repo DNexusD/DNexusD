@@ -63,6 +63,8 @@ import { LoansRegistryView } from '../loans/LoansRegistryView';
 import { OfficeEmployeesView } from './OfficeEmployeesView';
 import { BankAccountsView } from './BankAccountsView';
 import { SupplierNotificationsView } from './SupplierNotificationsView';
+import { VoucherWarehousesView } from './VoucherWarehousesView';
+import { getPackageAvailableStock } from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
 import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
 import {
@@ -80,6 +82,7 @@ export const SupplierDashboard: React.FC = () => {
     superAdmin,
     catalogs, 
     services, 
+    voucherWarehouses,
     posClients, 
     depositRequests, 
     loanRepaymentRequests,
@@ -126,10 +129,6 @@ export const SupplierDashboard: React.FC = () => {
   const [newCatName, setNewCatName] = useState('');
   const [newCatDesc, setNewCatDesc] = useState('');
   const [newCatIsFreeGift, setNewCatIsFreeGift] = useState(false);
-
-  // Stock vouchers management state
-  const [selectedServiceForStock, setSelectedServiceForStock] = useState<string>(services[0]?.id || '');
-  const [newVoucherInput, setNewVoucherInput] = useState('');
 
   // Selected subtab inside supplier portal
   const [subTab, setSubTab] = useState<'catalogs' | 'pending_orders' | 'account_orders' | 'deposits' | 'loans' | 'bank_accounts' | 'clients' | 'vouchers' | 'client_statements' | 'employees' | 'notifications'>('catalogs');
@@ -411,17 +410,6 @@ export const SupplierDashboard: React.FC = () => {
     setNewCatDesc('');
     setNewCatIsFreeGift(false);
     setShowAddCatalog(false);
-  };
-
-  const handleAddVouchersToStock = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newVoucherInput.trim()) return;
-    showToast({
-      type: 'success',
-      title: 'تمت إضافة الأكواد بنجاح',
-      description: 'تم تحديث مخزون القسائم الرقمية للخدمة المحددة.'
-    });
-    setNewVoucherInput('');
   };
 
   const getSupplierFilterSummary = () => {
@@ -903,7 +891,7 @@ export const SupplierDashboard: React.FC = () => {
           </>
         )}
 
-        {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs) && (
+        {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs || currentUser.permissions.canManageVoucherStock) && (
           <button
             onClick={() => setSubTab('vouchers')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
@@ -913,7 +901,7 @@ export const SupplierDashboard: React.FC = () => {
             }`}
           >
             <Ticket className="w-4 h-4 shrink-0" />
-            <span>تغذية الأكواد</span>
+            <span>مخازن الأكواد ({voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id).length})</span>
           </button>
         )}
 
@@ -1162,8 +1150,26 @@ export const SupplierDashboard: React.FC = () => {
                             <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
                               {pkg.tierPrices.vip} ر.س
                             </td>
-                            <td className="py-2.5 px-3 text-left font-sans text-[11px] text-slate-400">
-                              {pkg.vouchers ? `${pkg.vouchers.length} قسيمة جاهزة` : 'شحن مباشر'}
+                            <td className="py-2.5 px-3 text-left font-sans text-[11px]">
+                              {(() => {
+                                const stock = getPackageAvailableStock(pkg, voucherWarehouses);
+                                const hasVouchers = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
+                                if (hasVouchers) {
+                                  return stock && stock > 0 ? (
+                                    <span className="text-amber-400 font-semibold">{stock} قسيمة جاهزة</span>
+                                  ) : (
+                                    <span className="text-rose-400 font-semibold">نفد المخزون (0 كود)</span>
+                                  );
+                                }
+                                if (typeof stock === 'number') {
+                                  return stock > 0 ? (
+                                    <span className="text-slate-300">المخزون: {stock}</span>
+                                  ) : (
+                                    <span className="text-rose-400 font-semibold">نفد المخزون</span>
+                                  );
+                                }
+                                return <span className="text-slate-400">شحن مباشر</span>;
+                              })()}
                             </td>
                           </tr>
                         ))}
@@ -2147,88 +2153,9 @@ export const SupplierDashboard: React.FC = () => {
         <BankAccountsView />
       )}
 
-      {/* SUBTAB 4: ADD & MANAGE DIGITAL VOUCHERS */}
+      {/* SUBTAB 4: VOUCHER WAREHOUSES BY CATEGORY */}
       {subTab === 'vouchers' && (
-        <div className="space-y-5">
-          <div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Ticket className="w-5 h-5 text-amber-400" />
-              <span>إدارة وتغذية الأكواد والقسائم الرقمية (مخزون الأكواد)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              إضافة وتغذية أكواد القسائم الرقمية الجاهزة للتسليم الفوري عند شراء العميل.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
-            {/* Form to add vouchers */}
-            <form onSubmit={handleAddVouchersToStock} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
-              <h3 className="font-bold text-sm text-white">إضافة مخزون أكواد جديد للخدمة:</h3>
-
-              <div>
-                <label className="block text-slate-400 mb-1">اختر الخدمة الرقمية:</label>
-                <select
-                  value={selectedServiceForStock}
-                  onChange={e => setSelectedServiceForStock(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-                >
-                  {services.map(s => (
-                    <option key={s.id} value={s.id}>{s.nameAr}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 mb-1">
-                  أدخل الأكواد الرقمية (كود في كل سطر):
-                </label>
-                <textarea
-                  rows={4}
-                  required
-                  value={newVoucherInput}
-                  onChange={e => setNewVoucherInput(e.target.value)}
-                  placeholder="PSN-SA-8849-2210&#10;PSN-SA-9931-5541&#10;PSN-SA-1102-7744"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-amber-300 focus:outline-none focus:border-amber-500"
-                  dir="ltr"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                <span>حفظ وإيداع الأكواد في المخزون</span>
-              </button>
-            </form>
-
-            {/* Current Stock Preview */}
-            <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3 text-xs">
-              <h3 className="font-bold text-sm text-white">المخزون الحالي المتوفر:</h3>
-              <div className="space-y-2 max-h-72 overflow-y-auto">
-                {services.map(srv => {
-                  const totalVouchers = srv.packages.reduce((sum, p) => sum + (p.vouchers?.length || 0), 0);
-
-                  return (
-                    <div key={srv.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold text-white">{srv.nameAr}</div>
-                        <div className="text-[10px] text-slate-400">
-                          {srv.deliveryMethods.includes('voucher_code') ? 'يدعم تسليم كود قسيمة' : 'شحن مباشر أو حساب'}
-                        </div>
-                      </div>
-                      <span className="font-mono font-bold text-amber-400 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800">
-                        {totalVouchers} كود متوفر
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-          </div>
-        </div>
+        <VoucherWarehousesView />
       )}
 
       {/* SUBTAB 5: POS CLIENTS & TIER UPGRADE (User's requirement) */}

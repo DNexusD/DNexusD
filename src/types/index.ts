@@ -149,6 +149,30 @@ export interface ServicePackage {
   };
   availableStock?: number;
   vouchers?: string[];
+  warehouseId?: string;
+}
+
+export interface VoucherWarehouse {
+  id: string;
+  supplierId: string;
+  nameAr: string;
+  categoryName: string;
+  catalogId?: string;
+  description?: string;
+  codes: string[];
+  usedCodesCount: number;
+  linkedServiceId?: string;
+  linkedPackageId?: string;
+  isPublishedAsService: boolean;
+  tierPrices: {
+    regular: number;
+    bronze: number;
+    silver: number;
+    gold: number;
+    vip: number;
+  };
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Catalog {

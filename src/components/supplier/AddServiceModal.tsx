@@ -10,9 +10,10 @@ interface AddServiceModalProps {
 }
 
 export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => {
-  const { catalogs, supplier, superAdmin, posClients, addService, showToast } = useApp();
+  const { catalogs, supplier, superAdmin, posClients, voucherWarehouses, addService, showToast } = useApp();
   const effectiveAppFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
+  const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
 
   const [catalogId, setCatalogId] = useState(supplierCatalogs[0]?.id || '');
   const [nameAr, setNameAr] = useState('');
@@ -100,6 +101,50 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       return;
     }
     setPackages(prev => prev.filter(p => p.id !== pkgId));
+  };
+
+  const handleUpdatePackageStock = (pkgId: string, stock: number) => {
+    const safeStock = Math.max(0, Math.floor(Number.isFinite(stock) ? stock : 0));
+    setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, availableStock: safeStock } : p)));
+  };
+
+  const handleUpdatePackageVouchers = (pkgId: string, raw: string) => {
+    const codes = raw.split(/[\r\n,]+/).map(v => v.trim()).filter(Boolean);
+    setPackages(prev =>
+      prev.map(p =>
+        p.id === pkgId
+          ? {
+              ...p,
+              warehouseId: undefined,
+              vouchers: codes.length > 0 ? codes : undefined,
+              availableStock: codes.length > 0 ? codes.length : p.availableStock ?? 50
+            }
+          : p
+      )
+    );
+  };
+
+  const handleLinkPackageWarehouse = (pkgId: string, warehouseId: string) => {
+    if (!warehouseId) {
+      setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, warehouseId: undefined } : p)));
+      return;
+    }
+    const wh = supplierWarehouses.find(w => w.id === warehouseId);
+    if (!wh) return;
+    setPackages(prev =>
+      prev.map(p =>
+        p.id === pkgId
+          ? {
+              ...p,
+              warehouseId: wh.id,
+              name: wh.nameAr,
+              tierPrices: { ...wh.tierPrices },
+              vouchers: [...wh.codes],
+              availableStock: wh.codes.length
+            }
+          : p
+      )
+    );
   };
 
   const handleAddNewPackage = () => {
@@ -560,6 +605,53 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         className="w-full bg-slate-900 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
                       />
                     </div>
+                  </div>
+
+                  {/* Stock / Warehouse Linking / Voucher Codes per package */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-slate-800/70 text-[11px]">
+                    <div>
+                      <label className="block text-slate-400 mb-1">ربط بمخزن أكواد جاهز (اختياري):</label>
+                      <select
+                        value={pkg.warehouseId || ''}
+                        onChange={e => handleLinkPackageWarehouse(pkg.id, e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white"
+                      >
+                        <option value="">-- بدون ربط بمخزن خارجي --</option>
+                        {supplierWarehouses.map(wh => (
+                          <option key={wh.id} value={wh.id}>
+                            {wh.categoryName} - {wh.nameAr} ({wh.codes.length} كود)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1">كمية المخزون المتوفرة:</label>
+                      <input
+                        type="number"
+                        min={0}
+                        disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
+                        value={pkg.availableStock ?? 50}
+                        onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"
+                      />
+                    </div>
+
+                    {deliveryMethods.includes('voucher_code') && !pkg.warehouseId && (
+                      <div className="sm:col-span-2">
+                        <label className="block text-slate-400 mb-1">
+                          أكواد القسائم لهذه الباقة (اختياري، كود في كل سطر):
+                        </label>
+                        <textarea
+                          rows={2}
+                          defaultValue={(pkg.vouchers || []).join('\n')}
+                          onBlur={e => handleUpdatePackageVouchers(pkg.id, e.target.value)}
+                          placeholder="CODE-1111&#10;CODE-2222"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300"
+                          dir="ltr"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

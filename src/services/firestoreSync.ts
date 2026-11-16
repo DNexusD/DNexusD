@@ -25,7 +25,8 @@ import {
   InviteLink,
   AuthUser,
   SupplierBankAccount,
-  PlatformInterfaceSettings
+  PlatformInterfaceSettings,
+  VoucherWarehouse
 } from '../types';
 
 function sanitizeData<T>(obj: T): T {
@@ -190,6 +191,25 @@ export const firestoreSync = {
     const path = `services/${serviceId}`;
     try {
       await deleteDoc(doc(db, 'services', serviceId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  },
+
+  // Voucher Warehouses
+  async saveVoucherWarehouse(warehouse: VoucherWarehouse): Promise<void> {
+    const path = `voucherWarehouses/${warehouse.id}`;
+    try {
+      await setDoc(doc(db, 'voucherWarehouses', warehouse.id), sanitizeData(warehouse), { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  },
+
+  async deleteVoucherWarehouse(warehouseId: string): Promise<void> {
+    const path = `voucherWarehouses/${warehouseId}`;
+    try {
+      await deleteDoc(doc(db, 'voucherWarehouses', warehouseId));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
