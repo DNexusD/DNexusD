@@ -1,9 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { DeliveryMethod, AccountTier } from '../../types';
+import { DeliveryMethod, AccountTier, ServicePackage } from '../../types';
 import { isCatalogFreeGifts, getEffectiveAppFeePercentage } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
-import { X, Plus, Trash2, ArrowRight, Upload, Image as ImageIcon, Check, Sparkles, Gamepad2, CreditCard, Tv, Gift } from 'lucide-react';
+import { X, Plus, Trash2, ArrowRight, Upload, Image as ImageIcon, Check, Sparkles, Gamepad2, CreditCard, Tv, Gift, Package } from 'lucide-react';
 
 interface AddServiceModalProps {
   onClose: () => void;
@@ -28,14 +28,26 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const [imageUrl, setImageUrl] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Package builder state
-  const [packageName, setPackageName] = useState('باقة الموسم 660 شدة');
-  const [priceRegular, setPriceRegular] = useState<number>(100);
-  const [priceBronze, setPriceBronze] = useState<number>(90);
-  const [priceSilver, setPriceSilver] = useState<number>(80);
-  const [priceGold, setPriceGold] = useState<number>(70);
-  const [priceVip, setPriceVip] = useState<number>(60);
-  const [vouchersInput, setVouchersInput] = useState('');
+  // Packages list state (support multiple packages when adding a new service)
+  const [packages, setPackages] = useState<ServicePackage[]>([
+    {
+      id: `pkg-${Date.now()}`,
+      name: 'باقة أساسية 660 شدة',
+      description: 'باقة شحن رقمية معتمدة',
+      tierPrices: { regular: 100, bronze: 90, silver: 80, gold: 70, vip: 60 },
+      availableStock: 50
+    }
+  ]);
+
+  // New package inline addition state
+  const [showAddPackageForm, setShowAddPackageForm] = useState(false);
+  const [newPkgName, setNewPkgName] = useState('');
+  const [newPriceRegular, setNewPriceRegular] = useState<number>(100);
+  const [newPriceBronze, setNewPriceBronze] = useState<number>(90);
+  const [newPriceSilver, setNewPriceSilver] = useState<number>(80);
+  const [newPriceGold, setNewPriceGold] = useState<number>(70);
+  const [newPriceVip, setNewPriceVip] = useState<number>(60);
+  const [newVouchersInput, setNewVouchersInput] = useState('');
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -62,20 +74,78 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nameAr.trim() || !packageName.trim()) {
-      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إكمال بيانات الخدمة والباقة' });
+  const handleUpdatePackagePrice = (pkgId: string, tier: 'regular' | 'bronze' | 'silver' | 'gold' | 'vip', val: number) => {
+    const safeVal = Number.isFinite(val) && val >= 0 ? val : 0;
+    setPackages(prev => prev.map(p => {
+      if (p.id === pkgId) {
+        return {
+          ...p,
+          tierPrices: {
+            ...p.tierPrices,
+            [tier]: safeVal
+          }
+        };
+      }
+      return p;
+    }));
+  };
+
+  const handleUpdatePackageName = (pkgId: string, name: string) => {
+    setPackages(prev => prev.map(p => p.id === pkgId ? { ...p, name } : p));
+  };
+
+  const handleDeletePackage = (pkgId: string) => {
+    if (packages.length <= 1) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يجب أن تحتوي الخدمة على باقة واحدة على الأقل' });
       return;
     }
+    setPackages(prev => prev.filter(p => p.id !== pkgId));
+  };
 
-    const vouchers = vouchersInput
+  const handleAddNewPackage = () => {
+    if (!newPkgName.trim()) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال اسم الباقة الجديدة' });
+      return;
+    }
+    const parsePrice = (val: number, fallback: number) =>
+      typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
+
+    const vouchers = newVouchersInput
       .split('\n')
       .map(v => v.trim())
       .filter(Boolean);
 
-    const parseTierPrice = (val: number, fallback: number) =>
-      typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
+    const newPkg: ServicePackage = {
+      id: `pkg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      name: newPkgName.trim(),
+      description: 'باقة شحن رقمية معتمدة',
+      tierPrices: {
+        regular: parsePrice(newPriceRegular, 100),
+        bronze: parsePrice(newPriceBronze, 90),
+        silver: parsePrice(newPriceSilver, 80),
+        gold: parsePrice(newPriceGold, 70),
+        vip: parsePrice(newPriceVip, 60)
+      },
+      availableStock: vouchers.length > 0 ? vouchers.length : 50,
+      vouchers: vouchers.length > 0 ? vouchers : undefined
+    };
+    setPackages(prev => [...prev, newPkg]);
+    setNewPkgName('');
+    setNewVouchersInput('');
+    setShowAddPackageForm(false);
+    showToast({ type: 'success', title: 'تمت إضافة الباقة', description: `تمت إضافة "${newPkg.name}" بنجاح` });
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nameAr.trim()) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إكمال بيانات الخدمة' });
+      return;
+    }
+    if (packages.length === 0) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يجب أن تحتوي الخدمة على باقة واحدة على الأقل' });
+      return;
+    }
 
     const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === catalogId));
 
@@ -86,40 +156,25 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       icon: 'Gamepad2',
       imageUrl: imageUrl.trim() || undefined,
       deliveryMethods,
-      packages: [
-        {
-          id: `pkg-${Date.now()}`,
-          name: packageName.trim(),
-          description: 'باقة شحن رقمية معتمدة',
-          tierPrices: {
-            regular: parseTierPrice(priceRegular, 100),
-            bronze: parseTierPrice(priceBronze, 90),
-            silver: parseTierPrice(priceSilver, 80),
-            gold: parseTierPrice(priceGold, 70),
-            vip: parseTierPrice(priceVip, 60)
-          },
-          availableStock: vouchers.length > 0 ? vouchers.length : 50,
-          vouchers: vouchers.length > 0 ? vouchers : undefined
-        }
-      ],
+      packages,
       giftTargetType: isGiftCat ? giftTargetType : undefined,
       giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
       giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined
     });
 
-    showToast({ type: 'success', title: 'تمت إضافة الخدمة', description: 'تم حفظ الخدمة مع الصورة والأسعار بنجاح' });
+    showToast({ type: 'success', title: 'تمت إضافة الخدمة', description: 'تم حفظ الخدمة مع الباقات والأسعار بنجاح' });
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 text-slate-100 flex flex-col max-h-[92vh]">
+      <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 text-slate-100 flex flex-col max-h-[92vh]">
         
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 shrink-0">
           <div>
-            <h3 className="font-bold text-base text-white">إضافة خدمة رقمية جديدة وتحديد تسعيرة الرتب</h3>
-            <p className="text-xs text-slate-400">إدخال الخدمة والكتالوج وأسعار الباقات لكل رتبة (مميز، ذهبي، فضي، نحاسي، عادي)</p>
+            <h3 className="font-bold text-base text-white">إضافة خدمة رقمية جديدة مع إمكانية إضافة عدة باقات وتحديد تسعيرة الرتب</h3>
+            <p className="text-xs text-slate-400">إدخال الخدمة والكتالوج وباقات متعددة وأسعارها لكل رتبة (مميز، ذهبي، فضي، نحاسي، عادي)</p>
           </div>
           <button
             onClick={onClose}
@@ -130,7 +185,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto space-y-5">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto space-y-5 custom-scrollbar flex-1">
           
           {/* Service Image Selection (File Upload + Curated Presets) */}
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
@@ -276,94 +331,238 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
             </div>
           </div>
 
-          {/* Package & Tier Pricing Matrix (Matches user specification exact numbers) */}
+          {/* Packages & Tier Pricing Matrix (Multiple Packages Support) */}
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-amber-400">
-                تسعير الباقة حسب رتب نقاط البيع (ر.س):
-              </span>
-              <span className="text-[10px] text-slate-400">
-                مثال: عادي 100، نحاسي 90، فضي 80، ذهبي 70، مميز 60
-              </span>
+              <div className="flex items-center gap-2">
+                <Package className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-white">
+                  باقات الخدمة وتسعيرات الرتب (يمكنك إضافة باقات متعددة):
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddPackageForm(!showAddPackageForm)}
+                className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>إضافة باقة جديدة</span>
+              </button>
             </div>
 
-            <div>
-              <label className="block text-[11px] text-slate-400 mb-1">اسم الباقة:</label>
-              <input
-                type="text"
-                required
-                value={packageName}
-                onChange={e => setPackageName(e.target.value)}
-                placeholder="مثال: باقة 660 شدة"
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white"
-              />
-            </div>
+            {/* Inline Add Package Form */}
+            {showAddPackageForm && (
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xs text-amber-300">إضافة باقة جديدة لهذه الخدمة</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPackageForm(false)}
+                    className="text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-                <span className="block text-[10px] text-slate-400 mb-1">رتبة عادي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceRegular}
-                  onChange={e => setPriceRegular(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
-                />
-                <span className="text-[9px] text-slate-500 block mt-1">100 ر.س</span>
-              </div>
+                <div>
+                  <label className="block text-[11px] text-slate-300 mb-1">اسم الباقة الجديدة:</label>
+                  <input
+                    type="text"
+                    value={newPkgName}
+                    onChange={e => setNewPkgName(e.target.value)}
+                    placeholder="مثال: باقة 300 شدة + 25 مجاناً"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-amber-400"
+                  />
+                </div>
 
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-900/30">
-                <span className="block text-[10px] text-amber-500 mb-1">رتبة نحاسي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceBronze}
-                  onChange={e => setPriceBronze(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
-                />
-                <span className="text-[9px] text-slate-500 block mt-1">90 ر.س</span>
-              </div>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                    <span className="block text-[10px] text-slate-400 mb-1">رتبة عادي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={newPriceRegular}
+                      onChange={e => setNewPriceRegular(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
+                    />
+                  </div>
 
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-700">
-                <span className="block text-[10px] text-slate-300 mb-1">رتبة فضي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceSilver}
-                  onChange={e => setPriceSilver(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
-                />
-                <span className="text-[9px] text-slate-500 block mt-1">80 ر.س</span>
-              </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-900/30">
+                    <span className="block text-[10px] text-amber-500 mb-1">رتبة نحاسي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={newPriceBronze}
+                      onChange={e => setNewPriceBronze(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
+                    />
+                  </div>
 
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-yellow-500/30">
-                <span className="block text-[10px] text-yellow-400 mb-1">رتبة ذهبي</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceGold}
-                  onChange={e => setPriceGold(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
-                />
-                <span className="text-[9px] text-slate-500 block mt-1">70 ر.س</span>
-              </div>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-700">
+                    <span className="block text-[10px] text-slate-300 mb-1">رتبة فضي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={newPriceSilver}
+                      onChange={e => setNewPriceSilver(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
+                    />
+                  </div>
 
-              <div className="p-2.5 rounded-xl bg-slate-900 border border-purple-500/40 col-span-2 sm:col-span-1">
-                <span className="block text-[10px] text-purple-400 mb-1 font-bold">رتبة مميز VIP</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={priceVip}
-                  onChange={e => setPriceVip(Math.max(0, Number(e.target.value)))}
-                  className="w-full bg-slate-950 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs ring-1 ring-purple-500/30"
-                />
-                <span className="text-[9px] text-slate-500 block mt-1">60 ر.س</span>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-yellow-500/30">
+                    <span className="block text-[10px] text-yellow-400 mb-1">رتبة ذهبي</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={newPriceGold}
+                      onChange={e => setNewPriceGold(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
+                    />
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-purple-500/40 col-span-2 sm:col-span-1">
+                    <span className="block text-[10px] text-purple-400 mb-1 font-bold">رتبة مميز VIP</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={newPriceVip}
+                      onChange={e => setNewPriceVip(Math.max(0, Number(e.target.value)))}
+                      className="w-full bg-slate-950 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {deliveryMethods.includes('voucher_code') && (
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1">أكواد القسائم الخاصة بهذه الباقة (اختياري، كود بكل سطر):</label>
+                    <textarea
+                      rows={2}
+                      value={newVouchersInput}
+                      onChange={e => setNewVouchersInput(e.target.value)}
+                      placeholder="PUBG-VOUCHER-111&#10;PUBG-VOUCHER-222"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300 outline-none"
+                      dir="ltr"
+                    />
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddPackageForm(false)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddNewPackage}
+                    className="px-4 py-1.5 rounded-xl bg-amber-500 text-slate-950 hover:bg-amber-400 text-xs font-bold"
+                  >
+                    إضافة الباقة للقائمة
+                  </button>
+                </div>
               </div>
+            )}
+
+            {/* Existing Packages List */}
+            <div className="space-y-4">
+              {packages.map((pkg, idx) => (
+                <div key={pkg.id || idx} className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 font-mono text-xs flex items-center justify-center font-bold">
+                        {idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        value={pkg.name}
+                        onChange={e => handleUpdatePackageName(pkg.id, e.target.value)}
+                        placeholder="اسم الباقة"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-bold outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    {packages.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePackage(pkg.id)}
+                        className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors"
+                        title="حذف الباقة"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Pricing per 5 tiers */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
+                      <span className="block text-[10px] text-slate-400 mb-1">عادي</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={pkg.tierPrices?.regular ?? 100}
+                        onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
+                      />
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-slate-950 border border-amber-900/30">
+                      <span className="block text-[10px] text-amber-500 mb-1">نحاسي</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={pkg.tierPrices?.bronze ?? 90}
+                        onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
+                      />
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-700">
+                      <span className="block text-[10px] text-slate-300 mb-1">فضي</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={pkg.tierPrices?.silver ?? 80}
+                        onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
+                      />
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-slate-950 border border-yellow-500/30">
+                      <span className="block text-[10px] text-yellow-400 mb-1">ذهبي</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={pkg.tierPrices?.gold ?? 70}
+                        onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
+                      />
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-slate-950 border border-purple-500/40 col-span-2 sm:col-span-1">
+                      <span className="block text-[10px] text-purple-400 mb-1 font-bold">مميز VIP</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={pkg.tierPrices?.vip ?? 60}
+                        onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
 
             {isCatalogFreeGifts(catalogs.find(c => c.id === catalogId)) ? (
@@ -497,27 +696,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                   </div>
                 )}
               </div>
-            ) : [priceRegular, priceBronze, priceSilver, priceGold, priceVip].some(p => Number(p) === 0) ? (
-              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
-                ملاحظة: أي سعر رتبة يُحدد بقيمة <strong>0 ر.س</strong> سيظهر للعميل وتُحتسب قيمته بمبلغ <strong>0.50 ر.س</strong>.
-              </div>
             ) : null}
-
-            {deliveryMethods.includes('voucher_code') && (
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">
-                  أكواد القسائم الرقمية المتاحة (كود في كل سطر):
-                </label>
-                <textarea
-                  rows={2}
-                  value={vouchersInput}
-                  onChange={e => setVouchersInput(e.target.value)}
-                  placeholder="PUBG-660-9941-AA22&#10;PUBG-660-8812-BB33"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs font-mono text-amber-300 focus:outline-none focus:border-amber-500"
-                  dir="ltr"
-                />
-              </div>
-            )}
           </div>
 
           <button

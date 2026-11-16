@@ -373,8 +373,9 @@ export const Header: React.FC = () => {
       </div>
 
       {/* Sub-bar: Active Interface Persona Selector */}
-      <div className="bg-slate-900 border-t border-slate-800/80 px-4 py-2 text-xs">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      {isAuthenticated && (
+        <div className="bg-slate-900 border-t border-slate-800/80 px-4 py-2 text-xs">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           {role === 'pos_client' && (
             <div className="flex flex-wrap items-center gap-2">
               {!isAuthenticated ? (
@@ -491,6 +492,7 @@ export const Header: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
     </header>
   );
 };
