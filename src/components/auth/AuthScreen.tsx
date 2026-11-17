@@ -396,6 +396,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
         setMode('login');
       } else if (res.error) {
         setAuthError(res.error);
+        if (res.code === 'auth/email-already-in-use' || res.error.includes('مسجل بالفعل')) {
+          setLoginEmail(createdEmail);
+          setLoginPassword('');
+          setLoginOtp('');
+          setRegistrationBanner(`هذا البريد الإلكتروني (${createdEmail}) مسجل بالفعل. تم تحويلك لشاشة تسجيل الدخول مباشرة.`);
+          setMode('login');
+        }
       }
     } finally {
       setIsRegistering(false);
