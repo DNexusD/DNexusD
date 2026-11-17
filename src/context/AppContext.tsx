@@ -2761,6 +2761,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     canReceiveSupplierTransfers: boolean;
     isPrimary?: boolean;
     isActive?: boolean;
+    currency?: string;
     notes?: string;
   }): { success: boolean; error?: string; account?: SupplierBankAccount } => {
     const validation = validateBankAccountInput(input);
@@ -2813,6 +2814,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       canReceiveSupplierTransfers: input.canReceiveSupplierTransfers,
       isPrimary: input.isPrimary ?? existing?.isPrimary ?? false,
       isActive: input.isActive ?? existing?.isActive ?? true,
+      currency: input.currency?.trim() || existing?.currency || 'ر.س',
       notes: input.notes?.trim() || undefined,
       createdAt: existing?.createdAt || nowDate,
       updatedAt: nowTimestamp
@@ -2954,6 +2956,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         canReceiveSupplierTransfers: true,
         isPrimary: false,
         isActive: input.isActive ?? true,
+        currency: bank.currency?.trim() || 'ر.س',
         notes: bank.notes?.trim() || input.notes?.trim() || undefined,
         createdAt: nowDate,
         updatedAt: nowTimestamp

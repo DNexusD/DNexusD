@@ -448,6 +448,7 @@ export interface SupplierBankAccount {
   canReceiveSupplierTransfers: boolean;
   isPrimary?: boolean;
   isActive: boolean;
+  currency?: string;
   notes?: string;
   createdAt: string;
   updatedAt?: string;

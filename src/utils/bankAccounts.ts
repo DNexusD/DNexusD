@@ -344,6 +344,7 @@ export interface BankEntryDraft {
   bankName: string;
   accountNumber: string;
   iban?: string;
+  currency?: string;
   notes?: string;
 }
 

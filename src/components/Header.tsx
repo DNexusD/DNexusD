@@ -290,63 +290,7 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          {/* 3 Dedicated Interfaces Switcher (Hidden when authenticated to enforce strict role isolation per user request) */}
-          {!isAuthenticated ? (
-            <div className="flex items-center bg-slate-800/90 p-1 rounded-xl border border-slate-700 text-xs">
-              <button
-                onClick={() => {
-                  setRole('pos_client');
-                  setActiveNavTab('store');
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
-                  role === 'pos_client'
-                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="واجهة العميل ونقطة البيع"
-              >
-                <Store className="w-3.5 h-3.5" />
-                <span>واجهة العميل</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  if (role !== 'employee') {
-                    setRole('supplier');
-                    setActiveNavTab(pendingIdCount > 0 ? 'pending_orders' : 'catalogs');
-                  }
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors relative ${
-                  role === 'supplier' || role === 'employee'
-                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title={role === 'employee' ? `واجهة موظف مكتب (${currentUser?.name || ''})` : "واجهة المتجر (شحن الأيدي من اللعبة)"}
-              >
-                <Building2 className="w-3.5 h-3.5" />
-                <span>{role === 'employee' ? `واجهة الموظف (${currentUser?.name?.split(' ')[0] || ''})` : 'واجهة المتجر'}</span>
-                {pendingIdCount > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-                )}
-              </button>
-
-              <button
-                onClick={() => {
-                  setRole('super_admin');
-                  setActiveNavTab('overview');
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
-                  role === 'super_admin'
-                    ? 'bg-amber-500 text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="واجهة مدير التطبيق"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>مدير التطبيق</span>
-              </button>
-            </div>
-          ) : (
+          {isAuthenticated && (
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-amber-300 font-semibold">
               <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
               <span>واجهة مصرحة حصرياً لحسابك</span>
