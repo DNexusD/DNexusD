@@ -51,6 +51,10 @@ import {
   normalizeDropdownValue
 } from '../utils/platformSettings';
 import {
+  getBalanceRequestAvailability,
+  getServiceOrCodeAvailability
+} from '../utils/availabilityMessages';
+import {
   getLoanPaidAmount,
   getLoanRemainingAmount,
   validateWalletRepayment,
@@ -93,7 +97,8 @@ import {
   ensureCleanBootLocalStorageOnce,
   filterPreservedFixedCatalogs,
   isPreservedAdminAuthUser,
-  sanitizeLocalStorageForCleanReset
+  sanitizeLocalStorageForCleanReset,
+  sanitizeSuperAdminForCleanReset
 } from '../utils/systemReset';
 import confetti from 'canvas-confetti';
 import {
@@ -710,6 +715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setInviteLinks([]);
     setNotifications([]);
     setCatalogs(prev => filterPreservedFixedCatalogs(prev));
+    setSuperAdmin(prev => sanitizeSuperAdminForCleanReset(prev) as SuperAdmin);
     setCurrentPosId('');
     setCurrentSupplierId('');
     setIsSupplierSelectionRequired(false);
@@ -1212,31 +1218,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCurrentPosId(matchingPosRecords[0].id);
           }
         } else {
-          // Auto create client record in POS clients
-          const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
-          const newPos: POSClient = {
-            id: `pos-fb-${fbUser.uid.slice(0, 8)}`,
-            posCode: newPosCode,
-            tradeName: `متجر ${displayName}`,
-            ownerName: displayName,
-            phone: fbUser.phoneNumber || '+966 55 000 0000',
-            email: cleanEmail,
-            country: 'المملكة العربية السعودية',
-            city: 'الرياض',
-            supplierId: supplier.id,
-            tier: 'regular',
-            walletBalance: 0,
-            totalSpent: 0,
-            ordersCount: 0,
-            createdAt: new Date().toISOString().substring(0, 10),
-            qrCodeValue: `DIGIPOS:${newPosCode}`,
-            logoUrl: fbUser.photoURL || undefined
+          // Real operations only: never auto-create orphan POS clients with fake placeholder info
+          fbSignOut(auth).catch(console.error);
+          showToast({
+            type: 'error',
+            title: 'الحساب غير مسجل في المنصة',
+            description: 'لم يتم العثور على حساب مسجل لهذا البريد الإلكتروني. يرجى إنشاء حساب جديد عبر تبويب "إنشاء حساب جديد" واختيار المتجر الحقيقي.'
+          });
+          return {
+            success: false,
+            error: 'الحساب غير مسجل في المنصة. يرجى إنشاء حساب جديد أولاً.'
           };
-          setPosClients(prev => [newPos, ...prev.filter(p => p.id !== newPos.id)]);
-          associatedId = newPos.id;
-          setCurrentPosId(newPos.id);
-          setIsSupplierSelectionRequired(false);
-          firestoreSync.savePosClient(newPos).catch(console.error);
         }
       }
 
@@ -1256,18 +1248,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setRole(userRole);
       firestoreSync.saveUser(authUser).catch(console.error);
 
-      // Auto-sync all records to Firestore so collections appear immediately in the Firebase console
-      setTimeout(() => {
-        syncAllToFirestore().catch(console.error);
-      }, 500);
-
       if (userRole !== 'pos_client') {
         triggerConfetti();
       }
       showToast({
         type: 'success',
-        title: 'تم تسجيل الدخول عبر Google ومزامنة السحابة',
-        description: `مرحباً بك ${userName}. تم ربط ومزامنة كافة البيانات مع قاعدة بيانات Firestore بنجاح.`
+        title: 'تم تسجيل الدخول عبر Google بنجاح',
+        description: `مرحباً بك ${userName}.`
       });
 
       return { success: true };
@@ -1776,11 +1763,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newPos = {
           id: `pos-${fbUser.uid}`,
           posCode: newPosCode,
-          tradeName: tradeName || `متجر ${name}`,
+          tradeName: tradeName || name,
           ownerName: name,
-          phone: phone || '+966 55 000 0000',
-          country: 'المملكة العربية السعودية',
-          city: 'الرياض',
+          email: cleanEmail,
+          phone: phone?.trim() || '',
+          country: '',
+          city: '',
           supplierId: targetSupplierId,
           tier: 'regular',
           walletBalance: 0,
@@ -1796,18 +1784,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newSup = {
           id: `sup-${fbUser.uid}`,
           name,
-          storeName: tradeName || `مؤسسة ${name} للخدمات`,
-          phone: phone || '+966 50 000 0000',
+          storeName: tradeName || name,
+          phone: phone?.trim() || '',
           email: cleanEmail,
-          feePercentage: 1.0,
-          fixedFeeAmount: 0,
-          feeType: 'percentage',
+          feePercentage: superAdmin.defaultFeePercentage ?? 1.0,
+          fixedFeeAmount: superAdmin.defaultFixedFeeAmount ?? 0,
+          feeType: superAdmin.defaultFeeType || 'percentage',
           walletBalance: 0,
           bankAccountDetails: {
-            bankName: 'مصرف الراجحي',
+            bankName: '',
             accountHolder: name,
-            iban: 'SA4480000123608010123456',
-            accountNumber: '123608010123456'
+            iban: '',
+            accountNumber: ''
           },
           createdAt: new Date().toISOString().substring(0, 10)
         };
@@ -2055,7 +2043,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     // 1. Resolve live service/package + linked warehouse purchase options & pricing
     const liveService = services.find(s => s.id === service.id) || service;
-    const rawLivePkg = liveService.packages.find(p => p.id === pkg.id) || pkg;
+    const rawLivePkg = liveService.packages.find(p => p.id === pkg.id) || liveService.packages[0] || pkg;
+    if (!rawLivePkg) {
+      const missingPkgMsg = getServiceOrCodeAvailability({
+        hasPackages: false,
+        isOutOfStock: true,
+        deliveryMethod,
+        paymentMethod,
+        walletBalance: currentPos.walletBalance,
+        totalAmount: 0,
+      });
+      showToast({
+        type: 'error',
+        title: missingPkgMsg.title,
+        description: missingPkgMsg.message,
+      });
+      return { success: false, error: 'service_unavailable' };
+    }
     const effectivePkg = mergeWarehouseOptionsIntoPackage(rawLivePkg, voucherWarehouses);
     const purchaseOpts = resolvePackagePurchaseOptions(effectivePkg, voucherWarehouses);
     const effectiveUnit: WarehousePurchaseUnit = purchaseUnit || purchaseOpts.defaultPurchaseUnit;
@@ -2100,10 +2104,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Balance verification for non-gift wallet purchases (free gifts are allowed even if wallet < app fee; fee is deferred silently)
     if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet') {
       if (currentPos.walletBalance < totalDeduction) {
+        const balanceCheck = getServiceOrCodeAvailability({
+          hasPackages: true,
+          isOutOfStock: false,
+          deliveryMethod,
+          purchaseUnit: effectiveUnit,
+          packageCodesCount: purchaseOpts.packageCodesCount,
+          packageName: effectivePkg.name,
+          paymentMethod,
+          walletBalance: currentPos.walletBalance,
+          totalAmount: totalDeduction,
+          isFreeGiftApplied: pricing.isFreeGiftApplied,
+        });
         showToast({
           type: 'error',
-          title: 'الرصيد غير كافٍ',
-          description: `الرصيد غير كافٍ! رصيد محفظتك (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام العملية (${totalDeduction.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
+          title: balanceCheck.title || 'عدم توفر الرصيد المطلوب',
+          description: balanceCheck.message
         });
         return { success: false, error: 'insufficient_balance' };
       }
@@ -2141,13 +2157,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (stockDeduction.outOfStock) {
+      const stockCheck = getServiceOrCodeAvailability({
+        hasPackages: true,
+        isOutOfStock: true,
+        deliveryMethod,
+        purchaseUnit: effectiveUnit,
+        packageCodesCount: purchaseOpts.packageCodesCount,
+        packageName: effectivePkg.name,
+        paymentMethod,
+        walletBalance: currentPos.walletBalance,
+        totalAmount: totalDeduction,
+        isFreeGiftApplied: pricing.isFreeGiftApplied,
+      });
       showToast({
         type: 'error',
-        title: 'نفد المخزون',
-        description:
-          effectiveUnit === 'package'
-            ? `عذراً، المخزون المتوفر في "${effectivePkg.name}" غير كافٍ لتسليم باقة كاملة (${purchaseOpts.packageCodesCount} أكواد).`
-            : `عذراً، نفد مخزون "${effectivePkg.name}" حالياً. يرجى اختيار باقة أخرى أو التواصل مع المتجر لتعبئة المخزون.`
+        title: stockCheck.title,
+        description: stockCheck.message
       });
       return { success: false, error: 'out_of_stock' };
     }
@@ -2519,10 +2544,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalDeducted = amount + feeAmount;
 
     if (currentPos.walletBalance < totalDeducted) {
+      const balanceCheck = getBalanceRequestAvailability({
+        walletBalance: currentPos.walletBalance,
+        requiredAmount: totalDeducted,
+        walletLabel: 'محفظتك',
+        requestLabel: 'تحويل الرصيد',
+      });
       showToast({
         type: 'error',
-        title: 'الرصيد غير كافٍ',
-        description: `الرصيد غير كافٍ! رصيدك الحالي (${currentPos.walletBalance.toFixed(2)} ر.س) لا يكفي لإتمام التحويل (${totalDeducted.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة.`
+        title: balanceCheck.title,
+        description: balanceCheck.message
       });
       return { success: false, error: 'insufficient_balance' };
     }
@@ -3167,9 +3198,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const depositId = isLoan ? `dep-loan-${Date.now().toString().slice(-6)}` : `dep-${Date.now().toString().slice(-6)}`;
     const now = new Date();
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
-    const targetSupplier = suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
+    const targetSupplier = suppliers.find(s => s.id === currentPos?.supplierId) || (supplier?.id ? supplier : undefined);
+    if (!targetSupplier?.id) {
+      showToast({
+        type: 'error',
+        title: 'عدم توفر المطلوب',
+        description: 'تعذر إرسال طلب الرصيد: لا يوجد متجر مرتبط بحسابك حالياً.',
+      });
+      return;
+    }
 
     const availableAccounts = getActiveBankAccountsForDeposit(supplierBankAccounts, targetSupplier);
+    if (!isLoan && availableAccounts.length === 0) {
+      showToast({
+        type: 'error',
+        title: 'عدم توفر المطلوب',
+        description: 'عذراً، لا تتوفر حسابات بنكية معتمدة لدى المتجر لاستقبال طلب الرصيد حالياً.',
+      });
+      return;
+    }
     const selectedAccount = !isLoan
       ? (params.targetBankAccountId
           ? availableAccounts.find(a => a.id === params.targetBankAccountId) || availableAccounts[0]
@@ -3210,7 +3257,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : (params.transferSenderName || currentPos.ownerName),
       bankName: isLoan
         ? 'سلفة / رصيد آجل (بدون تحويل بنكي)'
-        : (params.bankName || selectedAccount?.bankName || 'مصرف الراجحي'),
+        : (params.bankName || selectedAccount?.bankName || 'غير محدد'),
       date: formattedDate,
       status: 'pending',
       loanReason: params.loanReason || (isLoan ? 'طلب سلفة رصيد آجل عاجل' : undefined),
@@ -5319,11 +5366,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminSettleBank = (amount: number, bankIban: string) => {
-    if (superAdmin.walletBalance < amount) {
+    const settleCheck = getBalanceRequestAvailability({
+      walletBalance: superAdmin.walletBalance,
+      requiredAmount: amount,
+      walletLabel: 'محفظة الإدارة',
+      requestLabel: 'التسوية البنكية',
+    });
+    if (!settleCheck.available) {
       showToast({
         type: 'error',
-        title: 'الرصيد غير كافٍ',
-        description: 'رصيد محفظة الإدارة لا يكفي للتحويل إلى الحساب البنكي.'
+        title: settleCheck.title,
+        description: settleCheck.message
       });
       return;
     }
@@ -5373,11 +5426,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return;
     }
-    if (superAdmin.walletBalance < amount) {
+    const transferCheck = getBalanceRequestAvailability({
+      walletBalance: superAdmin.walletBalance,
+      requiredAmount: amount,
+      walletLabel: 'محفظة الإدارة',
+      requestLabel: 'تحويل الرصيد لنقطة البيع',
+    });
+    if (!transferCheck.available) {
       showToast({
         type: 'error',
-        title: 'رصيد محفظة الإدارة غير كافٍ',
-        description: 'لا يوجد رصيد كافٍ في محفظة المدير.'
+        title: transferCheck.title,
+        description: transferCheck.message
       });
       return;
     }

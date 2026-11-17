@@ -6,7 +6,9 @@ import {
   Supplier,
 } from '../types';
 
-export const CLEAN_BOOT_STORAGE_FLAG = 'digipos_clean_boot_v1';
+export const CLEAN_BOOT_STORAGE_FLAG = 'digipos_clean_boot_v2';
+
+export const MOCK_SUPER_ADMIN_IBAN = 'SA0310000001234567890123';
 
 export const MASTER_ADMIN_EMAILS: readonly string[] = [
   'admin@digipos-platform.com',
@@ -143,6 +145,20 @@ export function mergeSuperAdminAccountsForPreservation(
   };
 }
 
+export function sanitizeSuperAdminForCleanReset<T extends Partial<SuperAdmin>>(
+  admin: T
+): T {
+  const existingBanks = Array.isArray(admin.bankAccounts) ? admin.bankAccounts : [];
+  const realBanks = existingBanks.filter(
+    (b) => b && b.iban?.trim() !== MOCK_SUPER_ADMIN_IBAN
+  );
+  return {
+    ...admin,
+    walletBalance: 0,
+    bankAccounts: realBanks,
+  };
+}
+
 export interface MinimalStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -157,13 +173,18 @@ export function sanitizeLocalStorageForCleanReset(
   preservedFixedCatalogsCount: number;
 } {
   let effectiveAdmin = superAdminOverride;
-  if (!effectiveAdmin) {
-    try {
-      const rawAdmin = storage.getItem('digipos_admin_v2');
-      if (rawAdmin) {
-        effectiveAdmin = JSON.parse(rawAdmin) as SuperAdminIdentityContext;
+  try {
+    const rawAdmin = storage.getItem('digipos_admin_v2');
+    if (rawAdmin) {
+      const parsedAdmin = JSON.parse(rawAdmin) as Partial<SuperAdmin>;
+      const sanitizedAdmin = sanitizeSuperAdminForCleanReset(parsedAdmin);
+      storage.setItem('digipos_admin_v2', JSON.stringify(sanitizedAdmin));
+      if (!effectiveAdmin) {
+        effectiveAdmin = sanitizedAdmin;
       }
-    } catch {
+    }
+  } catch {
+    if (!effectiveAdmin) {
       effectiveAdmin = null;
     }
   }
@@ -171,6 +192,7 @@ export function sanitizeLocalStorageForCleanReset(
   for (const key of RESET_LOCAL_STORAGE_KEYS_TO_CLEAR) {
     storage.removeItem(key);
   }
+  storage.removeItem('digipos_clean_boot_v1');
 
   // Keep only fixed catalogs created by Super Admin
   let preservedFixedCatalogsCount = 0;

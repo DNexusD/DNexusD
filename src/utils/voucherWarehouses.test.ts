@@ -314,4 +314,61 @@ test('computeStockSummary aggregates stocked, sold, remaining, and low stock cou
   assert.equal(itunesCat.outOfStockCount, 1);
 });
 
+test('deductPackageStock and isPackageOutOfStock never fabricate fake voucher codes when no real codes exist', () => {
+  const stockOnlyService = makeService({
+    deliveryMethods: ['voucher_code'],
+    packages: [
+      {
+        id: 'pkg-no-codes',
+        name: 'باقة بدون أكواد',
+        tierPrices: { regular: 100, bronze: 90, silver: 80, gold: 70, vip: 60 },
+        availableStock: 50,
+      },
+    ],
+  });
+
+  assert.equal(
+    isPackageOutOfStock(stockOnlyService.packages[0], 'voucher_code', []),
+    true
+  );
+
+  const stockOnlyAttempt = deductPackageStock({
+    service: stockOnlyService,
+    pkgId: 'pkg-no-codes',
+    deliveryMethod: 'voucher_code',
+    warehouses: [],
+  });
+
+  assert.equal(stockOnlyAttempt.outOfStock, true);
+  assert.equal(stockOnlyAttempt.assignedVoucher, undefined);
+  assert.equal(stockOnlyAttempt.assignedVouchers, undefined);
+  assert.equal(stockOnlyAttempt.deductedCount, 0);
+
+  const untrackedService = makeService({
+    deliveryMethods: ['voucher_code'],
+    packages: [
+      {
+        id: 'pkg-untracked',
+        name: 'باقة غير مهيأة',
+        tierPrices: { regular: 100, bronze: 90, silver: 80, gold: 70, vip: 60 },
+      },
+    ],
+  });
+
+  assert.equal(
+    isPackageOutOfStock(untrackedService.packages[0], 'voucher_code', []),
+    true
+  );
+
+  const untrackedAttempt = deductPackageStock({
+    service: untrackedService,
+    pkgId: 'pkg-untracked',
+    deliveryMethod: 'voucher_code',
+    warehouses: [],
+  });
+
+  assert.equal(untrackedAttempt.outOfStock, true);
+  assert.equal(untrackedAttempt.assignedVoucher, undefined);
+  assert.equal(untrackedAttempt.deductedCount, 0);
+});
 

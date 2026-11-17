@@ -202,6 +202,11 @@ export function isPackageOutOfStock(
 ): boolean {
   const opts = resolvePackagePurchaseOptions(pkg, warehouses);
   const stock = opts.availableCodesCount;
+  const hasRealVoucherBacking = isPackageVoucherBacked(pkg, warehouses);
+
+  if (deliveryMethod === 'voucher_code' && !hasRealVoucherBacking) {
+    return true;
+  }
 
   if (typeof stock !== 'number') {
     return false;
@@ -219,7 +224,7 @@ export function isPackageOutOfStock(
   if (opts.allowSingleCode || opts.allowPackage) {
     const canBuySingle = opts.allowSingleCode && stock >= 1;
     const canBuyPkg = opts.allowPackage && stock >= opts.packageCodesCount;
-    if (isPackageVoucherBacked(pkg, warehouses) || deliveryMethod === 'voucher_code') {
+    if (hasRealVoucherBacking || deliveryMethod === 'voucher_code') {
       return !(canBuySingle || canBuyPkg);
     }
     return stock <= 0;
@@ -378,18 +383,16 @@ export function deductPackageStock(params: {
     return { outOfStock: false, deductedCount: codesToDeduct, updatedService };
   }
 
-  // Case 3: Package with numeric availableStock (no explicit vouchers list)
+  // Case 3: Package with numeric availableStock (no explicit vouchers list or warehouse)
   if (typeof targetPkg.availableStock === 'number') {
+    // Real operations only: never auto-generate fake voucher codes when no real codes exist
+    if (deliveryMethod === 'voucher_code') {
+      return { outOfStock: true, deductedCount: 0, updatedService: service };
+    }
     if (targetPkg.availableStock < codesToDeduct) {
       return { outOfStock: true, deductedCount: 0, updatedService: service };
     }
     const nextStock = Math.max(0, targetPkg.availableStock - codesToDeduct);
-    const generatedVoucher =
-      deliveryMethod === 'voucher_code'
-        ? Array.from({ length: codesToDeduct }, () =>
-            `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`
-          ).join('\n')
-        : undefined;
 
     const updatedService: DigitalService = {
       ...service,
@@ -399,23 +402,18 @@ export function deductPackageStock(params: {
     };
     return {
       outOfStock: false,
-      assignedVoucher: generatedVoucher,
-      assignedVouchers: generatedVoucher ? generatedVoucher.split('\n') : undefined,
       deductedCount: codesToDeduct,
       updatedService,
     };
   }
 
-  // Fallback for legacy untracked packages
-  const generatedVoucher =
-    deliveryMethod === 'voucher_code'
-      ? `${service.nameAr.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`
-      : undefined;
+  // Fallback for untracked packages: never generate fake voucher codes
+  if (deliveryMethod === 'voucher_code') {
+    return { outOfStock: true, deductedCount: 0, updatedService: service };
+  }
 
   return {
     outOfStock: false,
-    assignedVoucher: generatedVoucher,
-    assignedVouchers: generatedVoucher ? [generatedVoucher] : undefined,
     deductedCount: 1,
     updatedService: service,
   };

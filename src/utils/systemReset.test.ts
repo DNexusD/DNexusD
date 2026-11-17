@@ -174,4 +174,27 @@ describe('systemReset utilities', () => {
     );
     assert.equal(merged.adminAccounts?.length, 2);
   });
+
+  it('zeroes fake SuperAdmin balance and strips mock IBAN while preserving admin staff and real bank accounts', () => {
+    const storage = createMemoryStorage({
+      digipos_admin_v2: JSON.stringify({
+        name: 'الإدارة العامة للمنصة',
+        email: 'admin@digipos-platform.com',
+        walletBalance: 12450.75,
+        bankAccounts: [
+          { bankName: 'SNB', iban: 'SA0310000001234567890123', accountHolder: 'Mock' },
+          { bankName: 'AlRajhi', iban: 'SA9900001111222233334444', accountHolder: 'Real' },
+        ],
+        adminAccounts: [{ id: 'adm-1', email: 'staff@digipos.sa' }],
+      }),
+    });
+
+    sanitizeLocalStorageForCleanReset(storage);
+    const updatedAdmin = JSON.parse(storage.getItem('digipos_admin_v2') || '{}');
+    assert.equal(updatedAdmin.walletBalance, 0);
+    assert.equal(updatedAdmin.adminAccounts.length, 1);
+    assert.equal(updatedAdmin.adminAccounts[0].email, 'staff@digipos.sa');
+    assert.equal(updatedAdmin.bankAccounts.length, 1);
+    assert.equal(updatedAdmin.bankAccounts[0].iban, 'SA9900001111222233334444');
+  });
 });

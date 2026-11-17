@@ -56,19 +56,20 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       ? JSON.parse(JSON.stringify(service.packages))
       : [{
           id: `pkg-${Date.now()}`,
-          name: 'باقة أساسية',
-          tierPrices: { regular: 100, bronze: 90, silver: 80, gold: 70, vip: 60 }
+          name: '',
+          tierPrices: { regular: 0, bronze: 0, silver: 0, gold: 0, vip: 0 },
+          availableStock: 0
         }]
   );
 
   // New package inline addition state
   const [showAddPackageForm, setShowAddPackageForm] = useState(false);
   const [newPkgName, setNewPkgName] = useState('');
-  const [newPriceRegular, setNewPriceRegular] = useState<number>(100);
-  const [newPriceBronze, setNewPriceBronze] = useState<number>(90);
-  const [newPriceSilver, setNewPriceSilver] = useState<number>(80);
-  const [newPriceGold, setNewPriceGold] = useState<number>(70);
-  const [newPriceVip, setNewPriceVip] = useState<number>(60);
+  const [newPriceRegular, setNewPriceRegular] = useState<number>(0);
+  const [newPriceBronze, setNewPriceBronze] = useState<number>(0);
+  const [newPriceSilver, setNewPriceSilver] = useState<number>(0);
+  const [newPriceGold, setNewPriceGold] = useState<number>(0);
+  const [newPriceVip, setNewPriceVip] = useState<number>(0);
 
   // Delete service confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -176,15 +177,15 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
     const newPkg: ServicePackage = {
       id: `pkg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: newPkgName.trim(),
-      description: 'باقة شحن رقمية معتمدة',
+      description: '',
       tierPrices: {
-        regular: parsePrice(newPriceRegular, 100),
-        bronze: parsePrice(newPriceBronze, 90),
-        silver: parsePrice(newPriceSilver, 80),
-        gold: parsePrice(newPriceGold, 70),
-        vip: parsePrice(newPriceVip, 60)
+        regular: parsePrice(newPriceRegular, 0),
+        bronze: parsePrice(newPriceBronze, 0),
+        silver: parsePrice(newPriceSilver, 0),
+        gold: parsePrice(newPriceGold, 0),
+        vip: parsePrice(newPriceVip, 0)
       },
-      availableStock: 50
+      availableStock: 0
     };
     setPackages(prev => [...prev, newPkg]);
     setNewPkgName('');
@@ -601,7 +602,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
-                          value={pkg.tierPrices?.regular ?? 100}
+                          value={pkg.tierPrices?.regular ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
                           className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-center font-mono text-white text-xs"
                         />
@@ -615,7 +616,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
-                          value={pkg.tierPrices?.bronze ?? 90}
+                          value={pkg.tierPrices?.bronze ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
                           className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-2 py-1 text-center font-mono text-amber-300 font-bold text-xs"
                         />
@@ -629,7 +630,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
-                          value={pkg.tierPrices?.silver ?? 80}
+                          value={pkg.tierPrices?.silver ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
                           className="w-full bg-slate-900 border border-slate-400/40 rounded-xl px-2 py-1 text-center font-mono text-slate-200 font-bold text-xs"
                         />
@@ -643,7 +644,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
-                          value={pkg.tierPrices?.gold ?? 70}
+                          value={pkg.tierPrices?.gold ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
                           className="w-full bg-slate-900 border border-yellow-500/40 rounded-xl px-2 py-1 text-center font-mono text-yellow-300 font-bold text-xs"
                         />
@@ -657,7 +658,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
-                          value={pkg.tierPrices?.vip ?? 60}
+                          value={pkg.tierPrices?.vip ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
                           className="w-full bg-purple-950/40 border border-purple-500/50 rounded-xl px-2 py-1 text-center font-mono text-purple-300 font-bold text-xs"
                         />
@@ -697,7 +698,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                             ? supplierWarehouses.find(w => w.id === pkg.warehouseId)?.codes.length ?? pkg.vouchers?.length ?? 0
                             : Array.isArray(pkg.vouchers)
                             ? pkg.vouchers.length
-                            : pkg.availableStock ?? 50
+                            : pkg.availableStock ?? 0
                         }
                         onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
                         className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"

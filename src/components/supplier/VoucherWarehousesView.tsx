@@ -85,20 +85,20 @@ export const VoucherWarehousesView: React.FC = () => {
   const [newCategory, setNewCategory] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newRawCodes, setNewRawCodes] = useState('');
-  const [priceRegular, setPriceRegular] = useState(100);
-  const [priceBronze, setPriceBronze] = useState(90);
-  const [priceSilver, setPriceSilver] = useState(80);
-  const [priceGold, setPriceGold] = useState(70);
-  const [priceVip, setPriceVip] = useState(60);
+  const [priceRegular, setPriceRegular] = useState(0);
+  const [priceBronze, setPriceBronze] = useState(0);
+  const [priceSilver, setPriceSilver] = useState(0);
+  const [priceGold, setPriceGold] = useState(0);
+  const [priceVip, setPriceVip] = useState(0);
   const [allowSingleCode, setAllowSingleCode] = useState(true);
   const [allowPackage, setAllowPackage] = useState(false);
   const [newPackageCodesCount, setNewPackageCodesCount] = useState(5);
   const [newPackageNameAr, setNewPackageNameAr] = useState('');
-  const [pkgPriceRegular, setPkgPriceRegular] = useState(450);
-  const [pkgPriceBronze, setPkgPriceBronze] = useState(410);
-  const [pkgPriceSilver, setPkgPriceSilver] = useState(370);
-  const [pkgPriceGold, setPkgPriceGold] = useState(330);
-  const [pkgPriceVip, setPkgPriceVip] = useState(280);
+  const [pkgPriceRegular, setPkgPriceRegular] = useState(0);
+  const [pkgPriceBronze, setPkgPriceBronze] = useState(0);
+  const [pkgPriceSilver, setPkgPriceSilver] = useState(0);
+  const [pkgPriceGold, setPkgPriceGold] = useState(0);
+  const [pkgPriceVip, setPkgPriceVip] = useState(0);
   const [publishImmediately, setPublishImmediately] = useState(true);
   const [publishCatalogId, setPublishCatalogId] = useState(
     supplierCatalogs[0]?.id || ''
@@ -141,18 +141,18 @@ export const VoucherWarehousesView: React.FC = () => {
   const [editPackageNameAr, setEditPackageNameAr] = useState('');
   const [editLowStockThreshold, setEditLowStockThreshold] = useState<number>(DEFAULT_LOW_STOCK_THRESHOLD);
   const [editPrices, setEditPrices] = useState({
-    regular: 100,
-    bronze: 90,
-    silver: 80,
-    gold: 70,
-    vip: 60
+    regular: 0,
+    bronze: 0,
+    silver: 0,
+    gold: 0,
+    vip: 0
   });
   const [editPackagePrices, setEditPackagePrices] = useState({
-    regular: 450,
-    bronze: 410,
-    silver: 370,
-    gold: 330,
-    vip: 280
+    regular: 0,
+    bronze: 0,
+    silver: 0,
+    gold: 0,
+    vip: 0
   });
 
   // Inline and category threshold states

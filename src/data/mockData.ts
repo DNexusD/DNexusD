@@ -177,17 +177,11 @@ export const initialSupplierBankAccounts: SupplierBankAccount[] = [
 export const initialSuperAdmin: SuperAdmin = {
   name: 'الإدارة العامة للمنصة',
   email: 'admin@digipos-platform.com',
-  walletBalance: 12450.75, // platform commission fees gathered
+  walletBalance: 0,
   defaultFeePercentage: 1.0,
   defaultFixedFeeAmount: 0.0,
   defaultFeeType: 'percentage',
-  bankAccounts: [
-    {
-      bankName: 'البنك الأهلي السعودي (SNB)',
-      iban: 'SA0310000001234567890123',
-      accountHolder: 'شركة المنصة الرقمية المحدودة'
-    }
-  ]
+  bankAccounts: []
 };
 
 export const initialPosClients: POSClient[] = [

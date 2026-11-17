@@ -36,6 +36,7 @@ import {
   resolvePackagePurchaseOptions
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
+import { getServiceOrCodeAvailability } from '../../utils/availabilityMessages';
 
 interface PurchaseModalProps {
   service: DigitalService;
@@ -172,10 +173,23 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const selectedPkgIsOutOfStock = selectedPkg
     ? isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses, effectivePurchaseUnit)
     : true;
+  const serviceAvailability = getServiceOrCodeAvailability({
+    hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+    isOutOfStock: selectedPkgIsOutOfStock,
+    deliveryMethod: selectedMethod,
+    purchaseUnit: effectivePurchaseUnit,
+    packageCodesCount: selectedPkgOpts?.packageCodesCount || 1,
+    packageName: selectedPkg?.name || '',
+    paymentMethod,
+    walletBalance: currentPos.walletBalance,
+    totalAmount,
+    isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+  });
 
   // Handle Verify Player ID
   const handleVerifyPlayerId = () => {
-    if (!playerId.trim()) {
+    const cleanId = playerId.trim();
+    if (!cleanId) {
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال معرف اللاعب أولاً' });
       return;
     }
@@ -183,17 +197,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     setIdVerified(false);
     setTimeout(() => {
       setIdChecking(false);
-      // Simulate player tag resolution
-      const randomTags = ['Falcon_King99', 'Sultan_Gamer', 'Shadow_Sniper', 'Apex_Legend_SA', 'Arab_Warrior'];
-      const resolved = randomTags[Math.floor(Math.random() * randomTags.length)] + ` #${playerId.slice(-4)}`;
-      setPlayerNickname(resolved);
+      setPlayerNickname('');
       setIdVerified(true);
       showToast({
         type: 'success',
-        title: 'تم التحقق من المعرف بنجاح',
-        description: `اسم اللاعب المطابق: ${resolved}`
+        title: 'تم اعتماد معرف اللاعب',
+        description: `معرف المستلم المعتمد: ${cleanId}`
       });
-    }, 900);
+    }, 300);
   };
 
   // Handle Account Login verification
@@ -259,19 +270,43 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     }
 
     if (!selectedPricing.isFreeGiftApplied && paymentMethod === 'wallet' && currentPos.walletBalance < totalAmount) {
+      const balanceCheck = getServiceOrCodeAvailability({
+        hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+        isOutOfStock: false,
+        deliveryMethod: selectedMethod,
+        purchaseUnit: effectivePurchaseUnit,
+        packageCodesCount: selectedPkgOpts?.packageCodesCount || 1,
+        packageName: selectedPkg?.name || '',
+        paymentMethod,
+        walletBalance: currentPos.walletBalance,
+        totalAmount,
+        isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+      });
       showToast({
         type: 'error',
-        title: 'الرصيد غير كافٍ',
-        description: `الرصيد غير كافٍ! المبلغ الإجمالي المطلوب ${totalAmount.toFixed(2)} ر.س بينما رصيدك ${currentPos.walletBalance.toFixed(2)} ر.س. يرجى إعادة شحن المحفظة.`
+        title: balanceCheck.title || 'عدم توفر الرصيد المطلوب',
+        description: balanceCheck.message
       });
       return;
     }
 
-    if (selectedPkgIsOutOfStock) {
+    if (liveService.packages.length === 0 || !selectedPkg || selectedPkgIsOutOfStock) {
+      const stockCheck = getServiceOrCodeAvailability({
+        hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+        isOutOfStock: true,
+        deliveryMethod: selectedMethod,
+        purchaseUnit: effectivePurchaseUnit,
+        packageCodesCount: selectedPkgOpts?.packageCodesCount || 1,
+        packageName: selectedPkg?.name || '',
+        paymentMethod,
+        walletBalance: currentPos.walletBalance,
+        totalAmount,
+        isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+      });
       showToast({
         type: 'error',
-        title: 'نفد المخزون',
-        description: `عذراً، نفد مخزون "${selectedPkg?.name || ''}" حالياً. يرجى اختيار باقة أخرى.`
+        title: stockCheck.title,
+        description: stockCheck.message
       });
       return;
     }
@@ -315,9 +350,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
           ? result.voucherCodes
           : result.voucherCode
           ? [result.voucherCode]
-          : ['CODE-READY'];
+          : [];
         setCompletedVoucherCodes(codesList);
-        setCompletedVoucherCode(result.voucherCode || codesList.join('\n'));
+        setCompletedVoucherCode(result.voucherCode || (codesList.length > 0 ? codesList.join('\n') : null));
         setCompletedDeductedCount(result.deductedCount || codesList.length || 1);
       } else {
         setOrderStage(null);
@@ -555,7 +590,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
 
                   {/* If voucher code delivery method */}
-                  {selectedMethod === 'voucher_code' && (
+                  {selectedMethod === 'voucher_code' && (completedVoucherCodes.length > 0 || completedVoucherCode) && (
                     <div className="w-full p-4 rounded-2xl bg-slate-950 border border-amber-500/40 space-y-3">
                       <div className="text-xs text-slate-400 flex items-center justify-between">
                         <span>
@@ -1441,28 +1476,45 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
               </div>
 
-              {selectedPkgIsOutOfStock && (
-                <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-300 font-semibold text-center">
-                  نفد المخزون من هذه الباقة/الفئة حالياً. يرجى اختيار باقة أخرى متوفرة أو التواصل مع المتجر.
+              {!serviceAvailability.available && (
+                <div
+                  role="alert"
+                  className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 space-y-1 text-right"
+                >
+                  <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{serviceAvailability.title}</span>
+                  </div>
+                  <p className="text-rose-200/90 leading-relaxed">
+                    {serviceAvailability.message}
+                  </p>
                 </div>
               )}
 
               {/* Confirm Purchase Button with clearly displayed price */}
               <button
                 type="button"
-                disabled={orderProcessing || selectedPkgIsOutOfStock}
+                disabled={orderProcessing || selectedPkgIsOutOfStock || liveService.packages.length === 0 || !selectedPkg}
                 onClick={handleConfirmPurchase}
                 className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
-                  selectedPkgIsOutOfStock
+                  selectedPkgIsOutOfStock || liveService.packages.length === 0 || !selectedPkg
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    : !serviceAvailability.available
+                    ? 'bg-rose-500/20 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
                     : selectedPricing.isFreeGiftApplied
                     ? 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-white shadow-purple-500/20 active:scale-[0.98]'
                     : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 active:scale-[0.98]'
                 }`}
               >
                 <span>
-                  {selectedPkgIsOutOfStock
-                    ? 'نفد المخزون - غير متاح حالياً'
+                  {liveService.packages.length === 0 || !selectedPkg
+                    ? 'عدم توفر الخدمة المطلوبة'
+                    : selectedPkgIsOutOfStock
+                    ? selectedMethod === 'voucher_code'
+                      ? 'عدم توفر الأكواد المطلوبة - غير متاح حالياً'
+                      : 'عدم توفر الخدمة المطلوبة - غير متاح حالياً'
+                    : !serviceAvailability.available
+                    ? 'عدم توفر الرصيد الكافي في المحفظة'
                     : selectedPricing.isFreeGiftApplied
                     ? 'استلام الهدية المجانية (مجاني)'
                     : `تأكيد دفع ${clientDisplayedTotal.toFixed(2)} ر.س وشحن فوري`}

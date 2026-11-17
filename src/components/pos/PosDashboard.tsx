@@ -52,6 +52,7 @@ import {
   resolvePackagePurchaseOptions,
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
+import { getStoreCatalogEmptyMessage } from '../../utils/availabilityMessages';
 
 export const PosDashboard: React.FC = () => {
   const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
@@ -250,7 +251,7 @@ export const PosDashboard: React.FC = () => {
   };
 
   // Filter services strictly by active POS supplier ID
-  const filteredServices = services.filter(srv => {
+  const supplierBaseServices = services.filter(srv => {
     if (!srv.isActive) return false;
     if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
@@ -267,6 +268,12 @@ export const PosDashboard: React.FC = () => {
     ) {
       return false;
     }
+    return true;
+  });
+
+  const filteredServices = supplierBaseServices.filter(srv => {
+    const srvCat = catalogs.find(c => c.id === srv.catalogId);
+    const isGift = isCatalogFreeGifts(srvCat);
     if (isFreeGiftsSelected) {
       if (!currentPos.canViewGifts || !isGift) return false;
     } else if (selectedCatalogId !== 'all' && srv.catalogId !== selectedCatalogId) {
@@ -279,6 +286,11 @@ export const PosDashboard: React.FC = () => {
       if (!matchName && !matchDesc) return false;
     }
     return true;
+  });
+
+  const emptyStoreState = getStoreCatalogEmptyMessage({
+    totalStoreServices: supplierBaseServices.length,
+    isFreeGiftsSelected,
   });
 
   return (
@@ -1001,25 +1013,23 @@ export const PosDashboard: React.FC = () => {
           {filteredServices.length === 0 && (
             <div className="p-8 rounded-2xl bg-slate-900/60 border border-slate-800 text-center space-y-2.5">
               <div className="text-sm font-bold text-slate-200">
-                {isFreeGiftsSelected
-                  ? 'لا توجد هدايا مجانية متاحة حالياً'
-                  : 'لا توجد خدمات مطابقة للبحث أو التصنيف المحدد'}
+                {emptyStoreState.title}
               </div>
               <p className="text-xs text-slate-400">
-                {isFreeGiftsSelected
-                  ? 'سيتم عرض الهدايا المجانية هنا بمجرد إضافتها من المتجر.'
-                  : 'جرب تغيير كلمة البحث أو اختيار جميع الكتالوجات.'}
+                {emptyStoreState.description}
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCatalogId('all');
-                  setSearchService('');
-                }}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors cursor-pointer"
-              >
-                عرض جميع الكتالوجات
-              </button>
+              {emptyStoreState.showResetFilterButton && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCatalogId('all');
+                    setSearchService('');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors cursor-pointer"
+                >
+                  عرض جميع الكتالوجات
+                </button>
+              )}
             </div>
           )}
         </div>

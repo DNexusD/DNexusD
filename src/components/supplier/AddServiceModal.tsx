@@ -32,21 +32,21 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const [packages, setPackages] = useState<ServicePackage[]>([
     {
       id: `pkg-${Date.now()}`,
-      name: 'باقة أساسية 660 شدة',
-      description: 'باقة شحن رقمية معتمدة',
-      tierPrices: { regular: 100, bronze: 90, silver: 80, gold: 70, vip: 60 },
-      availableStock: 50
+      name: '',
+      description: '',
+      tierPrices: { regular: 0, bronze: 0, silver: 0, gold: 0, vip: 0 },
+      availableStock: 0
     }
   ]);
 
   // New package inline addition state
   const [showAddPackageForm, setShowAddPackageForm] = useState(false);
   const [newPkgName, setNewPkgName] = useState('');
-  const [newPriceRegular, setNewPriceRegular] = useState<number>(100);
-  const [newPriceBronze, setNewPriceBronze] = useState<number>(90);
-  const [newPriceSilver, setNewPriceSilver] = useState<number>(80);
-  const [newPriceGold, setNewPriceGold] = useState<number>(70);
-  const [newPriceVip, setNewPriceVip] = useState<number>(60);
+  const [newPriceRegular, setNewPriceRegular] = useState<number>(0);
+  const [newPriceBronze, setNewPriceBronze] = useState<number>(0);
+  const [newPriceSilver, setNewPriceSilver] = useState<number>(0);
+  const [newPriceGold, setNewPriceGold] = useState<number>(0);
+  const [newPriceVip, setNewPriceVip] = useState<number>(0);
   const [newVouchersInput, setNewVouchersInput] = useState('');
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,7 +116,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
               ...p,
               warehouseId: undefined,
               vouchers: codes.length > 0 ? codes : undefined,
-              availableStock: codes.length > 0 ? codes.length : p.availableStock ?? 50
+              availableStock: codes.length > 0 ? codes.length : 0
             }
           : p
       )
@@ -162,15 +162,15 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
     const newPkg: ServicePackage = {
       id: `pkg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: newPkgName.trim(),
-      description: 'باقة شحن رقمية معتمدة',
+      description: '',
       tierPrices: {
-        regular: parsePrice(newPriceRegular, 100),
-        bronze: parsePrice(newPriceBronze, 90),
-        silver: parsePrice(newPriceSilver, 80),
-        gold: parsePrice(newPriceGold, 70),
-        vip: parsePrice(newPriceVip, 60)
+        regular: parsePrice(newPriceRegular, 0),
+        bronze: parsePrice(newPriceBronze, 0),
+        silver: parsePrice(newPriceSilver, 0),
+        gold: parsePrice(newPriceGold, 0),
+        vip: parsePrice(newPriceVip, 0)
       },
-      availableStock: vouchers.length > 0 ? vouchers.length : 50,
+      availableStock: vouchers.length > 0 ? vouchers.length : 0,
       vouchers: vouchers.length > 0 ? vouchers : undefined
     };
     setPackages(prev => [...prev, newPkg]);
@@ -186,8 +186,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إكمال بيانات الخدمة' });
       return;
     }
-    if (packages.length === 0) {
-      showToast({ type: 'error', title: 'تنبيه', description: 'يجب أن تحتوي الخدمة على باقة واحدة على الأقل' });
+    if (packages.length === 0 || packages.some(p => !p.name.trim())) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال اسم كل باقة ضمن الخدمة.' });
       return;
     }
 
@@ -551,7 +551,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         step="any"
-                        value={pkg.tierPrices?.regular ?? 100}
+                        value={pkg.tierPrices?.regular ?? 0}
                         onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
                       />
@@ -563,7 +563,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         step="any"
-                        value={pkg.tierPrices?.bronze ?? 90}
+                        value={pkg.tierPrices?.bronze ?? 0}
                         onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
                       />
@@ -575,7 +575,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         step="any"
-                        value={pkg.tierPrices?.silver ?? 80}
+                        value={pkg.tierPrices?.silver ?? 0}
                         onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
                       />
@@ -587,7 +587,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         step="any"
-                        value={pkg.tierPrices?.gold ?? 70}
+                        value={pkg.tierPrices?.gold ?? 0}
                         onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
                       />
@@ -599,7 +599,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         step="any"
-                        value={pkg.tierPrices?.vip ?? 60}
+                        value={pkg.tierPrices?.vip ?? 0}
                         onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
                         className="w-full bg-slate-900 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
                       />
@@ -630,7 +630,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                         type="number"
                         min={0}
                         disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
-                        value={pkg.availableStock ?? 50}
+                        value={pkg.availableStock ?? 0}
                         onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"
                       />
@@ -639,13 +639,13 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                     {deliveryMethods.includes('voucher_code') && !pkg.warehouseId && (
                       <div className="sm:col-span-2">
                         <label className="block text-slate-400 mb-1">
-                          أكواد القسائم لهذه الباقة (اختياري، كود في كل سطر):
+                          أكواد القسائم لهذه الباقة (أدخل الأكواد الحقيقية، كود في كل سطر):
                         </label>
                         <textarea
                           rows={2}
-                          defaultValue={(pkg.vouchers || []).join('\n')}
-                          onBlur={e => handleUpdatePackageVouchers(pkg.id, e.target.value)}
-                          placeholder="CODE-1111&#10;CODE-2222"
+                          value={(pkg.vouchers || []).join('\n')}
+                          onChange={e => handleUpdatePackageVouchers(pkg.id, e.target.value)}
+                          placeholder="أدخل أكواد القسائم الحقيقية أو اربط الباقة بمخزن أكواد"
                           className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300"
                           dir="ltr"
                         />

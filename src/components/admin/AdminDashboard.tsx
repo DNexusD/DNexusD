@@ -24,8 +24,10 @@ import {
   Sliders, 
   FileText,
   Trash2,
-  UserCog
+  UserCog,
+  AlertCircle
 } from 'lucide-react';
+import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -123,10 +125,10 @@ export const AdminDashboard: React.FC = () => {
 
   // Admin Wallet Usage Actions
   const [activeAdminAction, setActiveAdminAction] = useState<'settle_bank' | 'transfer_agent' | null>(null);
-  const [settleAmount, setSettleAmount] = useState<number | ''>(500);
+  const [settleAmount, setSettleAmount] = useState<number | ''>('');
   const [settleIban, setSettleIban] = useState(superAdmin.bankAccounts[0]?.iban || '');
-  const [targetAgentCode, setTargetAgentCode] = useState('RYD-10492');
-  const [agentAmount, setAgentAmount] = useState<number | ''>(250);
+  const [targetAgentCode, setTargetAgentCode] = useState('');
+  const [agentAmount, setAgentAmount] = useState<number | ''>('');
 
   // Invite supplier link
   const [showSupplierInvite, setShowSupplierInvite] = useState(false);
@@ -167,36 +169,60 @@ export const AdminDashboard: React.FC = () => {
     addSupplier({
       name: newSupName.trim(),
       storeName: newSupStoreName.trim(),
-      phone: newSupPhone.trim() || '+966 50 000 0000',
-      email: newSupEmail.trim() || 'supplier@digipos.sa',
+      phone: newSupPhone.trim(),
+      email: newSupEmail.trim(),
       feePercentage: Number(newSupFeePercent),
       fixedFeeAmount: Number(newSupFixedFee),
       feeType: newSupFeeType,
       bankAccountDetails: {
         bankName: newSupBankName,
-        accountHolder: newSupStoreName,
-        iban: newSupIban,
-        accountNumber: '9928174029'
+        accountHolder: newSupStoreName.trim(),
+        iban: newSupIban.trim(),
+        accountNumber: ''
       }
     });
 
     setShowAddSupplierModal(false);
     setNewSupName('');
     setNewSupStoreName('');
+    setNewSupPhone('');
+    setNewSupEmail('');
+    setNewSupIban('');
   };
+
+  const settleAvailability = getBalanceRequestAvailability({
+    walletBalance: superAdmin.walletBalance,
+    requiredAmount: Number(settleAmount) || 0,
+    walletLabel: 'محفظة الإدارة',
+    requestLabel: 'التسوية البنكية',
+  });
+
+  const agentTransferAvailability = getBalanceRequestAvailability({
+    walletBalance: superAdmin.walletBalance,
+    requiredAmount: Number(agentAmount) || 0,
+    walletLabel: 'محفظة الإدارة',
+    requestLabel: 'تحويل الرصيد لنقطة البيع',
+  });
 
   const handleSettleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!settleAmount || settleAmount <= 0) return;
     adminSettleBank(Number(settleAmount), settleIban);
-    setActiveAdminAction(null);
+    if (superAdmin.walletBalance >= Number(settleAmount)) {
+      setActiveAdminAction(null);
+    }
   };
 
   const handleAgentTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!agentAmount || agentAmount <= 0) return;
     adminTransferToAgent(targetAgentCode, Number(agentAmount));
-    setActiveAdminAction(null);
+    const targetExists = posClients.some(
+      p => p.posCode.trim().toUpperCase() === targetAgentCode.trim().toUpperCase()
+    );
+    if (targetExists && superAdmin.walletBalance >= Number(agentAmount)) {
+      setActiveAdminAction(null);
+    }
   };
 
   const supplierInviteUrl = 'https://digipos.app/register-supplier?admin_token=AUTH-SUP-2026';
@@ -863,8 +889,21 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950 text-slate-400 text-[11px] leading-relaxed">
-                * سيتم خصم المبلغ من محفظة رسوم التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر ({supplier.bankAccountDetails.accountHolder}).
+                * سيتم خصم المبلغ من محفظة رسوم التطبيق (الرصيد المتاح: {superAdmin.walletBalance.toFixed(2)} ر.س).
               </div>
+
+              {!settleAvailability.available && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 space-y-1"
+                >
+                  <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{settleAvailability.title}</span>
+                  </div>
+                  <p className="text-rose-200/90 leading-relaxed">{settleAvailability.message}</p>
+                </div>
+              )}
 
               <div className="flex gap-2 pt-2">
                 <button
@@ -913,6 +952,19 @@ export const AdminDashboard: React.FC = () => {
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
                 />
               </div>
+
+              {!agentTransferAvailability.available && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 space-y-1"
+                >
+                  <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{agentTransferAvailability.title}</span>
+                  </div>
+                  <p className="text-rose-200/90 leading-relaxed">{agentTransferAvailability.message}</p>
+                </div>
+              )}
 
               <div className="flex gap-2 pt-2">
                 <button

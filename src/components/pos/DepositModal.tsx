@@ -8,6 +8,7 @@ import {
   validateReceiptImage,
 } from '../../utils/receiptImage';
 import { ReceiptImageModal } from '../common/ReceiptImageModal';
+import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 import {
   X,
   Building2,
@@ -24,6 +25,7 @@ import {
   Eye,
   Trash2,
   Sparkles,
+  AlertCircle,
 } from 'lucide-react';
 
 interface DepositModalProps {
@@ -31,7 +33,7 @@ interface DepositModalProps {
 }
 
 export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
-  const { currentPosSupplier, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos } = useApp();
+  const { currentPosSupplier, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos, showToast } = useApp();
 
   const approvedBankOptions = useMemo(
     () => getActiveDropdownOptions(platformSettings.approvedBankNames),
@@ -56,10 +58,10 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
   );
 
   // Common & Cash state
-  const [amount, setAmount] = useState<number | ''>(500);
+  const [amount, setAmount] = useState<number | ''>('');
   const [transferNumber, setTransferNumber] = useState('');
   const [transferSenderName, setTransferSenderName] = useState(currentPos.ownerName);
-  const [bankName, setBankName] = useState('مصرف الراجحي');
+  const [bankName, setBankName] = useState(approvedBankOptions[0]?.labelAr || '');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Receipt image state (Mandatory for Cash deposit)
@@ -73,7 +75,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   // Loan state
-  const [loanReason, setLoanReason] = useState('تغطية مبيعات عاجلة لشحن الألعاب والخدمات');
+  const [loanReason, setLoanReason] = useState('');
 
   const handleCopyValue = (value: string, key: string) => {
     if (!value) return;
@@ -126,11 +128,27 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
     setReceiptImageError(null);
   };
 
+  const bankDepositAvailability = getBalanceRequestAvailability({
+    walletBalance: 1,
+    requireBankAccount: true,
+    bankAccountsCount: activeBankAccounts.length,
+    hasSupplier: Boolean(currentPosSupplier?.id),
+    requestLabel: 'طلب شحن الرصيد',
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || amount <= 0) return;
 
     if (requestType === 'cash') {
+      if (!bankDepositAvailability.available) {
+        showToast({
+          type: 'error',
+          title: bankDepositAvailability.title,
+          description: bankDepositAvailability.message,
+        });
+        return;
+      }
       let hasError = false;
       if (!transferNumber.trim()) {
         setTransferNumberError('رقم الحوالة البنكية مطلوب');
@@ -262,20 +280,35 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                   </span>
                 </div>
 
-                {/* Dropdown Selector for Authorized Banks */}
-                <div>
-                  <select
-                    value={selectedAccount?.id || ''}
-                    onChange={(e) => setSelectedBankAccountId(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors"
+                {/* Dropdown Selector for Authorized Banks or Empty State */}
+                {activeBankAccounts.length === 0 ? (
+                  <div
+                    role="alert"
+                    className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 space-y-1"
                   >
-                    {activeBankAccounts.map((acc) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.bankName} — رقم الحساب: {acc.accountNumber || acc.iban} — {acc.accountHolderName} ({acc.country}) {acc.canReceiveSupplierTransfers ? ' [مخوّل باستلام الحوالات]' : ' [معتمد]'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                    <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{bankDepositAvailability.title}</span>
+                    </div>
+                    <p className="text-rose-200/90 leading-relaxed">
+                      {bankDepositAvailability.message}
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <select
+                      value={selectedAccount?.id || ''}
+                      onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none transition-colors"
+                    >
+                      {activeBankAccounts.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.bankName} — رقم الحساب: {acc.accountNumber || acc.iban} — {acc.accountHolderName} ({acc.country}) {acc.canReceiveSupplierTransfers ? ' [مخوّل باستلام الحوالات]' : ' [معتمد]'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* Horizontal Compact Interactive Card for the Selected Bank */}
                 {selectedAccount && (
@@ -610,9 +643,14 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md cursor-pointer"
+                disabled={!bankDepositAvailability.available}
+                className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md cursor-pointer"
               >
-                <span>إرسال طلب الإيداع للمراجعة</span>
+                <span>
+                  {!bankDepositAvailability.available
+                    ? 'عدم توفر حساب بنكي لاستلام الطلب'
+                    : 'إرسال طلب الإيداع للمراجعة'}
+                </span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>

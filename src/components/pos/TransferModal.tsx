@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, Send, ArrowRight, UserCheck, AlertCircle, QrCode, Scan } from 'lucide-react';
 
+import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
+
 interface TransferModalProps {
   onClose: () => void;
 }
@@ -10,7 +12,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
   const { currentPos, posClients, supplier, executeBalanceTransfer, showToast, calculateFee } = useApp();
 
   const [targetCode, setTargetCode] = useState('');
-  const [amount, setAmount] = useState<number | ''>(100);
+  const [amount, setAmount] = useState<number | ''>('');
   const [submitting, setSubmitting] = useState(false);
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
 
@@ -23,6 +25,13 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
   const feeAmount = calculateFee(numAmount, supplier);
   const totalDeducted = numAmount + feeAmount;
 
+  const balanceAvailability = getBalanceRequestAvailability({
+    walletBalance: currentPos.walletBalance,
+    requiredAmount: numAmount > 0 ? totalDeducted : 0,
+    walletLabel: 'محفظتك',
+    requestLabel: 'تحويل الرصيد',
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!numAmount || numAmount <= 0) {
@@ -31,15 +40,15 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
     }
 
     if (!targetPos) {
-      showToast({ type: 'error', title: 'خطأ', description: 'معرف نقطة البيع أو رمز QR غير موجود' });
+      showToast({ type: 'error', title: 'عدم توفر المطلوب', description: 'معرف نقطة البيع أو رمز QR غير موجود أو غير متاح' });
       return;
     }
 
-    if (currentPos.walletBalance < totalDeducted) {
+    if (!balanceAvailability.available) {
       showToast({
         type: 'error',
-        title: 'الرصيد غير كافٍ',
-        description: `الرصيد غير كافٍ! المبلغ الإجمالي المطلوب ${totalDeducted.toFixed(2)} ر.س، ورصيدك ${currentPos.walletBalance.toFixed(2)} ر.س. يرجى إعادة شحن المحفظة.`
+        title: balanceAvailability.title,
+        description: balanceAvailability.message
       });
       return;
     }
@@ -187,12 +196,29 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
             </div>
           </div>
 
+          {!balanceAvailability.available && (
+            <div
+              role="alert"
+              className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-xs text-rose-200 space-y-1"
+            >
+              <div className="font-bold text-rose-300 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{balanceAvailability.title}</span>
+              </div>
+              <p className="text-rose-200/90 leading-relaxed">{balanceAvailability.message}</p>
+            </div>
+          )}
+
           <button
             type="submit"
-            disabled={submitting || !targetPos}
-            className="w-full py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md"
+            disabled={submitting || !targetPos || !balanceAvailability.available}
+            className="w-full py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-md cursor-pointer"
           >
-            <span>تأكيد تحويل {totalDeducted.toFixed(2)} ر.س</span>
+            <span>
+              {!balanceAvailability.available
+                ? 'عدم توفر الرصيد المطلوب'
+                : `تأكيد تحويل ${totalDeducted.toFixed(2)} ر.س`}
+            </span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
@@ -227,20 +253,26 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
               </div>
 
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {posClients.filter(p => p.id !== currentPos.id).map(pos => (
-                  <button
-                    key={pos.id}
-                    type="button"
-                    onClick={() => handleSelectScannedCode(pos.posCode)}
-                    className="w-full p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-right flex items-center justify-between text-xs transition-colors"
-                  >
-                    <div>
-                      <div className="font-semibold text-white">{pos.tradeName}</div>
-                      <div className="text-[10px] text-slate-400">{pos.city}</div>
-                    </div>
-                    <span className="font-mono text-cyan-400 font-bold">{pos.posCode}</span>
-                  </button>
-                ))}
+                {posClients.filter(p => p.id !== currentPos.id).length === 0 ? (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 text-center">
+                    لا تتوفر نقاط بيع أو وكلاء آخرين مسجلين حالياً.
+                  </div>
+                ) : (
+                  posClients.filter(p => p.id !== currentPos.id).map(pos => (
+                    <button
+                      key={pos.id}
+                      type="button"
+                      onClick={() => handleSelectScannedCode(pos.posCode)}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-right flex items-center justify-between text-xs transition-colors"
+                    >
+                      <div>
+                        <div className="font-semibold text-white">{pos.tradeName}</div>
+                        <div className="text-[10px] text-slate-400">{pos.city}</div>
+                      </div>
+                      <span className="font-mono text-cyan-400 font-bold">{pos.posCode}</span>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
           </div>

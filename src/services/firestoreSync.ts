@@ -32,7 +32,8 @@ import {
 import {
   FIRESTORE_COLLECTIONS_TO_CLEAR,
   isPreservedAdminAuthUser,
-  mergeSuperAdminAccountsForPreservation
+  mergeSuperAdminAccountsForPreservation,
+  sanitizeSuperAdminForCleanReset
 } from '../utils/systemReset';
 
 function sanitizeData<T>(obj: T): T {
@@ -485,6 +486,15 @@ export const firestoreSync = {
         usersCleared = await this.commitBatchDeletes(userRefsToDelete);
         totalCleared += usersCleared;
       }
+
+      // 4. Zero Super Admin mock walletBalance & strip mock IBAN while preserving adminAccounts & real banks
+      const baseAdmin: Partial<SuperAdmin> = remoteAdmin || localSuperAdmin || {};
+      const sanitizedAdmin = sanitizeSuperAdminForCleanReset({
+        ...baseAdmin,
+        email: mergedAdmin.email,
+        adminAccounts: (remoteAdmin?.adminAccounts || localSuperAdmin?.adminAccounts || []) as SuperAdmin['adminAccounts'],
+      });
+      await setDoc(doc(db, 'system', 'superAdmin'), sanitizeData(sanitizedAdmin), { merge: true });
     } catch (err) {
       console.error('Error resetting services and non-admin data in Firestore:', err);
     }
@@ -515,7 +525,7 @@ export const firestoreSync = {
     };
   }> {
     try {
-      const markerRef = doc(db, 'system', 'cleanStateMigrationV1');
+      const markerRef = doc(db, 'system', 'cleanStateMigrationV2');
       const markerSnap = await getDoc(markerRef);
       if (markerSnap.exists()) {
         return { migrated: false };
