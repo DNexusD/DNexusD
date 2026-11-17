@@ -65,8 +65,8 @@ export const Header: React.FC = () => {
   const isSupplierRole = role === 'supplier';
 
   const clientNotifications = useMemo(() => {
-    return notifications.filter(n => !n.posId || n.posId === currentPos.id);
-  }, [notifications, currentPos.id]);
+    return notifications.filter(n => !n.posId || n.posId === currentPos?.id);
+  }, [notifications, currentPos?.id]);
 
   const activeNotifications = useMemo(() => {
     if (isSupplierRole) {
@@ -242,7 +242,7 @@ export const Header: React.FC = () => {
                                 {isSupplierRole ? (
                                   <span className="text-amber-400 font-medium">العميل: {notif.posName || 'نقطة بيع'}</span>
                                 ) : (
-                                  <span className="text-amber-400/80 font-medium">المتجر: {notif.supplierName || supplier.name}</span>
+                                  <span className="text-amber-400/80 font-medium">المتجر: {notif.supplierName || supplier?.name || ''}</span>
                                 )}
                                 <span className="flex items-center gap-1 dir-ltr">
                                   <Clock className="w-3 h-3 text-slate-400" />

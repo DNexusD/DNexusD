@@ -51,7 +51,9 @@ import {
   Globe,
   Sparkles,
   Gift,
-  Bell
+  Bell,
+  AlertTriangle,
+  Archive
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { AddServiceModal } from './AddServiceModal';
@@ -68,6 +70,8 @@ import {
   getPackageAvailableStock,
   mergeWarehouseOptionsIntoPackage,
   resolvePackagePurchaseOptions,
+  computeStockSummary,
+  isWarehouseLowStock
 } from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
 import { isCatalogFreeGifts } from '../../utils/pricing';
@@ -95,6 +99,7 @@ export const SupplierDashboard: React.FC = () => {
     platformSettings,
     approveDepositRequest, 
     rejectDepositRequest, 
+    confirmDepositReceiptByReceiver,
     completeSupplierOrder,
     rejectSupplierOrder,
     sendSupplierReplyToClient,
@@ -197,11 +202,11 @@ export const SupplierDashboard: React.FC = () => {
 
   const pendingDeposits = supplierDepositRequests.filter(d => d.status === 'pending');
   const delegatedDepositsCount = supplierDepositRequests.filter(
-    d => Boolean(d.receiverPosId || d.receiverConfirmationStatus)
+    d => Boolean(d.receiverPosId || d.receiverEmployeeId || d.receiverConfirmationStatus)
   ).length;
   const filteredSupplierDeposits = useMemo(() => {
     if (depositFilter === 'pending') return supplierDepositRequests.filter(d => d.status === 'pending');
-    if (depositFilter === 'delegated') return supplierDepositRequests.filter(d => Boolean(d.receiverPosId || d.receiverConfirmationStatus));
+    if (depositFilter === 'delegated') return supplierDepositRequests.filter(d => Boolean(d.receiverPosId || d.receiverEmployeeId || d.receiverConfirmationStatus));
     return supplierDepositRequests;
   }, [supplierDepositRequests, depositFilter]);
 
@@ -213,6 +218,16 @@ export const SupplierDashboard: React.FC = () => {
   const pendingOrders = supplierOrders.filter(o => o.status === 'pending_supplier' || o.status === 'in_progress');
   const pendingIdOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'player_id');
   const pendingAccountOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'account_login');
+
+  const supplierWarehouses = useMemo(
+    () => voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id),
+    [voucherWarehouses, supplier.id]
+  );
+  const stockSummary = useMemo(
+    () => computeStockSummary(supplierWarehouses),
+    [supplierWarehouses]
+  );
+  const lowStockCount = stockSummary.lowStockCount;
 
   // Active employee info for display in header
   const activeEmployee = role === 'employee' 
@@ -808,6 +823,36 @@ export const SupplierDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Low-stock warning alert banner */}
+      {lowStockCount > 0 && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-rose-950/60 via-amber-950/30 to-slate-900 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+              <AlertTriangle className="w-5 h-5 text-amber-400 animate-pulse" />
+            </div>
+            <div>
+              <div className="font-bold text-white text-xs sm:text-sm flex items-center gap-2">
+                <span>تنبيه نظام إدارة مخزون الأكواد</span>
+                <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white font-mono text-[10px] font-bold">
+                  {lowStockCount} فئات وباقات تحت الحد الأدنى
+                </span>
+              </div>
+              <p className="text-slate-300 text-[11px] mt-0.5 leading-relaxed">
+                وصل مخزون بعض فئات الأكواد إلى الحد الأدنى المعين للتنبيه أو نفد تماماً. يرجى مراجعة المخزون وتعبئته لضمان التسليم الفوري دون انقطاع.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSubTab('vouchers')}
+            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-colors shrink-0 cursor-pointer"
+          >
+            <Ticket className="w-3.5 h-3.5" />
+            <span>إدارة مخزون الأكواد وتعبئتها</span>
+          </button>
+        </div>
+      )}
+
       {/* Supplier Navigation Subtabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2 text-xs font-medium">
         {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs) && (
@@ -895,14 +940,19 @@ export const SupplierDashboard: React.FC = () => {
         {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs || currentUser.permissions.canManageVoucherStock) && (
           <button
             onClick={() => setSubTab('vouchers')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
               subTab === 'vouchers'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
             }`}
           >
             <Ticket className="w-4 h-4 shrink-0" />
-            <span>مخازن الأكواد ({voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id).length})</span>
+            <span>إدارة مخزون الأكواد ({supplierWarehouses.length})</span>
+            {lowStockCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-mono text-[9px] font-bold animate-pulse">
+                {lowStockCount} تنبيه
+              </span>
+            )}
           </button>
         )}
 
@@ -988,6 +1038,64 @@ export const SupplierDashboard: React.FC = () => {
       {/* SUBTAB 1: CATALOGS & MULTI-TIER SERVICES */}
       {subTab === 'catalogs' && (
         <div className="space-y-6">
+          {/* Executive Summary Card of Code Stock for Packages & Categories */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3.5 text-xs shadow-md">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Archive className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">ملخص مخزون الأكواد لباقات وفئات الخدمات</h3>
+                  <p className="text-[11px] text-slate-400">
+                    رصد إجمالي المتوفر والمباع والمتبقي لكافة فئات الأكواد الرقمية مع تنبيهات النقص الفورية.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubTab('vouchers')}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+              >
+                <Ticket className="w-3.5 h-3.5" />
+                <span>إدارة مخزون الأكواد وتعديل الحدود</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">إجمالي المتوفر الأصلي</span>
+                <span className="text-lg font-bold font-mono text-white tabular-nums">
+                  {stockSummary.totalStocked} كود
+                </span>
+                <span className="text-[9.5px] text-slate-500 block">مجموع المودع بالمخزن</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">إجمالي المباع</span>
+                <span className="text-lg font-bold font-mono text-cyan-400 tabular-nums">
+                  {stockSummary.totalSold} كود
+                </span>
+                <span className="text-[9.5px] text-slate-500 block">مصروف للعملاء</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">إجمالي المتبقي حالياً</span>
+                <span className="text-lg font-bold font-mono text-emerald-400 tabular-nums">
+                  {stockSummary.totalRemaining} كود
+                </span>
+                <span className="text-[9.5px] text-slate-500 block">جاهز للتسليم الفوري</span>
+              </div>
+              <div className={`p-3 rounded-2xl bg-slate-950 border ${lowStockCount > 0 ? 'border-rose-500/40 bg-rose-950/10' : 'border-slate-800'}`}>
+                <span className="text-[10px] text-slate-400 block">تنبيهات نقص المخزون</span>
+                <span className={`text-lg font-bold font-mono tabular-nums ${lowStockCount > 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                  {lowStockCount} فئات
+                </span>
+                <span className="text-[9.5px] text-slate-500 block">
+                  {lowStockCount > 0 ? 'تحتاج تعبئة فورية' : 'المخزون بمستوى آمن'}
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-bold text-white">الكاتالوجات والخدمات والتسعير الطبقي</h2>
@@ -1969,7 +2077,15 @@ export const SupplierDashboard: React.FC = () => {
                 const isPending = dep.status === 'pending';
                 const isRejected = dep.status === 'rejected';
                 const hasTargetBank = Boolean(dep.targetBankName || dep.targetAccountHolderName);
-                const hasReceiverRouting = Boolean(dep.receiverConfirmationStatus || dep.receiverPosId);
+                const hasReceiverRouting = Boolean(dep.receiverConfirmationStatus || dep.receiverPosId || dep.receiverEmployeeId);
+                const isEmployeeReceiver = Boolean(dep.receiverEmployeeId);
+                const receiverRoleLabel = isEmployeeReceiver ? 'موظف استلام الحوالات المخوّل' : 'نقطة البيع المخوّلة';
+                const canConfirmAsEmployee =
+                  isPending &&
+                  isEmployeeReceiver &&
+                  dep.receiverConfirmationStatus === 'pending' &&
+                  role === 'employee' &&
+                  (!dep.receiverEmployeeId || !currentUser?.employeeId || dep.receiverEmployeeId === currentUser.employeeId);
 
                 return (
                   <div
@@ -2100,10 +2216,10 @@ export const SupplierDashboard: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Authorized Receiver POS Confirmation Status */}
+                      {/* Authorized Receiver Confirmation Status */}
                       {hasReceiverRouting && (
                         <div
-                          className={`p-3 rounded-2xl border space-y-1 ${
+                          className={`p-3 rounded-2xl border space-y-2 ${
                             dep.receiverConfirmationStatus === 'confirmed'
                               ? 'bg-emerald-950/30 border-emerald-500/40'
                               : dep.receiverConfirmationStatus === 'rejected'
@@ -2116,7 +2232,7 @@ export const SupplierDashboard: React.FC = () => {
                               <>
                                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                                 <span className="text-emerald-300">
-                                  تم تأكيد استلام الحوالة من نقطة البيع المخوّلة ({dep.receiverConfirmedByName || dep.receiverPosName})
+                                  تم تأكيد استلام الحوالة من {receiverRoleLabel} ({dep.receiverConfirmedByName || dep.receiverPosName})
                                 </span>
                                 {dep.receiverConfirmedAt && (
                                   <span className="font-mono text-[10px] text-emerald-200/80">
@@ -2128,7 +2244,7 @@ export const SupplierDashboard: React.FC = () => {
                               <>
                                 <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
                                 <span className="text-rose-300">
-                                  تنبيه: أفادت نقطة البيع المخوّلة ({dep.receiverConfirmedByName || dep.receiverPosName}) بعدم استلام الحوالة
+                                  تنبيه: أفاد {receiverRoleLabel} ({dep.receiverConfirmedByName || dep.receiverPosName}) بعدم استلام الحوالة
                                 </span>
                                 {dep.receiverConfirmedAt && (
                                   <span className="font-mono text-[10px] text-rose-200/80">
@@ -2140,7 +2256,7 @@ export const SupplierDashboard: React.FC = () => {
                               <>
                                 <Clock className="w-4 h-4 text-amber-400 shrink-0" />
                                 <span className="text-amber-300">
-                                  بانتظار تأكيد استلام الحوالة من نقطة البيع المخوّلة ({dep.receiverPosName || dep.targetAccountHolderName})
+                                  بانتظار تأكيد استلام الحوالة من {receiverRoleLabel} ({dep.receiverPosName || dep.targetAccountHolderName})
                                 </span>
                               </>
                             )}
@@ -2149,6 +2265,27 @@ export const SupplierDashboard: React.FC = () => {
                           {dep.receiverConfirmationNote && (
                             <div className="text-[11px] text-slate-200 pr-6">
                               ملاحظة المستلم: <span className="font-semibold">{dep.receiverConfirmationNote}</span>
+                            </div>
+                          )}
+
+                          {canConfirmAsEmployee && (
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => confirmDepositReceiptByReceiver(dep.id, 'confirmed')}
+                                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>تأكيد استلام الحوالة (كـ مستلم)</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => confirmDepositReceiptByReceiver(dep.id, 'rejected')}
+                                className="px-3 py-1.5 rounded-xl bg-rose-950/60 hover:bg-rose-900 border border-rose-500/40 text-rose-300 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>لم يتم استلام الحوالة</span>
+                              </button>
                             </div>
                           )}
                         </div>

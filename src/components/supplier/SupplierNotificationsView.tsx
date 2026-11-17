@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  AlertTriangle,
   Eye,
 } from 'lucide-react';
 
@@ -41,7 +42,7 @@ interface SupplierNotificationsViewProps {
   ) => void;
 }
 
-type NotificationCategory = 'all' | 'unread' | 'deposits' | 'loans' | 'orders' | 'transfers';
+type NotificationCategory = 'all' | 'unread' | 'low_stock' | 'deposits' | 'loans' | 'orders' | 'transfers';
 
 export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps> = ({
   onNavigateTab,
@@ -61,6 +62,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
   // Counts for each category
   const categoryCounts = useMemo(() => {
     const unread = supplierNotifications.filter((n) => !n.isRead).length;
+    const low_stock = supplierNotifications.filter((n) => n.type === 'low_stock').length;
     const deposits = supplierNotifications.filter((n) => n.type === 'deposit').length;
     const loans = supplierNotifications.filter(
       (n) => n.type === 'loan' || n.type === 'loan_repayment'
@@ -73,6 +75,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     return {
       all: supplierNotifications.length,
       unread,
+      low_stock,
       deposits,
       loans,
       orders,
@@ -85,6 +88,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     return supplierNotifications.filter((notif) => {
       // Category filter
       if (activeCategory === 'unread' && notif.isRead) return false;
+      if (activeCategory === 'low_stock' && notif.type !== 'low_stock') return false;
       if (activeCategory === 'deposits' && notif.type !== 'deposit') return false;
       if (
         activeCategory === 'loans' &&
@@ -126,6 +130,8 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     markNotificationAsRead(notif.id);
     if (notif.actionTab) {
       onNavigateTab(notif.actionTab);
+    } else if (notif.type === 'low_stock') {
+      onNavigateTab('vouchers');
     } else if (notif.type === 'deposit') {
       onNavigateTab('deposits');
     } else if (notif.type === 'loan' || notif.type === 'loan_repayment') {
@@ -137,6 +143,8 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
 
   const getNotificationIcon = (notif: AppNotification) => {
     switch (notif.type) {
+      case 'low_stock':
+        return <AlertTriangle className="w-5 h-5 text-rose-400" />;
       case 'order_status':
         if (notif.actionTab === 'account_orders') {
           return <Lock className="w-5 h-5 text-cyan-400" />;
@@ -157,6 +165,12 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
 
   const getCategoryBadge = (notif: AppNotification) => {
     switch (notif.type) {
+      case 'low_stock':
+        return (
+          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+            تنبيه نقص مخزون
+          </span>
+        );
       case 'order_status':
         return (
           <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
@@ -197,6 +211,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
   };
 
   const getActionLabel = (notif: AppNotification) => {
+    if (notif.actionTab === 'vouchers' || notif.type === 'low_stock') return 'إدارة وتعبئة مخزون الأكواد';
     if (notif.actionTab === 'pending_orders') return 'الانتقال لتنفيذ الطلب باللعبة';
     if (notif.actionTab === 'account_orders') return 'الانتقال لشحن الحساب';
     if (notif.actionTab === 'deposits') return 'الانتقال لمراجعة الإيداع';
@@ -264,7 +279,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
         </div>
 
         {/* Quick KPI Stats Summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 border-t border-slate-800/80 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-3 border-t border-slate-800/80 text-xs">
           <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
             <span className="text-slate-400 text-[11px]">إجمالي الإشعارات</span>
             <span className="font-mono font-bold text-white text-sm">
@@ -279,15 +294,22 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
             </span>
           </div>
 
+          <div className="p-3 rounded-2xl bg-slate-950 border border-rose-500/30 flex items-center justify-between">
+            <span className="text-rose-300 text-[11px]">نقص مخزون الأكواد</span>
+            <span className="font-mono font-bold text-rose-400 text-sm">
+              {categoryCounts.low_stock}
+            </span>
+          </div>
+
           <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-            <span className="text-slate-400 text-[11px]">طلبات الإيداع والشحن</span>
+            <span className="text-slate-400 text-[11px]">طلبات الإيداع</span>
             <span className="font-mono font-bold text-emerald-400 text-sm">
               {categoryCounts.deposits}
             </span>
           </div>
 
           <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-            <span className="text-slate-400 text-[11px]">السُّلَف وسدادها</span>
+            <span className="text-slate-400 text-[11px]">السُّلَف والسداد</span>
             <span className="font-mono font-bold text-cyan-400 text-sm">
               {categoryCounts.loans}
             </span>
@@ -302,6 +324,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
           {[
             { id: 'all', label: `الكل (${categoryCounts.all})` },
             { id: 'unread', label: `غير مقروءة (${categoryCounts.unread})` },
+            { id: 'low_stock', label: `⚠️ نقص المخزون (${categoryCounts.low_stock})` },
             { id: 'deposits', label: `طلبات الإيداع (${categoryCounts.deposits})` },
             { id: 'loans', label: `السُّلَف والسداد (${categoryCounts.loans})` },
             { id: 'orders', label: `طلبات الألعاب (${categoryCounts.orders})` },

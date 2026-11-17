@@ -18,8 +18,20 @@ import {
   Store,
   AlertTriangle,
   Archive,
-  X
+  X,
+  Bell,
+  BarChart3,
+  Sliders,
+  ShieldAlert,
+  Sparkles,
+  RefreshCw,
+  TrendingDown
 } from 'lucide-react';
+import {
+  computeStockSummary,
+  isWarehouseLowStock,
+  DEFAULT_LOW_STOCK_THRESHOLD
+} from '../../utils/voucherWarehouses';
 
 export const VoucherWarehousesView: React.FC = () => {
   const {
@@ -31,6 +43,7 @@ export const VoucherWarehousesView: React.FC = () => {
     addCodesToWarehouse,
     removeCodeFromWarehouse,
     updateVoucherWarehouse,
+    setWarehouseLowStockThreshold,
     publishWarehouseAsService,
     unpublishWarehouseFromService,
     deleteVoucherWarehouse,
@@ -97,6 +110,7 @@ export const VoucherWarehousesView: React.FC = () => {
     supplierServices[0]?.id || ''
   );
   const [publishNewServiceName, setPublishNewServiceName] = useState('');
+  const [newLowStockThreshold, setNewLowStockThreshold] = useState<number>(DEFAULT_LOW_STOCK_THRESHOLD);
 
   // Refill codes modal/inline state
   const [refillingWarehouseId, setRefillingWarehouseId] = useState<string | null>(null);
@@ -125,6 +139,7 @@ export const VoucherWarehousesView: React.FC = () => {
   const [editAllowPackage, setEditAllowPackage] = useState(false);
   const [editPackageCodesCount, setEditPackageCodesCount] = useState(5);
   const [editPackageNameAr, setEditPackageNameAr] = useState('');
+  const [editLowStockThreshold, setEditLowStockThreshold] = useState<number>(DEFAULT_LOW_STOCK_THRESHOLD);
   const [editPrices, setEditPrices] = useState({
     regular: 100,
     bronze: 90,
@@ -139,6 +154,11 @@ export const VoucherWarehousesView: React.FC = () => {
     gold: 330,
     vip: 280
   });
+
+  // Inline and category threshold states
+  const [inlineThresholds, setInlineThresholds] = useState<Record<string, number>>({});
+  const [savingThresholdId, setSavingThresholdId] = useState<string | null>(null);
+  const [categoryThresholdInputs, setCategoryThresholdInputs] = useState<Record<string, number>>({});
 
   const filteredWarehouses = useMemo(() => {
     return supplierWarehouses.filter((w) => {
@@ -156,18 +176,38 @@ export const VoucherWarehousesView: React.FC = () => {
     });
   }, [supplierWarehouses, selectedCategory, searchQuery]);
 
-  const totalAvailableCodes = useMemo(
-    () => supplierWarehouses.reduce((sum, w) => sum + w.codes.length, 0),
+  const stockSummary = useMemo(
+    () => computeStockSummary(supplierWarehouses),
     [supplierWarehouses]
   );
-  const totalUsedCodes = useMemo(
-    () => supplierWarehouses.reduce((sum, w) => sum + (w.usedCodesCount || 0), 0),
-    [supplierWarehouses]
-  );
+
+  const totalAvailableCodes = stockSummary.totalRemaining;
+  const totalUsedCodes = stockSummary.totalSold;
   const publishedCount = useMemo(
     () => supplierWarehouses.filter((w) => w.isPublishedAsService).length,
     [supplierWarehouses]
   );
+
+  const handleUpdateInlineThreshold = (warehouseId: string, currentThreshold: number) => {
+    const target = inlineThresholds[warehouseId] ?? currentThreshold;
+    if (target < 0) return;
+    setSavingThresholdId(warehouseId);
+    setWarehouseLowStockThreshold(warehouseId, target);
+    setTimeout(() => setSavingThresholdId(null), 600);
+  };
+
+  const handleApplyCategoryThreshold = (categoryName: string, categoryWarehouses: VoucherWarehouse[]) => {
+    const target = categoryThresholdInputs[categoryName] ?? DEFAULT_LOW_STOCK_THRESHOLD;
+    if (target < 0) return;
+    for (const wh of categoryWarehouses) {
+      setWarehouseLowStockThreshold(wh.id, target);
+    }
+    showToast({
+      type: 'success',
+      title: 'تم تحديث حد التنبيه',
+      description: `تم تعيين الحد الأدنى (${target} أكواد) لجميع باقات فئة "${categoryName}".`
+    });
+  };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,6 +235,7 @@ export const VoucherWarehousesView: React.FC = () => {
       catalogId: publishCatalogId || supplierCatalogs[0]?.id,
       description: newDescription,
       rawCodes: newRawCodes,
+      lowStockThreshold: Math.max(0, Number(newLowStockThreshold) || DEFAULT_LOW_STOCK_THRESHOLD),
       allowSingleCodePurchase: allowSingleCode,
       allowPackagePurchase: allowPackage,
       packageCodesCount: allowPackage ? Math.max(1, Math.floor(newPackageCodesCount || 5)) : undefined,
@@ -231,6 +272,7 @@ export const VoucherWarehousesView: React.FC = () => {
     setNewDescription('');
     setNewRawCodes('');
     setNewPackageNameAr('');
+    setNewLowStockThreshold(DEFAULT_LOW_STOCK_THRESHOLD);
     setPublishNewServiceName('');
     setShowCreateForm(false);
   };
@@ -268,6 +310,7 @@ export const VoucherWarehousesView: React.FC = () => {
     setEditingWarehouse(wh);
     setEditName(wh.nameAr);
     setEditCategory(wh.categoryName);
+    setEditLowStockThreshold(wh.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD);
     const pkgOn = Boolean(wh.allowPackagePurchase);
     const singleOn = wh.allowSingleCodePurchase === false && pkgOn ? false : wh.allowSingleCodePurchase !== false;
     setEditAllowSingle(singleOn);
@@ -302,6 +345,7 @@ export const VoucherWarehousesView: React.FC = () => {
     updateVoucherWarehouse(editingWarehouse.id, {
       nameAr: editName.trim(),
       categoryName: editCategory.trim(),
+      lowStockThreshold: Math.max(0, Number(editLowStockThreshold) || DEFAULT_LOW_STOCK_THRESHOLD),
       allowSingleCodePurchase: editAllowSingle,
       allowPackagePurchase: editAllowPackage,
       packageCodesCount: editAllowPackage ? Math.max(1, Math.floor(editPackageCodesCount || 5)) : undefined,
@@ -323,12 +367,28 @@ export const VoucherWarehousesView: React.FC = () => {
       {/* Header & CTA */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Archive className="w-5 h-5 text-amber-400" />
-            <span>مخازن الأكواد والقسائم بحسب الفئة</span>
-          </h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <Archive className="w-5 h-5 text-amber-400" />
+              <span>إدارة مخزون الأكواد</span>
+            </h2>
+            <span className="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+              {supplierWarehouses.length} فئات وباقات
+            </span>
+            {stockSummary.lowStockCount > 0 ? (
+              <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-bold flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3 text-rose-400 animate-pulse" />
+                <span>{stockSummary.lowStockCount} فئات تحتاج تعبئة مخزون</span>
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" />
+                <span>حالة المخزون مستقرة</span>
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            أنشئ مخازن للأكواد مصنفة بالفئات، قم بتعبئتها بالأكواد، واعرضها كخدمات للعملاء مع خصم تلقائي من المخزون عند الشراء.
+            لوحة موحدة لإدارة أنواع وفئات وباقات الأكواد الرقمية، متابعة المتوفر والمباع والمتبقي، وضبط حدود تنبيهات نقص المخزون التلقائية لكل فئة وباقة.
           </p>
         </div>
 
@@ -342,38 +402,100 @@ export const VoucherWarehousesView: React.FC = () => {
         </button>
       </div>
 
-      {/* KPI Cards */}
+      {/* Low Stock Alert Warning Banner */}
+      {stockSummary.lowStockCount > 0 && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-950/40 via-amber-950/30 to-slate-900 border border-rose-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0 mt-0.5">
+              <AlertTriangle className="w-5 h-5 text-rose-400 animate-pulse" />
+            </div>
+            <div className="space-y-0.5">
+              <h3 className="text-xs font-bold text-rose-200 flex items-center gap-2">
+                <span>تنبيه فوري بنقص المخزون في بعض الفئات</span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
+                  {stockSummary.lowStockCount} فئات تحت الحد الأدنى
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                وصل مخزون بعض الفئات أو الباقات إلى الحد الأدنى المحدد لها ({stockSummary.outOfStockCount > 0 ? `${stockSummary.outOfStockCount} فئات نفدت بالكامل` : 'أوشكت على النفاد'}). بادر بتعبئة الأكواد أو تعديل حد التنبيه لضمان استمرار تسليم الطلبات الفورية للعملاء دون انقطاع.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 mr-auto sm:mr-0">
+            <button
+              type="button"
+              onClick={() => {
+                const firstLow = supplierWarehouses.find((w) => isWarehouseLowStock(w));
+                if (firstLow) {
+                  setSelectedCategory(firstLow.categoryName);
+                }
+              }}
+              className="px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-[11px] transition-colors cursor-pointer"
+            >
+              تصفية الفئات المنخفضة
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* KPI Cards: المتوفر الأصلي · المباع · المتبقي · تنبيهات النقص */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
         <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-1">
-          <span className="text-slate-400 block text-[11px]">مخازن الأكواد</span>
+          <span className="text-slate-400 block text-[11px]">كم المتوفر الأصلي (المودع)</span>
           <div className="text-xl font-bold font-mono text-white">
-            {supplierWarehouses.length}
+            {stockSummary.totalStocked} <span className="text-xs font-normal text-slate-400">كود</span>
           </div>
-          <span className="text-[10px] text-slate-500">{categories.length} فئات</span>
+          <span className="text-[10px] text-slate-500">
+            متبقي ({stockSummary.totalRemaining}) + مباع ({stockSummary.totalSold})
+          </span>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-slate-900 border border-cyan-500/30 space-y-1">
+          <span className="text-cyan-300 block text-[11px]">كم المباع (المصروف للعملاء)</span>
+          <div className="text-xl font-bold font-mono text-cyan-400">
+            {stockSummary.totalSold} <span className="text-xs font-normal text-cyan-300/70">كود</span>
+          </div>
+          <span className="text-[10px] text-slate-500">
+            {stockSummary.totalStocked > 0
+              ? `${Math.round((stockSummary.totalSold / stockSummary.totalStocked) * 100)}% مبيعات من الإجمالي`
+              : 'مخصومة من المخزون'}
+          </span>
         </div>
 
         <div className="p-3.5 rounded-2xl bg-slate-900 border border-amber-500/30 space-y-1">
-          <span className="text-amber-300 block text-[11px]">إجمالي الأكواد المتاحة</span>
+          <span className="text-amber-300 block text-[11px]">كم المتبقي (رصيد جاهز)</span>
           <div className="text-xl font-bold font-mono text-amber-400">
-            {totalAvailableCodes}
+            {stockSummary.totalRemaining} <span className="text-xs font-normal text-amber-300/70">كود</span>
           </div>
-          <span className="text-[10px] text-slate-500">جاهزة للتسليم الفوري</span>
+          <span className="text-[10px] text-slate-500">جاهزة للتسليم الفوري للعملاء</span>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-slate-900 border border-emerald-500/30 space-y-1">
-          <span className="text-emerald-300 block text-[11px]">مخازن معروضة كخدمات</span>
-          <div className="text-xl font-bold font-mono text-emerald-400">
-            {publishedCount}
+        <div
+          className={`p-3.5 rounded-2xl bg-slate-900 border space-y-1 ${
+            stockSummary.lowStockCount > 0
+              ? 'border-rose-500/50 bg-rose-950/20'
+              : 'border-emerald-500/30'
+          }`}
+        >
+          <span
+            className={`block text-[11px] ${
+              stockSummary.lowStockCount > 0 ? 'text-rose-300 font-bold' : 'text-emerald-300'
+            }`}
+          >
+            تنبيهات نقص المخزون
+          </span>
+          <div
+            className={`text-xl font-bold font-mono ${
+              stockSummary.lowStockCount > 0 ? 'text-rose-400' : 'text-emerald-400'
+            }`}
+          >
+            {stockSummary.lowStockCount} <span className="text-xs font-normal text-slate-400">فئات</span>
           </div>
-          <span className="text-[10px] text-slate-500">ظاهرة بمتجر العملاء</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-1">
-          <span className="text-slate-400 block text-[11px]">أكواد تم بيعها/صرفها</span>
-          <div className="text-xl font-bold font-mono text-cyan-400">
-            {totalUsedCodes}
-          </div>
-          <span className="text-[10px] text-slate-500">مخصومة من المخزون</span>
+          <span className="text-[10px] text-slate-500">
+            {stockSummary.lowStockCount > 0
+              ? `${stockSummary.outOfStockCount} نفدت بالكامل`
+              : 'جميع الفئات فوق الحد الأدنى'}
+          </span>
         </div>
       </div>
 
@@ -433,17 +555,40 @@ export const VoucherWarehousesView: React.FC = () => {
             </div>
           </div>
 
-          <div>
-            <label className="block text-slate-300 font-semibold mb-1">
-              وصف مختصر (اختياري):
-            </label>
-            <input
-              type="text"
-              value={newDescription}
-              onChange={(e) => setNewDescription(e.target.value)}
-              placeholder="مثال: كود رسمي أصلي للحسابات السعودية - تسليم فوري"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">
+                وصف مختصر (اختياري):
+              </label>
+              <input
+                type="text"
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+                placeholder="مثال: كود رسمي أصلي للحسابات السعودية - تسليم فوري"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-amber-300 font-semibold mb-1 flex items-center gap-1.5">
+                <Bell className="w-3.5 h-3.5 text-amber-400" />
+                <span>الحد الأدنى لتنبيه نقص المخزون:</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  value={newLowStockThreshold}
+                  onChange={(e) =>
+                    setNewLowStockThreshold(Math.max(0, parseInt(e.target.value, 10) || 0))
+                  }
+                  className="w-24 bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-amber-500"
+                />
+                <span className="text-[11px] text-slate-400">
+                  كود (إشعار تلقائي عند وصول الرصيد المتبقي له أو أقل)
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Purchase Modes & Dual Pricing (Single Code vs Package) */}
@@ -747,6 +892,220 @@ export const VoucherWarehousesView: React.FC = () => {
         </form>
       )}
 
+      {/* ملخص أنواع وفئات الأكواد في المخزن (في بداية العروض لباقات وفئات الأكواد) */}
+      <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          <div>
+            <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-amber-400" />
+              <span>ملخص أنواع وفئات الأكواد في المخزن</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              عرض تحليلي موحد لكل فئة ونوع كود يوضح: كم المتوفر الأصلي، كم المباع، كم المتبقي، مع إمكانية ضبط حد التنبيه الأدنى لكل فئة.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs flex-wrap">
+            <span className="px-2.5 py-1 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 font-medium">
+              الفئات المسجلة: <strong className="text-amber-400 font-mono">{stockSummary.totalCategories}</strong>
+            </span>
+            <span className="px-2.5 py-1 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 font-medium">
+              الباقات النشطة: <strong className="text-white font-mono">{stockSummary.totalWarehouses}</strong>
+            </span>
+          </div>
+        </div>
+
+        {stockSummary.categories.length === 0 ? (
+          <div className="py-8 text-center text-slate-500 text-xs space-y-1">
+            <Archive className="w-8 h-8 mx-auto text-slate-600 mb-1" />
+            <p className="font-bold text-slate-400">لا توجد أكواد أو فئات مسجلة بالمخزن بعد</p>
+            <p>اضغط على "إنشاء مخزن أكواد جديد لفئة" لإضافة فئات وأكواد رقمية والبدء ببيعها.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+            {stockSummary.categories.map((cat) => {
+              const isOut = cat.totalRemaining === 0;
+              const isLow = cat.lowStockCount > 0;
+              const soldPercentage =
+                cat.totalStocked > 0
+                  ? Math.round((cat.totalSold / cat.totalStocked) * 100)
+                  : 0;
+              const currentCatThreshold =
+                categoryThresholdInputs[cat.categoryName] ??
+                (cat.warehouses[0]?.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD);
+
+              return (
+                <div
+                  key={cat.categoryName}
+                  className={`p-4 rounded-2xl bg-slate-950 border flex flex-col justify-between gap-3 transition-colors ${
+                    isOut
+                      ? 'border-rose-500/50 bg-rose-950/10'
+                      : isLow
+                      ? 'border-amber-500/50 bg-amber-950/10'
+                      : 'border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  {/* Category Header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                          نوع الكود
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 text-[10px]">
+                          {cat.warehousesCount} {cat.warehousesCount === 1 ? 'باقة' : 'باقات'}
+                        </span>
+                      </div>
+                      <h4 className="font-bold text-sm text-white mt-1">
+                        {cat.categoryName}
+                      </h4>
+                    </div>
+
+                    {/* Status Badge */}
+                    {isOut ? (
+                      <span className="px-2 py-1 rounded-xl bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-bold shrink-0 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-rose-400" />
+                        <span>نفد المخزون</span>
+                      </span>
+                    ) : isLow ? (
+                      <span className="px-2 py-1 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold shrink-0 flex items-center gap-1 animate-pulse">
+                        <TrendingDown className="w-3 h-3 text-amber-400" />
+                        <span>تحت حد التنبيه ({cat.lowStockCount})</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-1 rounded-xl bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold shrink-0 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>مخزون وفير</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Core Metrics: المتوفر · المباع · المتبقي */}
+                  <div className="grid grid-cols-3 gap-2 py-2 px-2.5 rounded-xl bg-slate-900/90 border border-slate-800/80 text-center">
+                    <div>
+                      <span className="block text-[10px] text-slate-400">كم المتوفر</span>
+                      <span className="text-sm font-black font-mono text-white">
+                        {cat.totalStocked}
+                      </span>
+                      <span className="block text-[9px] text-slate-500">أصلي وارد</span>
+                    </div>
+
+                    <div className="border-x border-slate-800">
+                      <span className="block text-[10px] text-cyan-300">كم المباع</span>
+                      <span className="text-sm font-black font-mono text-cyan-400">
+                        {cat.totalSold}
+                      </span>
+                      <span className="block text-[9px] text-cyan-400/60 font-mono">
+                        {soldPercentage}%
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="block text-[10px] text-amber-300">كم المتبقي</span>
+                      <span
+                        className={`text-sm font-black font-mono ${
+                          isOut ? 'text-rose-400' : isLow ? 'text-amber-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {cat.totalRemaining}
+                      </span>
+                      <span className="block text-[9px] text-slate-500">جاهز للبيع</span>
+                    </div>
+                  </div>
+
+                  {/* Progress Bar of Stock Consumption */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400">
+                      <span>نسبة الاستهلاك / المبيعات:</span>
+                      <span className="font-mono text-slate-300">{cat.totalSold} من {cat.totalStocked} كود</span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          isOut
+                            ? 'bg-rose-500'
+                            : isLow
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(100, soldPercentage)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Configurable Alert Threshold per Category */}
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-slate-300 font-semibold flex items-center gap-1">
+                        <Bell className="w-3 h-3 text-amber-400" />
+                        <span>ضبط حد التنبيه للفئة:</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        (إشعار تلقائي عند المتبقي ≤ الحد)
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={0}
+                        value={currentCatThreshold}
+                        onChange={(e) =>
+                          setCategoryThresholdInputs((prev) => ({
+                            ...prev,
+                            [cat.categoryName]: Math.max(0, parseInt(e.target.value, 10) || 0)
+                          }))
+                        }
+                        className="w-16 bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-lg py-1 px-1.5 text-center font-mono font-bold text-amber-400 text-xs focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleApplyCategoryThreshold(cat.categoryName, cat.warehouses)
+                        }
+                        className="flex-1 py-1 px-2 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 text-[10px] font-bold transition-colors cursor-pointer text-center"
+                      >
+                        حفظ الحد للباقات
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Filter / Focus Action */}
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCategory(cat.categoryName)}
+                      className={`text-[11px] font-bold transition-colors cursor-pointer ${
+                        selectedCategory === cat.categoryName
+                          ? 'text-amber-400'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {selectedCategory === cat.categoryName
+                        ? '← يتم استعراض باقاتها حالياً'
+                        : 'استعراض باقات هذه الفئة ↓'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const targetWh = cat.warehouses[0];
+                        if (targetWh) {
+                          setRefillingWarehouseId(targetWh.id);
+                          setRefillCodesInput('');
+                          setSelectedCategory(cat.categoryName);
+                        }
+                      }}
+                      className="px-2 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-[10px] font-bold transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>تعبئة أكواد</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Category Filter Tabs & Search */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -810,6 +1169,11 @@ export const VoucherWarehousesView: React.FC = () => {
               ? catalogs.find((c) => c.id === wh.catalogId)
               : undefined;
             const isOutOfStock = wh.codes.length === 0;
+            const isLowStock = isWarehouseLowStock(wh);
+            const whThreshold = wh.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD;
+            const totalWhStocked = wh.codes.length + (wh.usedCodesCount || 0);
+            const whSold = wh.usedCodesCount || 0;
+            const whRemaining = wh.codes.length;
             const isRefilling = refillingWarehouseId === wh.id;
             const isExpanded = expandedWarehouseId === wh.id;
 
@@ -818,7 +1182,9 @@ export const VoucherWarehousesView: React.FC = () => {
                 key={wh.id}
                 className={`p-4 sm:p-5 rounded-3xl bg-slate-900 border space-y-3.5 text-xs transition-colors ${
                   isOutOfStock
-                    ? 'border-rose-500/40'
+                    ? 'border-rose-500/50 bg-rose-950/5'
+                    : isLowStock
+                    ? 'border-amber-500/50 bg-amber-950/5'
                     : wh.isPublishedAsService
                     ? 'border-emerald-500/30'
                     : 'border-slate-800'
@@ -868,16 +1234,87 @@ export const VoucherWarehousesView: React.FC = () => {
                   <div
                     className={`px-3 py-2 rounded-2xl border text-center shrink-0 ${
                       isOutOfStock
-                        ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-                        : 'bg-slate-950 border-amber-500/30 text-amber-400'
+                        ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                        : isLowStock
+                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
+                        : 'bg-slate-950 border-emerald-500/30 text-emerald-400'
                     }`}
                   >
                     <div className="text-lg font-black font-mono leading-none">
                       {wh.codes.length}
                     </div>
                     <div className="text-[10px] mt-1 font-semibold">
-                      {isOutOfStock ? 'نفد المخزون' : 'كود متاح'}
+                      {isOutOfStock ? 'نفد المخزون' : isLowStock ? 'مخزون منخفض' : 'كود متاح'}
                     </div>
+                  </div>
+                </div>
+
+                {/* Stock Breakdown: المتوفر · المباع · المتبقي */}
+                <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                  <div>
+                    <span className="block text-[10px] text-slate-400">كم المتوفر</span>
+                    <span className="text-xs sm:text-sm font-bold font-mono text-white">{totalWhStocked}</span>
+                    <span className="block text-[9px] text-slate-500">أصلي وارد</span>
+                  </div>
+                  <div className="border-x border-slate-800">
+                    <span className="block text-[10px] text-cyan-300">كم المباع</span>
+                    <span className="text-xs sm:text-sm font-bold font-mono text-cyan-400">{whSold}</span>
+                    <span className="block text-[9px] text-slate-500">مصروف للعملاء</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-amber-300">كم المتبقي</span>
+                    <span
+                      className={`text-xs sm:text-sm font-bold font-mono ${
+                        isOutOfStock ? 'text-rose-400' : isLowStock ? 'text-amber-400' : 'text-emerald-400'
+                      }`}
+                    >
+                      {whRemaining}
+                    </span>
+                    <span className="block text-[9px] text-slate-500">جاهز للتسليم</span>
+                  </div>
+                </div>
+
+                {/* Low stock alert badge if below threshold */}
+                {isLowStock && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2 text-[11px] text-amber-300">
+                    <div className="flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>
+                        {isOutOfStock
+                          ? 'تنبيه: نفد مخزون هذه الباقة بالكامل!'
+                          : `تنبيه نقص مخزون: المتبقي (${whRemaining}) وصل لحد التنبيه الأدنى (${whThreshold}) أو أقل`}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-amber-400 font-mono font-bold shrink-0">
+                      تعبئة مطلوبة
+                    </span>
+                  </div>
+                )}
+
+                {/* Inline Threshold Setting Row */}
+                <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-950 border border-slate-800 text-[11px]">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Bell className="w-3.5 h-3.5 text-amber-400" />
+                    <span>حد التنبيه الأدنى للباقة:</span>
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      value={inlineThresholds[wh.id] ?? whThreshold}
+                      onChange={(e) => {
+                        const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                        setInlineThresholds((prev) => ({ ...prev, [wh.id]: val }));
+                      }}
+                      className="w-14 bg-slate-900 border border-slate-700 rounded-lg py-0.5 px-1.5 text-center font-mono font-bold text-amber-400 text-xs focus:outline-none focus:border-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateInlineThreshold(wh.id, whThreshold)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 text-[10px] font-bold transition-colors cursor-pointer"
+                    >
+                      {savingThresholdId === wh.id ? 'تم الحفظ' : 'تحديث الحد'}
+                    </button>
                   </div>
                 </div>
 
@@ -1235,6 +1672,26 @@ export const VoucherWarehousesView: React.FC = () => {
                   onChange={(e) => setEditName(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
                 />
+              </div>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-slate-950 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label htmlFor="edit-low-stock-threshold" className="text-amber-300 font-semibold flex items-center gap-1.5">
+                <Bell className="w-4 h-4 text-amber-400" />
+                <span>الحد الأدنى لتنبيه نقص المخزون:</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="edit-low-stock-threshold"
+                  type="number"
+                  min={0}
+                  value={editLowStockThreshold}
+                  onChange={(e) =>
+                    setEditLowStockThreshold(Math.max(0, parseInt(e.target.value, 10) || 0))
+                  }
+                  className="w-24 bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-1.5 text-center text-xs font-mono font-bold text-amber-400 focus:outline-none focus:border-amber-500"
+                />
+                <span className="text-[11px] text-slate-400">كود</span>
               </div>
             </div>
 

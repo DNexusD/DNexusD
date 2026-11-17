@@ -131,6 +131,7 @@ export const AdminDashboard: React.FC = () => {
   // Invite supplier link
   const [showSupplierInvite, setShowSupplierInvite] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
 
   const handleSaveGlobalFee = (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,7 +144,16 @@ export const AdminDashboard: React.FC = () => {
 
   const handleSaveSupplierFee = (e: React.FormEvent) => {
     e.preventDefault();
-    updateSupplierFeeConfig(selectedSupplierForFee, {
+    const targetId = selectedSupplierForFee || suppliers[0]?.id;
+    if (!targetId) {
+      showToast({
+        type: 'error',
+        title: 'لا يوجد متجر محدد',
+        description: 'لا توجد متاجر مسجلة حالياً لتخصيص رسوم لها.'
+      });
+      return;
+    }
+    updateSupplierFeeConfig(targetId, {
       feeType: supplierFeeType,
       percentage: Number(supplierPercentage),
       fixedAmount: Number(supplierFixedAmount)
@@ -358,16 +368,14 @@ export const AdminDashboard: React.FC = () => {
 
         {perms.canClearSystemData && (
           <button
-            onClick={() => {
-              if (window.confirm('هل أنت تأكد من إفراغ التخزين المحلي والسحابي لمجموعات المستخدمين، المتاجر، ونقاط البيع؟ (users, suppliers, posClients)')) {
-                clearUsersSuppliersAndClientsData();
-              }
-            }}
+            type="button"
+            data-testid="admin-reset-system-btn"
+            onClick={() => setShowResetConfirmModal(true)}
             className="mr-auto flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all font-semibold"
-            title="إفراغ ومسح سجلات users, suppliers, posClients من التخزين المحلي والسحابي"
+            title="تصفير الخدمات والمستخدمين مع الإبقاء على مدير التطبيق وموظفيه"
           >
             <Trash2 className="w-4 h-4 text-rose-400" />
-            <span>إفراغ التخزين (Users / Suppliers / POS)</span>
+            <span>تصفير الخدمات والمستخدمين</span>
           </button>
         )}
       </div>
@@ -412,7 +420,7 @@ export const AdminDashboard: React.FC = () => {
                       <span>تسوية الرصيد واستلام قيمته من الحساب البنكي للمتجر</span>
                     </div>
                     <p className="text-slate-400 text-[11px] leading-relaxed">
-                      خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر ({supplier.name}) وإضافتها لحساب مدير التطبيق البنكي.
+                      خصم المبلغ من محفظة مدير التطبيق وتأكيد استلام قيمته من الحساب البنكي للمتجر ({suppliers.length > 0 ? supplier.name : 'غير محدد'}) وإضافتها لحساب مدير التطبيق البنكي.
                     </p>
                   </div>
                   <button
@@ -458,32 +466,38 @@ export const AdminDashboard: React.FC = () => {
                 <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} متاجرن</span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {suppliers.map(sup => (
-                  <div key={sup.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-bold text-sm text-white">{sup.name}</h4>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                          رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${sup.fixedFeeAmount} ر.س` : ''}
-                        </span>
+              {suppliers.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center text-slate-400">
+                  لا توجد متاجر أو ممولون مسجلون حالياً. يمكنك إضافة متجر جديد من زر &quot;إضافة ممول / متجر جديد&quot;.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {suppliers.map(sup => (
+                    <div key={sup.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-sm text-white">{sup.name}</h4>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                            رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${sup.fixedFeeAmount} ر.س` : ''}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
+                        <div className="text-slate-500 text-[10px]">{sup.phone} · {sup.email}</div>
+                        <div className="text-slate-500 text-[10px] font-mono">
+                          البنك: {sup.bankAccountDetails.bankName} ({sup.bankAccountDetails.iban})
+                        </div>
                       </div>
-                      <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
-                      <div className="text-slate-500 text-[10px]">{sup.phone} · {sup.email}</div>
-                      <div className="text-slate-500 text-[10px] font-mono">
-                        البنك: {sup.bankAccountDetails.bankName} ({sup.bankAccountDetails.iban})
-                      </div>
-                    </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
-                      <span className="text-slate-400">رصيد مبيعاته:</span>
-                      <strong className="text-emerald-400 font-mono font-bold tabular-nums">
-                        {sup.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
-                      </strong>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
+                        <span className="text-slate-400">رصيد مبيعاته:</span>
+                        <strong className="text-emerald-400 font-mono font-bold tabular-nums">
+                          {sup.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                        </strong>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -615,9 +629,13 @@ export const AdminDashboard: React.FC = () => {
                     }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
                   >
-                    {suppliers.map(s => (
-                      <option key={s.id} value={s.id}>{s.name} ({s.storeName})</option>
-                    ))}
+                    {suppliers.length === 0 ? (
+                      <option value="">لا توجد متاجر مسجلة حالياً</option>
+                    ) : (
+                      suppliers.map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.storeName})</option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -947,6 +965,53 @@ export const AdminDashboard: React.FC = () => {
                 className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs"
               >
                 إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clean Reset Services & Non-Admin Users Confirmation Modal */}
+      {showResetConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-3xl p-6 space-y-4 text-slate-100 text-xs shadow-2xl">
+            <div className="flex items-center gap-2.5 text-rose-400">
+              <Trash2 className="w-5 h-5 shrink-0" />
+              <h3 className="font-bold text-base text-white">تأكيد تصفير الخدمات والمستخدمين</h3>
+            </div>
+
+            <p className="text-slate-300 leading-relaxed">
+              سيتم تصفير وحذف كافة البيانات التالية محلياً ومن قاعدة البيانات السحابية:
+            </p>
+            <ul className="space-y-1 text-slate-400 list-disc pr-5">
+              <li>جميع الخدمات ومخازن الأكواد والكتالوجات غير الثابتة</li>
+              <li>جميع المتاجر وموظفي المتاجر ونقاط البيع والعملاء</li>
+              <li>جميع المستخدمين المسجلين غير الإداريين والحسابات البنكية</li>
+              <li>جميع الطلبات والإيداعات والسلف والقيود والروابط</li>
+            </ul>
+
+            <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-[11px] leading-relaxed">
+              سيتم الإبقاء على حسابات <strong>مدير التطبيق وموظفيه ({(superAdmin.adminAccounts || []).length + 1} حساب)</strong> وإعدادات المنصة والكتالوجات الثابتة دون مساس.
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                data-testid="confirm-reset-system-btn"
+                onClick={async () => {
+                  setShowResetConfirmModal(false);
+                  await clearUsersSuppliersAndClientsData();
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs transition-colors"
+              >
+                تأكيد التصفير الآن
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowResetConfirmModal(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
+              >
+                إلغاء
               </button>
             </div>
           </div>

@@ -473,3 +473,96 @@ export function syncWarehouseIntoService(
     packages: nextPackages,
   };
 }
+
+export const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+
+export function isWarehouseLowStock(warehouse: VoucherWarehouse): boolean {
+  const threshold =
+    typeof warehouse.lowStockThreshold === 'number' && !Number.isNaN(warehouse.lowStockThreshold)
+      ? warehouse.lowStockThreshold
+      : DEFAULT_LOW_STOCK_THRESHOLD;
+  return warehouse.codes.length <= threshold;
+}
+
+export interface CategoryStockSummary {
+  categoryName: string;
+  warehousesCount: number;
+  totalStocked: number; // remaining + sold
+  totalSold: number;
+  totalRemaining: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  warehouses: VoucherWarehouse[];
+}
+
+export interface OverallStockSummary {
+  totalWarehouses: number;
+  totalCategories: number;
+  totalStocked: number; // total codes received/stocked
+  totalSold: number; // total codes sold/deducted
+  totalRemaining: number; // total codes remaining
+  lowStockCount: number; // count of warehouses at or below threshold
+  outOfStockCount: number; // count of warehouses with 0 codes
+  categories: CategoryStockSummary[];
+}
+
+export function computeStockSummary(warehouses: VoucherWarehouse[]): OverallStockSummary {
+  let totalStocked = 0;
+  let totalSold = 0;
+  let totalRemaining = 0;
+  let lowStockCount = 0;
+  let outOfStockCount = 0;
+
+  const catMap = new Map<string, CategoryStockSummary>();
+
+  for (const wh of warehouses) {
+    const remaining = wh.codes.length;
+    const sold = wh.usedCodesCount || 0;
+    const stocked = remaining + sold;
+    const isLow = isWarehouseLowStock(wh);
+    const isOut = remaining === 0;
+
+    totalStocked += stocked;
+    totalSold += sold;
+    totalRemaining += remaining;
+    if (isLow) lowStockCount++;
+    if (isOut) outOfStockCount++;
+
+    const catName = wh.categoryName?.trim() || 'فئة عامة';
+    if (!catMap.has(catName)) {
+      catMap.set(catName, {
+        categoryName: catName,
+        warehousesCount: 0,
+        totalStocked: 0,
+        totalSold: 0,
+        totalRemaining: 0,
+        lowStockCount: 0,
+        outOfStockCount: 0,
+        warehouses: [],
+      });
+    }
+
+    const catEntry = catMap.get(catName)!;
+    catEntry.warehousesCount++;
+    catEntry.totalStocked += stocked;
+    catEntry.totalSold += sold;
+    catEntry.totalRemaining += remaining;
+    if (isLow) catEntry.lowStockCount++;
+    if (isOut) catEntry.outOfStockCount++;
+    catEntry.warehouses.push(wh);
+  }
+
+  const categories = Array.from(catMap.values());
+
+  return {
+    totalWarehouses: warehouses.length,
+    totalCategories: categories.length,
+    totalStocked,
+    totalSold,
+    totalRemaining,
+    lowStockCount,
+    outOfStockCount,
+    categories,
+  };
+}
+

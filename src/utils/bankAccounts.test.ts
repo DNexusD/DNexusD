@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  filterSupplierBankAccounts,
   getSupplierBankAccounts,
   getActiveBankAccountsForDeposit,
+  resolveBankAccountReceiverEmployee,
   resolveBankAccountReceiverPos,
   hasSupplierTransferPrivilege,
   getIncomingTransfersForPos,
   getIncomingLoanRepaymentsForPos,
   validateBankAccountInput,
+  validateBatchBankAccountsInput,
 } from './bankAccounts';
-import { DepositRequest, LoanRepaymentRequest, POSClient, Supplier, SupplierBankAccount } from '../types';
+import { getBanksForCountry } from '../constants/banksByCountry';
+import { DepositRequest, LoanRepaymentRequest, OfficeEmployee, POSClient, Supplier, SupplierBankAccount } from '../types';
 
 const mockSupplier: Supplier = {
   id: 'sup-jamal-01',
@@ -344,4 +348,204 @@ test('getIncomingLoanRepaymentsForPos routes loan repayment bank transfers to au
   const forPos3 = getIncomingLoanRepaymentsForPos(repayments, pos3, accounts);
   assert.equal(forPos3.length, 0);
 });
+
+test('getBanksForCountry returns banks strictly located in the selected country', () => {
+  const saudiBanks = getBanksForCountry('المملكة العربية السعودية');
+  assert.ok(saudiBanks.includes('مصرف الراجحي'));
+  assert.equal(saudiBanks.includes('بنك الكريمي للتمويل الأصغر الإسلامي'), false);
+
+  const yemenBanks = getBanksForCountry('اليمن');
+  assert.ok(yemenBanks.some((b) => b.includes('الكريمي')));
+  assert.equal(yemenBanks.includes('مصرف الراجحي'), false);
+
+  const omanBanksFuzzy = getBanksForCountry('عمان');
+  assert.ok(omanBanksFuzzy.includes('بنك مسقط'));
+});
+
+test('validateBatchBankAccountsInput validates multi-bank employee and client creation flows', () => {
+  const missingBankRow = validateBatchBankAccountsInput({
+    mode: 'employee',
+    country: 'اليمن',
+    accountHolderName: 'سعيد باوزير',
+    accountHolderEmail: 'saeed@example.com',
+    banks: [
+      { bankName: 'بنك الكريمي للتمويل الأصغر الإسلامي', accountNumber: '30112233' },
+      { bankName: 'بنك التضامن الإسلامي', accountNumber: '', iban: '' },
+    ],
+  });
+  assert.equal(missingBankRow.valid, false);
+
+  const validEmployeeBatch = validateBatchBankAccountsInput({
+    mode: 'employee',
+    country: 'اليمن',
+    accountHolderName: 'سعيد باوزير',
+    accountHolderEmail: 'saeed@example.com',
+    accountHolderPhone: '+967770001122',
+    banks: [
+      { bankName: 'بنك الكريمي للتمويل الأصغر الإسلامي', accountNumber: '30112233' },
+      { bankName: 'بنك التضامن الإسلامي', accountNumber: '88221144' },
+    ],
+  });
+  assert.equal(validEmployeeBatch.valid, true);
+
+  const clientMissingSelection = validateBatchBankAccountsInput({
+    mode: 'client',
+    country: 'المملكة العربية السعودية',
+    accountHolderName: 'محمد العتيبي',
+    accountHolderEmail: 'pos1@digipos.sa',
+    delegatedPosId: '',
+    banks: [{ bankName: 'مصرف الراجحي', accountNumber: '11223344' }],
+  });
+  assert.equal(clientMissingSelection.valid, false);
+
+  const validClientBatch = validateBatchBankAccountsInput({
+    mode: 'client',
+    country: 'المملكة العربية السعودية',
+    accountHolderName: 'محمد العتيبي',
+    accountHolderEmail: 'pos1@digipos.sa',
+    delegatedPosId: 'pos-1',
+    banks: [
+      { bankName: 'مصرف الراجحي', accountNumber: '11223344' },
+      { bankName: 'بنك الرياض', accountNumber: '55667788' },
+    ],
+  });
+  assert.equal(validClientBatch.valid, true);
+});
+
+test('resolveBankAccountReceiverEmployee matches delegated employee by id or email', () => {
+  const emp: OfficeEmployee = {
+    id: 'emp-yemen-1',
+    supplierId: 'sup-jamal-01',
+    name: 'سعيد باوزير',
+    email: 'saeed@example.com',
+    phone: '+967770001122',
+    country: 'اليمن',
+    isTransferReceiverOnly: true,
+    roleTitle: 'موظف استلام ومراجعة حوالات (اليمن)',
+    permissions: { canReviewDeposits: true, canReviewCashDeposits: true, canReviewLoanDeposits: true },
+    createdAt: '2026-11-16',
+  };
+
+  const accById: SupplierBankAccount = {
+    id: 'bank-emp-1',
+    supplierId: 'sup-jamal-01',
+    bankName: 'بنك الكريمي للتمويل الأصغر الإسلامي',
+    accountNumber: '30112233',
+    country: 'اليمن',
+    accountHolderName: 'سعيد باوزير',
+    accountHolderEmail: 'saeed@example.com',
+    holderType: 'employee',
+    delegatedEmployeeId: 'emp-yemen-1',
+    canReceiveSupplierTransfers: true,
+    isActive: true,
+    createdAt: '2026-11-16',
+  };
+
+  const matched = resolveBankAccountReceiverEmployee(accById, [emp]);
+  assert.equal(matched?.id, 'emp-yemen-1');
+  assert.equal(matched?.country, 'اليمن');
+});
+
+test('filterSupplierBankAccounts searches by country, holder name, account number, IBAN, bank, email, phone, notes, employee and POS client in one field', () => {
+  const emp: OfficeEmployee = {
+    id: 'emp-yemen-1',
+    supplierId: 'sup-jamal-01',
+    name: 'سعيد باوزير',
+    email: 'saeed@example.com',
+    phone: '+967770001122',
+    country: 'اليمن',
+    isTransferReceiverOnly: true,
+    roleTitle: 'موظف استلام حوالات عدن',
+    permissions: { canReviewDeposits: true },
+    createdAt: '2026-11-16',
+  };
+
+  const accounts: SupplierBankAccount[] = [
+    {
+      id: 'acc-sa-1',
+      supplierId: 'sup-jamal-01',
+      bankName: 'مصرف الراجحي',
+      accountNumber: '123608010123456',
+      iban: 'SA4480000123608010123456',
+      country: 'المملكة العربية السعودية',
+      accountHolderName: 'مؤسسة جمال للحلول الرقمية',
+      accountHolderEmail: 'jamal@supplier.sa',
+      accountHolderPhone: '+966501234567',
+      holderType: 'supplier',
+      canReceiveSupplierTransfers: false,
+      isPrimary: true,
+      isActive: true,
+      notes: 'الحساب الرئيسي بالرياض',
+      createdAt: '2026-11-10',
+    },
+    {
+      id: 'acc-ye-2',
+      supplierId: 'sup-jamal-01',
+      bankName: 'بنك الكريمي للتمويل الأصغر الإسلامي',
+      accountNumber: '301928374',
+      country: 'اليمن',
+      accountHolderName: 'سعيد باوزير',
+      accountHolderEmail: 'saeed@example.com',
+      accountHolderPhone: '+967770001122',
+      holderType: 'employee',
+      delegatedEmployeeId: 'emp-yemen-1',
+      canReceiveSupplierTransfers: true,
+      isActive: true,
+      notes: 'استلام حوالات عملاء عدن وصنعاء',
+      createdAt: '2026-11-16',
+    },
+    {
+      id: 'acc-pos-3',
+      supplierId: 'sup-jamal-01',
+      bankName: 'بنك الرياض',
+      accountNumber: '9988776655',
+      iban: 'SA992000009988776655',
+      country: 'المملكة العربية السعودية',
+      accountHolderName: 'أحمد العمودي',
+      accountHolderEmail: 'contact@digitalstar.com',
+      accountHolderPhone: '+966550002222',
+      holderType: 'client',
+      delegatedPosId: 'pos-2',
+      delegatedPosName: 'ديجيتال ستار',
+      delegatedPosCode: 'JED-28314',
+      canReceiveSupplierTransfers: true,
+      isActive: true,
+      createdAt: '2026-11-12',
+    },
+  ];
+
+  // Empty query returns all
+  assert.equal(filterSupplierBankAccounts(accounts, '   ', { posClients: [pos2], employees: [emp] }).length, 3);
+
+  // Search by country (including Arabic alef normalization)
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'اليمن').map((a) => a.id), ['acc-ye-2']);
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'السعوديه').map((a) => a.id), ['acc-sa-1', 'acc-pos-3']);
+
+  // Search by holder name
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'سعيد باوزير').map((a) => a.id), ['acc-ye-2']);
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'العمودي').map((a) => a.id), ['acc-pos-3']);
+
+  // Search by account number & IBAN
+  assert.deepEqual(filterSupplierBankAccounts(accounts, '301928').map((a) => a.id), ['acc-ye-2']);
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'SA992000').map((a) => a.id), ['acc-pos-3']);
+
+  // Search by email, phone, notes, POS code & multi-token query
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'contact@digitalstar.com').map((a) => a.id), ['acc-pos-3']);
+  assert.deepEqual(filterSupplierBankAccounts(accounts, '+967770001122').map((a) => a.id), ['acc-ye-2']);
+  assert.deepEqual(filterSupplierBankAccounts(accounts, 'عدن').map((a) => a.id), ['acc-ye-2']);
+  assert.deepEqual(
+    filterSupplierBankAccounts(accounts, 'JED-28314', { posClients: [pos2], employees: [emp] }).map((a) => a.id),
+    ['acc-pos-3']
+  );
+  assert.deepEqual(
+    filterSupplierBankAccounts(accounts, 'اليمن الكريمي', { posClients: [pos2], employees: [emp] }).map((a) => a.id),
+    ['acc-ye-2']
+  );
+  assert.deepEqual(
+    filterSupplierBankAccounts(accounts, 'موظف', { posClients: [pos2], employees: [emp] }).map((a) => a.id),
+    ['acc-ye-2']
+  );
+});
+
+
 

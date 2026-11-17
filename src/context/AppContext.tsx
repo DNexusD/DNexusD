@@ -60,9 +60,12 @@ import {
   roundCurrency
 } from '../utils/loanRepayments';
 import {
+  BatchBankAccountsInput,
   getActiveBankAccountsForDeposit,
+  resolveBankAccountReceiverEmployee,
   resolveBankAccountReceiverPos,
   validateBankAccountInput,
+  validateBatchBankAccountsInput,
   normalizeEmail,
   isAccountAssignedToPos
 } from '../utils/bankAccounts';
@@ -81,20 +84,17 @@ import {
   validateResetPasswordInput
 } from '../utils/passwordReset';
 import {
-  initialSuppliers,
-  initialSupplier,
-  initialSupplierBankAccounts,
-  initialSuperAdmin,
-  initialPosClients,
-  initialCatalogs,
-  initialServices,
-  initialDepositRequests,
-  initialOrders,
-  initialAccountingEntries,
-  initialAdminAccountingEntries,
-  initialInviteLinks,
-  initialNotifications
+  initialSuperAdmin
 } from '../data/mockData';
+import {
+  CLEAN_BOOT_STORAGE_FLAG,
+  EMPTY_POS_FALLBACK,
+  EMPTY_SUPPLIER_FALLBACK,
+  ensureCleanBootLocalStorageOnce,
+  filterPreservedFixedCatalogs,
+  isPreservedAdminAuthUser,
+  sanitizeLocalStorageForCleanReset
+} from '../utils/systemReset';
 import confetti from 'canvas-confetti';
 import {
   testConnection,
@@ -259,12 +259,17 @@ interface AppContextType {
     accountHolderName: string;
     accountHolderEmail: string;
     accountHolderPhone?: string;
+    holderType?: 'employee' | 'client' | 'supplier';
     delegatedPosId?: string;
+    delegatedEmployeeId?: string;
     canReceiveSupplierTransfers: boolean;
     isPrimary?: boolean;
     isActive?: boolean;
     notes?: string;
   }) => { success: boolean; error?: string; account?: SupplierBankAccount };
+  saveBatchBankAccounts: (
+    input: BatchBankAccountsInput
+  ) => { success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee };
   toggleBankAccountTransferPrivilege: (accountId: string, enabled: boolean) => void;
   deleteSupplierBankAccount: (accountId: string) => void;
   confirmDepositReceiptByReceiver: (depositId: string, decision: 'confirmed' | 'rejected', note?: string) => void;
@@ -322,13 +327,15 @@ interface AppContextType {
     packageNameAr?: string;
     tierPrices: TierPrices;
     packageTierPrices?: TierPrices;
+    lowStockThreshold?: number;
     publishImmediately?: boolean;
     targetServiceId?: string;
     newServiceNameAr?: string;
   }) => { warehouse: VoucherWarehouse; addedCount: number };
   addCodesToWarehouse: (warehouseId: string, rawCodes: string) => { addedCount: number; skippedDuplicates: number };
   removeCodeFromWarehouse: (warehouseId: string, codeIndex: number) => void;
-  updateVoucherWarehouse: (warehouseId: string, updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices'>>) => void;
+  updateVoucherWarehouse: (warehouseId: string, updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices' | 'lowStockThreshold'>>) => void;
+  setWarehouseLowStockThreshold: (warehouseId: string, threshold: number) => void;
   publishWarehouseAsService: (warehouseId: string, options: { catalogId: string; serviceId?: string; serviceNameAr?: string }) => void;
   unpublishWarehouseFromService: (warehouseId: string) => void;
   deleteVoucherWarehouse: (warehouseId: string) => void;
@@ -353,9 +360,11 @@ interface AppContextType {
     email: string;
     password?: string;
     phone: string;
+    country?: string;
+    isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }) => void;
+  }) => OfficeEmployee;
   updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => void;
   removeOfficeEmployee: (empId: string) => void;
   addAdminAccount: (accountData: {
@@ -376,6 +385,9 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<UserRole>(() => {
     try {
+      if (typeof window !== 'undefined') {
+        ensureCleanBootLocalStorageOnce(window.localStorage);
+      }
       const saved = localStorage.getItem('digipos_auth_user');
       if (saved) {
         const parsed = JSON.parse(saved) as AuthUser;
@@ -406,24 +418,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   
   const [posClients, setPosClients] = useState<POSClient[]>(() => {
-    const saved = localStorage.getItem('digipos_clients_v2');
-    return saved ? JSON.parse(saved) : initialPosClients;
+    try {
+      const saved = localStorage.getItem('digipos_clients_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch {
+      // ignore
+    }
+    return [];
   });
   
-  const [currentPosId, setCurrentPosId] = useState<string>('pos-1');
+  const [currentPosId, setCurrentPosId] = useState<string>('');
 
   const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    const saved = localStorage.getItem('digipos_suppliers_v2');
-    return saved ? JSON.parse(saved) : initialSuppliers;
+    try {
+      const saved = localStorage.getItem('digipos_suppliers_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch {
+      // ignore
+    }
+    return [];
   });
 
-  const [currentSupplierId, setCurrentSupplierId] = useState<string>('sup-jamal-01');
+  const [currentSupplierId, setCurrentSupplierId] = useState<string>('');
   
-  const supplier = suppliers.find(s => s.id === currentSupplierId) || suppliers[0] || initialSupplier;
+  const supplier = suppliers.find(s => s.id === currentSupplierId) || suppliers[0] || EMPTY_SUPPLIER_FALLBACK;
   
   const [superAdmin, setSuperAdmin] = useState<SuperAdmin>(() => {
-    const saved = localStorage.getItem('digipos_admin_v2');
-    return saved ? JSON.parse(saved) : initialSuperAdmin;
+    try {
+      const saved = localStorage.getItem('digipos_admin_v2');
+      return saved ? JSON.parse(saved) : initialSuperAdmin;
+    } catch {
+      return initialSuperAdmin;
+    }
   });
 
   const [platformSettings, setPlatformSettings] = useState<PlatformInterfaceSettings>(() => {
@@ -443,21 +475,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as Catalog[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const hasFreeGiftCatalog = parsed.some(
-            c => c.isFreeGiftsCatalog || c.id === 'cat-free-gifts' || (c.nameAr && c.nameAr.includes('الهدايا المجانية'))
-          );
-          if (!hasFreeGiftCatalog) {
-            const giftCatalogSeed = initialCatalogs.find(c => c.id === 'cat-free-gifts');
-            if (giftCatalogSeed) return [...parsed, giftCatalogSeed];
-          }
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       } catch {
         // fallback
       }
     }
-    return initialCatalogs;
+    return [];
   });
   
   const [services, setServices] = useState<DigitalService[]>(() => {
@@ -465,23 +490,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as DigitalService[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const giftSeedFlag = localStorage.getItem('digipos_gift_catalog_seeded_v1');
-          if (!giftSeedFlag) {
-            localStorage.setItem('digipos_gift_catalog_seeded_v1', '1');
-            const hasGiftService = parsed.some(s => s.catalogId === 'cat-free-gifts' || s.id === 'srv-gift-pubg-60');
-            if (!hasGiftService) {
-              const giftSrvSeed = initialServices.find(s => s.id === 'srv-gift-pubg-60');
-              if (giftSrvSeed) return [...parsed, giftSrvSeed];
-            }
-          }
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       } catch {
         // fallback
       }
     }
-    return initialServices;
+    return [];
   });
 
   const [voucherWarehouses, setVoucherWarehouses] = useState<VoucherWarehouse[]>(() => {
@@ -489,88 +505,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as VoucherWarehouse[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       } catch {
         // fallback
       }
     }
-    // Seed warehouses from initial services that carry voucher codes
-    const seeded: VoucherWarehouse[] = [];
-    for (const srv of initialServices) {
-      if (!srv.deliveryMethods.includes('voucher_code')) continue;
-      for (const pkg of srv.packages) {
-        if (Array.isArray(pkg.vouchers) && pkg.vouchers.length > 0) {
-          seeded.push({
-            id: `wh-${pkg.id}`,
-            supplierId: srv.supplierId,
-            nameAr: pkg.name,
-            categoryName: srv.nameAr,
-            catalogId: srv.catalogId,
-            description: pkg.description || srv.descriptionAr,
-            codes: [...pkg.vouchers],
-            usedCodesCount: 0,
-            linkedServiceId: srv.id,
-            linkedPackageId: pkg.id,
-            isPublishedAsService: true,
-            tierPrices: { ...pkg.tierPrices },
-            createdAt: '2026-11-16'
-          });
-        }
-      }
-    }
-    return seeded;
+    return [];
   });
   
   const [depositRequests, setDepositRequests] = useState<DepositRequest[]>(() => {
-    const saved = localStorage.getItem('digipos_deposits_v2');
-    return saved ? JSON.parse(saved) : initialDepositRequests;
+    try {
+      const saved = localStorage.getItem('digipos_deposits_v2');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
 
   const [loanRepaymentRequests, setLoanRepaymentRequests] = useState<LoanRepaymentRequest[]>(() => {
-    const saved = localStorage.getItem('digipos_loan_repayments_v1');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('digipos_loan_repayments_v1');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
 
   const [supplierBankAccounts, setSupplierBankAccounts] = useState<SupplierBankAccount[]>(() => {
     const saved = localStorage.getItem('digipos_supplier_bank_accounts_v1');
     if (saved) {
       try {
-        const parsed: SupplierBankAccount[] = JSON.parse(saved);
-        const existingIds = new Set(parsed.map(a => a.id));
-        const missing = initialSupplierBankAccounts.filter(a => !existingIds.has(a.id));
-        if (missing.length > 0) {
-          const merged = [...parsed, ...missing];
-          localStorage.setItem('digipos_supplier_bank_accounts_v1', JSON.stringify(merged));
-          return merged;
-        }
-        return parsed;
+        const parsed = JSON.parse(saved) as SupplierBankAccount[];
+        return Array.isArray(parsed) ? parsed : [];
       } catch {
-        return initialSupplierBankAccounts;
+        return [];
       }
     }
-    return initialSupplierBankAccounts;
+    return [];
   });
   
   const [orders, setOrders] = useState<Order[]>(() => {
-    const saved = localStorage.getItem('digipos_orders_v2');
-    return saved ? JSON.parse(saved) : initialOrders;
+    try {
+      const saved = localStorage.getItem('digipos_orders_v2');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
   
   const [accountingEntries, setAccountingEntries] = useState<AccountingEntry[]>(() => {
-    const saved = localStorage.getItem('digipos_accounting_v2');
-    return saved ? JSON.parse(saved) : initialAccountingEntries;
+    try {
+      const saved = localStorage.getItem('digipos_accounting_v2');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
 
   const [adminAccountingEntries, setAdminAccountingEntries] = useState<AdminAccountingEntry[]>(() => {
-    const saved = localStorage.getItem('digipos_admin_accounting_v2');
-    return saved ? JSON.parse(saved) : initialAdminAccountingEntries;
+    try {
+      const saved = localStorage.getItem('digipos_admin_accounting_v2');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
   
   const [inviteLinks, setInviteLinks] = useState<InviteLink[]>(() => {
-    const saved = localStorage.getItem('digipos_invites_v2');
-    return saved ? JSON.parse(saved) : initialInviteLinks;
+    try {
+      const saved = localStorage.getItem('digipos_invites_v2');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
 
   const [notifications, setNotifications] = useState<AppNotification[]>(() => {
@@ -578,24 +593,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       } catch {
         // fallback
       }
     }
-    const v1 = localStorage.getItem('digipos_notifications_v1');
-    if (v1) {
-      try {
-        const parsed = JSON.parse(v1);
-        if (Array.isArray(parsed)) {
-          const supplierSeeds = initialNotifications.filter(n => n.targetRole === 'supplier');
-          return [...supplierSeeds, ...parsed.filter((n: any) => !supplierSeeds.some(s => s.id === n.id))];
-        }
-      } catch {
-        // fallback
-      }
-    }
-    return initialNotifications;
+    return [];
   });
 
   useEffect(() => {
@@ -691,41 +694,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
+  const applyLocalNonAdminStateReset = (preservedAdmin: SuperAdmin) => {
+    sanitizeLocalStorageForCleanReset(localStorage, preservedAdmin);
+    localStorage.setItem(CLEAN_BOOT_STORAGE_FLAG, '1');
+    setPosClients([]);
+    setSuppliers([]);
+    setServices([]);
+    setVoucherWarehouses([]);
+    setSupplierBankAccounts([]);
+    setOrders([]);
+    setDepositRequests([]);
+    setLoanRepaymentRequests([]);
+    setAccountingEntries([]);
+    setAdminAccountingEntries([]);
+    setInviteLinks([]);
+    setNotifications([]);
+    setCatalogs(prev => filterPreservedFixedCatalogs(prev));
+    setCurrentPosId('');
+    setCurrentSupplierId('');
+    setIsSupplierSelectionRequired(false);
+    setCurrentUser(prev =>
+      isPreservedAdminAuthUser(prev, preservedAdmin) ? prev : null
+    );
+  };
+
   useEffect(() => {
     let isMounted = true;
-    checkDatabaseConnection().then((res) => {
-      if (!isMounted) return;
-      if (res.success) {
-        console.log('Firebase Firestore connection verified:', res.message);
-        firestoreSync.deleteAccountByEmail('almekhlafiraghad2@gmail.com').then((delRes) => {
-          if (delRes.deletedCount > 0) {
-            console.log(`Successfully purged ${delRes.deletedCount} records for almekhlafiraghad2@gmail.com from Firestore`);
+    const runBootSync = async () => {
+      try {
+        const res = await checkDatabaseConnection();
+        if (!isMounted) return;
+        if (res.success) {
+          console.log('Firebase Firestore connection verified:', res.message);
+          const mig = await firestoreSync.ensureCleanStateMigrationOnce(superAdminRef.current);
+          if (isMounted && mig.migrated) {
+            applyLocalNonAdminStateReset(superAdminRef.current);
           }
-        }).catch(console.error);
-      } else {
-        console.warn('Firebase Firestore initial connection test:', res.message);
-        // Automatic retry after 2 seconds if initial probe was a cold start
-        setTimeout(() => {
-          if (isMounted) {
-            checkDatabaseConnection(0).then((retryRes) => {
-              if (retryRes.success) {
+        } else {
+          console.warn('Firebase Firestore initial connection test:', res.message);
+          setTimeout(async () => {
+            if (!isMounted) return;
+            try {
+              const retryRes = await checkDatabaseConnection(0);
+              if (retryRes.success && isMounted) {
                 console.log('Firebase Firestore connection verified on retry:', retryRes.message);
+                const mig = await firestoreSync.ensureCleanStateMigrationOnce(superAdminRef.current);
+                if (isMounted && mig.migrated) {
+                  applyLocalNonAdminStateReset(superAdminRef.current);
+                }
               }
-            }).catch(console.warn);
-          }
-        }, 2000);
+            } catch (e) {
+              console.warn(e);
+            }
+          }, 2000);
+        }
+      } catch (err) {
+        console.warn('Firestore connection check error:', err);
+        if (isMounted) setIsFirestoreConnected(false);
       }
-    }).catch(err => {
-      console.warn('Firestore connection check error:', err);
-      if (isMounted) setIsFirestoreConnected(false);
-    });
+    };
 
-    // Purge target email from local state
-    setPosClients(prev => prev.filter(p => p.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com'));
-    setSuppliers(prev => prev.filter(s => s.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com').map(s => ({
-      ...s,
-      employees: s.employees ? s.employees.filter(e => e.email?.trim().toLowerCase() !== 'almekhlafiraghad2@gmail.com') : []
-    })));
+    void runBootSync();
 
     return () => {
       isMounted = false;
@@ -816,7 +845,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             userRole === 'super_admin'
               ? 'admin'
               : userRole === 'supplier'
-              ? (matchedSup?.id || currentSupplierIdRef.current || 'sup-jamal-01')
+              ? (matchedSup?.id || currentSupplierIdRef.current || '')
               : currentPosIdRef.current,
           adminAccountId,
           roleTitle,
@@ -843,138 +872,120 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Orders live sync
     const unsubOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
-      if (!snapshot.empty) {
-        const remoteOrders: Order[] = [];
-        snapshot.forEach(docSnap => {
-          remoteOrders.push(docSnap.data() as Order);
-        });
-        remoteOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        setOrders(remoteOrders);
-      }
+      const remoteOrders: Order[] = [];
+      snapshot.forEach(docSnap => {
+        remoteOrders.push(docSnap.data() as Order);
+      });
+      remoteOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setOrders(remoteOrders);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'orders');
     });
 
     // 2. Deposit Requests & Loans live sync
     const unsubDeposits = onSnapshot(collection(db, 'depositRequests'), (snapshot) => {
-      if (!snapshot.empty) {
-        const remoteDeps: DepositRequest[] = [];
-        snapshot.forEach(docSnap => {
-          remoteDeps.push(docSnap.data() as DepositRequest);
-        });
-        remoteDeps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        setDepositRequests(remoteDeps);
-      }
+      const remoteDeps: DepositRequest[] = [];
+      snapshot.forEach(docSnap => {
+        remoteDeps.push(docSnap.data() as DepositRequest);
+      });
+      remoteDeps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setDepositRequests(remoteDeps);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'depositRequests');
     });
 
     // 3. POS Clients live sync (Deduplicated by ID)
     const unsubClients = onSnapshot(collection(db, 'posClients'), (snapshot) => {
-      if (!snapshot.empty) {
-        const clientMap = new Map<string, POSClient>();
-        snapshot.forEach(docSnap => {
-          const client = docSnap.data() as POSClient;
-          if (client && client.id) {
-            clientMap.set(client.id, client);
-          }
-        });
-        setPosClients(Array.from(clientMap.values()));
-      }
+      const clientMap = new Map<string, POSClient>();
+      snapshot.forEach(docSnap => {
+        const client = docSnap.data() as POSClient;
+        if (client && client.id) {
+          clientMap.set(client.id, client);
+        }
+      });
+      setPosClients(Array.from(clientMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'posClients');
     });
 
     // 4. Suppliers live sync (Deduplicated by ID)
     const unsubSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
-      if (!snapshot.empty) {
-        const supMap = new Map<string, Supplier>();
-        snapshot.forEach(docSnap => {
-          const sup = docSnap.data() as Supplier;
-          if (sup && sup.id) {
-            supMap.set(sup.id, sup);
-          }
-        });
-        setSuppliers(Array.from(supMap.values()));
-      }
+      const supMap = new Map<string, Supplier>();
+      snapshot.forEach(docSnap => {
+        const sup = docSnap.data() as Supplier;
+        if (sup && sup.id) {
+          supMap.set(sup.id, sup);
+        }
+      });
+      setSuppliers(Array.from(supMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'suppliers');
     });
 
     // 5. Loan Repayment Requests live sync
     const unsubLoanRepayments = onSnapshot(collection(db, 'loanRepaymentRequests'), (snapshot) => {
-      if (!snapshot.empty) {
-        const remoteReqs: LoanRepaymentRequest[] = [];
-        snapshot.forEach(docSnap => {
-          remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
-        });
-        remoteReqs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        setLoanRepaymentRequests(remoteReqs);
-      }
+      const remoteReqs: LoanRepaymentRequest[] = [];
+      snapshot.forEach(docSnap => {
+        remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
+      });
+      remoteReqs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setLoanRepaymentRequests(remoteReqs);
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'loanRepaymentRequests');
     });
 
     // 6. Supplier Bank Accounts live sync
     const unsubBankAccounts = onSnapshot(collection(db, 'supplierBankAccounts'), (snapshot) => {
-      if (!snapshot.empty) {
-        const accMap = new Map<string, SupplierBankAccount>();
-        snapshot.forEach(docSnap => {
-          const acc = docSnap.data() as SupplierBankAccount;
-          if (acc && acc.id) {
-            accMap.set(acc.id, acc);
-          }
-        });
-        setSupplierBankAccounts(Array.from(accMap.values()));
-      }
+      const accMap = new Map<string, SupplierBankAccount>();
+      snapshot.forEach(docSnap => {
+        const acc = docSnap.data() as SupplierBankAccount;
+        if (acc && acc.id) {
+          accMap.set(acc.id, acc);
+        }
+      });
+      setSupplierBankAccounts(Array.from(accMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'supplierBankAccounts');
     });
 
     // 7. Catalogs live sync
     const unsubCatalogs = onSnapshot(collection(db, 'catalogs'), (snapshot) => {
-      if (!snapshot.empty) {
-        const catMap = new Map<string, Catalog>();
-        snapshot.forEach(docSnap => {
-          const cat = docSnap.data() as Catalog;
-          if (cat && cat.id) {
-            catMap.set(cat.id, cat);
-          }
-        });
-        setCatalogs(Array.from(catMap.values()));
-      }
+      const catMap = new Map<string, Catalog>();
+      snapshot.forEach(docSnap => {
+        const cat = docSnap.data() as Catalog;
+        if (cat && cat.id) {
+          catMap.set(cat.id, cat);
+        }
+      });
+      setCatalogs(Array.from(catMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'catalogs');
     });
 
     // 8. Services live sync
     const unsubServices = onSnapshot(collection(db, 'services'), (snapshot) => {
-      if (!snapshot.empty) {
-        const srvMap = new Map<string, DigitalService>();
-        snapshot.forEach(docSnap => {
-          const srv = docSnap.data() as DigitalService;
-          if (srv && srv.id) {
-            srvMap.set(srv.id, srv);
-          }
-        });
-        setServices(Array.from(srvMap.values()));
-      }
+      const srvMap = new Map<string, DigitalService>();
+      snapshot.forEach(docSnap => {
+        const srv = docSnap.data() as DigitalService;
+        if (srv && srv.id) {
+          srvMap.set(srv.id, srv);
+        }
+      });
+      setServices(Array.from(srvMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'services');
     });
 
     // 8b. Voucher Warehouses live sync
     const unsubWarehouses = onSnapshot(collection(db, 'voucherWarehouses'), (snapshot) => {
-      if (!snapshot.empty) {
-        const whMap = new Map<string, VoucherWarehouse>();
-        snapshot.forEach(docSnap => {
-          const wh = docSnap.data() as VoucherWarehouse;
-          if (wh && wh.id) {
-            whMap.set(wh.id, wh);
-          }
-        });
-        setVoucherWarehouses(Array.from(whMap.values()));
-      }
+      const whMap = new Map<string, VoucherWarehouse>();
+      snapshot.forEach(docSnap => {
+        const wh = docSnap.data() as VoucherWarehouse;
+        if (wh && wh.id) {
+          whMap.set(wh.id, wh);
+        }
+      });
+      setVoucherWarehouses(Array.from(whMap.values()));
     }, (err) => {
       handleFirestoreError(err, OperationType.LIST, 'voucherWarehouses');
     });
@@ -1197,7 +1208,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setIsSupplierSelectionRequired(false);
           } else {
             setIsSupplierSelectionRequired(true);
-            setCurrentSupplierId(matchedSuppliers[0]?.id || suppliers[0].id);
+            setCurrentSupplierId(matchedSuppliers[0]?.id || suppliers[0]?.id || '');
             setCurrentPosId(matchingPosRecords[0].id);
           }
         } else {
@@ -1323,42 +1334,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Clear local storage and Firestore collections for users, suppliers, and posClients
+  // Reset all services, operational data, and all non-admin users while keeping Super Admin & Admin staff
   const clearUsersSuppliersAndClientsData = async (): Promise<void> => {
     setIsSyncingWithFirestore(true);
     try {
-      // 1. Purge LocalStorage
-      localStorage.removeItem('digipos_clients_v2');
-      localStorage.removeItem('digipos_suppliers_v2');
-      localStorage.removeItem('digipos_auth_user');
+      // 1. Purge LocalStorage and reset state (preserving superAdmin, platformSettings, fixed catalogs, and admin session)
+      applyLocalNonAdminStateReset(superAdmin);
 
-      // 2. Clear state
-      setPosClients([]);
-      setSuppliers([]);
-      setCurrentUser(null);
-
-      // 3. Clear Firestore collections if connected
+      // 2. Clear Firestore collections if connected (preserving Super Admin & Admin staff)
       const conn = await testConnection();
       if (conn.success) {
-        const res = await firestoreSync.clearUsersSuppliersAndClients();
+        const res = await firestoreSync.resetServicesAndNonAdminData(superAdmin);
         triggerConfetti();
         showToast({
           type: 'success',
-          title: 'تم إفراغ البيانات المحلية والسحابية بنجاح!',
-          description: `تم إفراغ ومسح سجلات مجموعات users, suppliers, posClients (${res.usersCleared} مستخدم، ${res.suppliersCleared} متجر، ${res.clientsCleared} عميل).`
+          title: 'تم تصفير الخدمات والمستخدمين بنجاح!',
+          description: `تم حذف ${res.servicesCleared} خدمة، ${res.warehousesCleared} مخزن، ${res.suppliersCleared} متجر، ${res.clientsCleared} نقطة بيع، و${res.usersCleared} مستخدم مع الإبقاء على مدير التطبيق وموظفيه (${res.usersPreserved} حساب إداري).`
         });
       } else {
         showToast({
           type: 'success',
-          title: 'تم إفراغ التخزين المحلي بنجاح',
-          description: 'تم مسح وحذف سجلات العميل والمتجر والمستخدمين من التخزين المحلي.'
+          title: 'تم تصفير البيانات المحلية بنجاح',
+          description: 'تم تصفير الخدمات والمستخدمين والعمليات محلياً مع الإبقاء على مدير التطبيق وموظفيه.'
         });
       }
     } catch (err: unknown) {
       console.error('Failed to clear data:', err);
       showToast({
         type: 'error',
-        title: 'تعذر إفراغ البيانات',
+        title: 'تعذر تصفير البيانات',
         description: err instanceof Error ? err.message : String(err)
       });
     } finally {
@@ -1570,8 +1574,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let isPasswordValid = false;
       const demoPasswords: Record<string, string> = {
         'admin@digipos-platform.com': 'SuperAdminPass2026!',
-        'jamal.digital@supplier.sa': 'SupplierPass2026!',
-        'pos.alamal@digipos.sa': 'PosClientPass2026!'
       };
 
       if (demoPasswords[cleanEmail]) {
@@ -1661,9 +1663,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } else {
           const fallbackPos = posClients[0];
-          userName = fallbackPos.ownerName;
-          associatedId = fallbackPos.id;
-          setCurrentPosId(fallbackPos.id);
+          if (fallbackPos) {
+            userName = fallbackPos.ownerName;
+            associatedId = fallbackPos.id;
+            setCurrentPosId(fallbackPos.id);
+          } else {
+            showToast({
+              type: 'error',
+              title: 'الحساب غير مسجل',
+              description: 'لا توجد بيانات نقطة بيع مسجلة لهذا البريد الإلكتروني. يرجى إنشاء حساب جديد أو مراجعة المتجر.'
+            });
+            return {
+              success: false,
+              error: 'لا توجد بيانات عميل مسجلة لهذا البريد الإلكتروني.'
+            };
+          }
         }
       }
     }
@@ -1952,7 +1966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const currentPos = posClients.find(p => p.id === currentPosId) || posClients[0];
+  const currentPos = posClients.find(p => p.id === currentPosId) || posClients[0] || EMPTY_POS_FALLBACK;
 
   const currentPosSupplier = React.useMemo(() => {
     return suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
@@ -2158,6 +2172,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const nextWh = stockDeduction.updatedWarehouse;
       setVoucherWarehouses(prev => prev.map(w => w.id === nextWh.id ? nextWh : w));
       firestoreSync.saveVoucherWarehouse(nextWh).catch(console.error);
+
+      // Check for low-stock threshold alert
+      const threshold = typeof nextWh.lowStockThreshold === 'number' ? nextWh.lowStockThreshold : 5;
+      const remainingCount = nextWh.codes.length;
+      if (remainingCount <= threshold) {
+        addNotification({
+          supplierId: supplier.id,
+          supplierName: supplier.name,
+          targetRole: 'supplier',
+          title: remainingCount === 0
+            ? `نفد مخزون فئة ${nextWh.categoryName} (${nextWh.nameAr}) ⚠️`
+            : `تنبيه مخزون منخفض: ${nextWh.categoryName} (${nextWh.nameAr}) ⚠️`,
+          message: remainingCount === 0
+            ? `نفد مخزون فئة "${nextWh.categoryName}" - ${nextWh.nameAr} بالكامل (0 كود متبقي). يرجى تعبئة الأكواد فوراً.`
+            : `وصل مخزون فئة "${nextWh.categoryName}" - ${nextWh.nameAr} إلى ${remainingCount} كود فقط (الحد الأدنى المعين: ${threshold} كود). يرجى تعبئة المخزون.`,
+          type: 'low_stock',
+          warehouseId: nextWh.id,
+          categoryName: nextWh.categoryName,
+          remainingStock: remainingCount,
+          lowStockThreshold: threshold,
+          actionTab: 'vouchers'
+        });
+      }
     }
 
     const orderId = `ord-${Date.now().toString().slice(-6)}`;
@@ -2694,7 +2731,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     accountHolderName: string;
     accountHolderEmail: string;
     accountHolderPhone?: string;
+    holderType?: 'employee' | 'client' | 'supplier';
     delegatedPosId?: string;
+    delegatedEmployeeId?: string;
     canReceiveSupplierTransfers: boolean;
     isPrimary?: boolean;
     isActive?: boolean;
@@ -2727,6 +2766,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posClients
     );
 
+    const resolvedHolderType: 'employee' | 'client' | 'supplier' =
+      input.holderType ??
+      existing?.holderType ??
+      (resolvedPos || input.delegatedPosId ? 'client' : existing?.delegatedEmployeeId || input.delegatedEmployeeId ? 'employee' : 'supplier');
+
     const savedAccount: SupplierBankAccount = {
       id: accountId,
       supplierId: targetSupplierId,
@@ -2737,9 +2781,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       accountHolderName: input.accountHolderName.trim(),
       accountHolderEmail: cleanEmail,
       accountHolderPhone: input.accountHolderPhone?.trim() || undefined,
+      holderType: resolvedHolderType,
       delegatedPosId: resolvedPos?.id || (input.delegatedPosId || undefined),
       delegatedPosName: resolvedPos?.tradeName || undefined,
       delegatedPosCode: resolvedPos?.posCode || undefined,
+      delegatedEmployeeId: input.delegatedEmployeeId ?? existing?.delegatedEmployeeId,
       canReceiveSupplierTransfers: input.canReceiveSupplierTransfers,
       isPrimary: input.isPrimary ?? existing?.isPrimary ?? false,
       isActive: input.isActive ?? existing?.isActive ?? true,
@@ -2808,6 +2854,160 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     return { success: true, account: savedAccount };
+  };
+
+  const saveBatchBankAccounts = (
+    input: BatchBankAccountsInput
+  ): { success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee } => {
+    const validation = validateBatchBankAccountsInput(input);
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'بيانات الحسابات البنكية غير مكتملة',
+        description: validation.error || 'يرجى التحقق من الحقول المطلوبة.'
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const nowDate = new Date().toISOString().substring(0, 10);
+    const nowTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const cleanEmail = normalizeEmail(input.accountHolderEmail);
+    const baseStamp = Date.now().toString().slice(-6);
+    const targetSupplierId = supplier.id;
+
+    if (input.mode === 'employee') {
+      const existingEmp = (supplier.employees || []).find(
+        e => normalizeEmail(e.email) === cleanEmail
+      );
+      let targetEmp: OfficeEmployee;
+      if (existingEmp) {
+        const mergedPermissions: EmployeePermissions = {
+          ...existingEmp.permissions,
+          canReviewDeposits: true,
+          canReviewCashDeposits: true,
+          canReviewLoanDeposits: true
+        };
+        targetEmp = {
+          ...existingEmp,
+          name: input.accountHolderName.trim(),
+          phone: input.accountHolderPhone?.trim() || existingEmp.phone,
+          country: input.country.trim(),
+          isTransferReceiverOnly: existingEmp.isTransferReceiverOnly ?? true,
+          password: input.employeePassword?.trim() || existingEmp.password,
+          roleTitle: existingEmp.roleTitle || `موظف استلام ومراجعة حوالات (${input.country.trim()})`,
+          permissions: mergedPermissions
+        };
+        updateOfficeEmployee(existingEmp.id, targetEmp);
+      } else {
+        targetEmp = addOfficeEmployee({
+          name: input.accountHolderName.trim(),
+          email: cleanEmail,
+          password: input.employeePassword?.trim() || '123456',
+          phone: input.accountHolderPhone?.trim() || '',
+          country: input.country.trim(),
+          isTransferReceiverOnly: true,
+          roleTitle: `موظف استلام ومراجعة حوالات (${input.country.trim()})`,
+          permissions: {
+            canReviewDeposits: true,
+            canReviewCashDeposits: true,
+            canReviewLoanDeposits: true
+          }
+        });
+      }
+
+      const createdAccounts: SupplierBankAccount[] = input.banks.map((bank, idx) => ({
+        id: `bank-${baseStamp}-${idx + 1}`,
+        supplierId: targetSupplierId,
+        bankName: bank.bankName.trim(),
+        accountNumber: bank.accountNumber.trim(),
+        iban: bank.iban?.trim().toUpperCase() || undefined,
+        country: input.country.trim(),
+        accountHolderName: input.accountHolderName.trim(),
+        accountHolderEmail: cleanEmail,
+        accountHolderPhone: input.accountHolderPhone?.trim() || undefined,
+        holderType: 'employee',
+        delegatedEmployeeId: targetEmp.id,
+        canReceiveSupplierTransfers: true,
+        isPrimary: false,
+        isActive: input.isActive ?? true,
+        notes: bank.notes?.trim() || input.notes?.trim() || undefined,
+        createdAt: nowDate,
+        updatedAt: nowTimestamp
+      }));
+
+      const nextAccounts = [...createdAccounts, ...supplierBankAccounts];
+      setSupplierBankAccounts(nextAccounts);
+      createdAccounts.forEach(acc => {
+        firestoreSync.saveSupplierBankAccount(acc).catch(console.error);
+      });
+
+      showToast({
+        type: 'success',
+        title: 'تمت إضافة الموظف وحساباته البنكية بنجاح',
+        description: `تم إضافة (${targetEmp.name}) كموظف استلام ومراجعة حوالات في (${input.country.trim()}) وربط ${createdAccounts.length} حساب/حسابات بنكية له.`
+      });
+
+      return { success: true, accounts: createdAccounts, employee: targetEmp };
+    }
+
+    // Client mode ('client')
+    const chosenClient = posClients.find(p => p.id === input.delegatedPosId);
+    if (!chosenClient) {
+      const errorMsg = 'لم يتم العثور على العميل المختار ضمن قائمة عملاء المتجر.';
+      showToast({
+        type: 'error',
+        title: 'تعذر إتمام الربط',
+        description: errorMsg
+      });
+      return { success: false, error: errorMsg };
+    }
+
+    const createdAccounts: SupplierBankAccount[] = input.banks.map((bank, idx) => ({
+      id: `bank-${baseStamp}-${idx + 1}`,
+      supplierId: targetSupplierId,
+      bankName: bank.bankName.trim(),
+      accountNumber: bank.accountNumber.trim(),
+      iban: bank.iban?.trim().toUpperCase() || undefined,
+      country: input.country.trim(),
+      accountHolderName: input.accountHolderName.trim(),
+      accountHolderEmail: cleanEmail,
+      accountHolderPhone: input.accountHolderPhone?.trim() || chosenClient.phone || undefined,
+      holderType: 'client',
+      delegatedPosId: chosenClient.id,
+      delegatedPosName: chosenClient.tradeName,
+      delegatedPosCode: chosenClient.posCode,
+      canReceiveSupplierTransfers: true,
+      isPrimary: false,
+      isActive: input.isActive ?? true,
+      notes: bank.notes?.trim() || input.notes?.trim() || undefined,
+      createdAt: nowDate,
+      updatedAt: nowTimestamp
+    }));
+
+    const nextAccounts = [...createdAccounts, ...supplierBankAccounts];
+    setSupplierBankAccounts(nextAccounts);
+    createdAccounts.forEach(acc => {
+      firestoreSync.saveSupplierBankAccount(acc).catch(console.error);
+    });
+
+    syncPosTransferPrivilegesFromAccounts(nextAccounts, [chosenClient.id]);
+
+    addNotification({
+      posId: chosenClient.id,
+      supplierId: targetSupplierId,
+      supplierName: supplier.name,
+      title: 'تم منحك ميزة استلام ومراجعة حوالات المتجر',
+      message: `منحك المتجر ${supplier.storeName} صلاحية استلام ومراجعة وتأكيد حوالات المتجر عبر ${createdAccounts.length} حساب/حسابات بنكية (${createdAccounts.map(a => a.bankName).join('، ')}).`,
+      type: 'announcement'
+    });
+
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة الحسابات البنكية للعميل بنجاح',
+      description: `تم ربط ${createdAccounts.length} حساب/حسابات بنكية بالعميل (${chosenClient.tradeName}) ومنحه صلاحية استلام ومراجعة وتأكيد الحوالات.`
+    });
+
+    return { success: true, accounts: createdAccounts };
   };
 
   const toggleBankAccountTransferPrivilege = (accountId: string, enabled: boolean) => {
@@ -2889,7 +3089,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!dep) return;
 
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const receiverName = currentPos.tradeName || dep.receiverPosName || dep.targetAccountHolderName || 'نقطة البيع المخوّلة';
+    const receiverName =
+      role === 'employee' || role === 'supplier'
+        ? (currentUser?.name || supplier.name || dep.targetAccountHolderName || 'موظف استلام الحوالات')
+        : (currentPos.tradeName || dep.receiverPosName || dep.targetAccountHolderName || 'نقطة البيع المخوّلة');
     const defaultNote =
       decision === 'confirmed'
         ? `تم تأكيد استلام الحوالة رقم (${dep.transferNumber}) في الحساب البنكي (${dep.targetBankName || dep.bankName})`
@@ -2977,8 +3180,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       selectedAccount && selectedAccount.canReceiveSupplierTransfers
         ? resolveBankAccountReceiverPos(selectedAccount, posClients)
         : undefined;
+    const resolvedReceiverEmployee =
+      selectedAccount && selectedAccount.canReceiveSupplierTransfers
+        ? resolveBankAccountReceiverEmployee(selectedAccount, targetSupplier.employees || [])
+        : undefined;
 
-    const isDelegatedTransfer = Boolean(selectedAccount?.canReceiveSupplierTransfers && (resolvedReceiverPos || selectedAccount?.delegatedPosId));
+    const isEmployeeDelegated = Boolean(
+      selectedAccount?.canReceiveSupplierTransfers &&
+        (selectedAccount.holderType === 'employee' || selectedAccount.delegatedEmployeeId || resolvedReceiverEmployee)
+    );
+    const isPosDelegated = Boolean(
+      selectedAccount?.canReceiveSupplierTransfers && !isEmployeeDelegated && (resolvedReceiverPos || selectedAccount?.delegatedPosId)
+    );
+    const isDelegatedTransfer = isPosDelegated || isEmployeeDelegated;
 
     const newDep: DepositRequest = {
       id: depositId,
@@ -3010,13 +3224,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetBankAccountCountry: selectedAccount?.country,
       targetAccountHolderName: selectedAccount?.accountHolderName,
       targetAccountHolderEmail: selectedAccount?.accountHolderEmail,
-      receiverPosId: isDelegatedTransfer ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
-      receiverPosName: isDelegatedTransfer ? (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName) : undefined,
-      receiverPosCode: isDelegatedTransfer ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
-      receiverPosEmail: isDelegatedTransfer ? (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail) : undefined,
+      receiverPosId: isPosDelegated ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
+      receiverPosName: isDelegatedTransfer
+        ? (isEmployeeDelegated
+            ? (resolvedReceiverEmployee?.name || selectedAccount?.accountHolderName)
+            : (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName))
+        : undefined,
+      receiverPosCode: isPosDelegated ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
+      receiverPosEmail: isDelegatedTransfer
+        ? (isEmployeeDelegated
+            ? (resolvedReceiverEmployee?.email || selectedAccount?.accountHolderEmail)
+            : (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail))
+        : undefined,
+      receiverEmployeeId: isEmployeeDelegated ? (resolvedReceiverEmployee?.id || selectedAccount?.delegatedEmployeeId) : undefined,
       receiverConfirmationStatus: isDelegatedTransfer ? 'pending' : undefined,
       notes: isLoan
         ? `طلب سلفة رصيد آجل بانتظار موافقة المتجر ${targetSupplier.name} بدون مرفقات بنكية`
+        : isEmployeeDelegated
+        ? `طلب إيداع لحساب موظف الاستلام (${resolvedReceiverEmployee?.name || selectedAccount?.accountHolderName}) بانتظار تأكيد الاستلام وموافقة المتجر ${targetSupplier.name}`
         : isDelegatedTransfer
         ? `طلب إيداع إلى حساب نقطة البيع المخوّلة (${resolvedReceiverPos?.tradeName || selectedAccount?.accountHolderName}) بانتظار تأكيد الاستلام وموافقة المتجر ${targetSupplier.name}`
         : `طلب إيداع كاش جديد بانتظار مراجعة وتأكيد المتجر ${targetSupplier.name}`
@@ -3458,7 +3683,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
     const receiverName =
-      currentPos.tradeName || req.receiverPosName || req.targetAccountHolderName || 'نقطة البيع المخوّلة';
+      role === 'employee' || role === 'supplier'
+        ? (currentUser?.name || supplier.name || req.targetAccountHolderName || 'موظف استلام الحوالات')
+        : (currentPos.tradeName || req.receiverPosName || req.targetAccountHolderName || 'نقطة البيع المخوّلة');
     const defaultNote =
       decision === 'confirmed'
         ? `تم تأكيد استلام حوالة سداد السلفة رقم (${req.transferNumber}) في الحساب البنكي (${req.targetBankName || req.bankName})`
@@ -3561,10 +3788,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       selectedAccount && selectedAccount.canReceiveSupplierTransfers
         ? resolveBankAccountReceiverPos(selectedAccount, posClients)
         : undefined;
+    const resolvedReceiverEmployee =
+      selectedAccount && selectedAccount.canReceiveSupplierTransfers
+        ? resolveBankAccountReceiverEmployee(selectedAccount, targetSupplier.employees || [])
+        : undefined;
 
-    const isDelegatedTransfer = Boolean(
-      selectedAccount?.canReceiveSupplierTransfers && (resolvedReceiverPos || selectedAccount?.delegatedPosId)
+    const isEmployeeDelegated = Boolean(
+      selectedAccount?.canReceiveSupplierTransfers &&
+        (selectedAccount.holderType === 'employee' || selectedAccount.delegatedEmployeeId || resolvedReceiverEmployee)
     );
+    const isPosDelegated = Boolean(
+      selectedAccount?.canReceiveSupplierTransfers && !isEmployeeDelegated && (resolvedReceiverPos || selectedAccount?.delegatedPosId)
+    );
+    const isDelegatedTransfer = isPosDelegated || isEmployeeDelegated;
 
     const paidBefore = getLoanPaidAmount(loan);
     const remainingBefore = getLoanRemainingAmount(loan);
@@ -3602,12 +3838,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetBankAccountCountry: selectedAccount?.country,
       targetAccountHolderName: selectedAccount?.accountHolderName,
       targetAccountHolderEmail: selectedAccount?.accountHolderEmail,
-      receiverPosId: isDelegatedTransfer ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
+      receiverPosId: isPosDelegated ? (resolvedReceiverPos?.id || selectedAccount?.delegatedPosId) : undefined,
       receiverPosName: isDelegatedTransfer
-        ? (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName)
+        ? (isEmployeeDelegated
+            ? (resolvedReceiverEmployee?.name || selectedAccount?.accountHolderName)
+            : (resolvedReceiverPos?.tradeName || selectedAccount?.delegatedPosName || selectedAccount?.accountHolderName))
         : undefined,
-      receiverPosCode: isDelegatedTransfer ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
-      receiverPosEmail: isDelegatedTransfer ? (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail) : undefined,
+      receiverPosCode: isPosDelegated ? (resolvedReceiverPos?.posCode || selectedAccount?.delegatedPosCode) : undefined,
+      receiverPosEmail: isDelegatedTransfer
+        ? (isEmployeeDelegated
+            ? (resolvedReceiverEmployee?.email || selectedAccount?.accountHolderEmail)
+            : (resolvedReceiverPos?.email || selectedAccount?.accountHolderEmail))
+        : undefined,
+      receiverEmployeeId: isEmployeeDelegated ? (resolvedReceiverEmployee?.id || selectedAccount?.delegatedEmployeeId) : undefined,
       receiverConfirmationStatus: isDelegatedTransfer ? 'pending' : undefined
     };
 
@@ -4696,6 +4939,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     packageNameAr?: string;
     tierPrices: TierPrices;
     packageTierPrices?: TierPrices;
+    lowStockThreshold?: number;
     publishImmediately?: boolean;
     targetServiceId?: string;
     newServiceNameAr?: string;
@@ -4713,6 +4957,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? Math.max(1, Math.floor(Number(input.packageCodesCount) || 5))
         : undefined;
 
+    const threshold =
+      typeof input.lowStockThreshold === 'number' && !Number.isNaN(input.lowStockThreshold)
+        ? Math.max(0, Math.floor(input.lowStockThreshold))
+        : 5;
+
     let warehouse: VoucherWarehouse = {
       id: whId,
       supplierId: supplier.id,
@@ -4722,6 +4971,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       description: input.description?.trim() || undefined,
       codes: parsed.codes,
       usedCodesCount: 0,
+      lowStockThreshold: threshold,
       isPublishedAsService: false,
       allowSingleCodePurchase: allowSingle,
       allowPackagePurchase: allowPackage,
@@ -4825,7 +5075,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateVoucherWarehouse = (
     warehouseId: string,
-    updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices'>>
+    updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices' | 'lowStockThreshold'>>
   ) => {
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
@@ -4836,9 +5086,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? (updates.allowSingleCodePurchase === false && mergedAllowPackage ? false : updates.allowSingleCodePurchase !== false)
       : (targetWh.allowSingleCodePurchase === false && mergedAllowPackage ? false : targetWh.allowSingleCodePurchase !== false);
 
+    const mergedThreshold = updates.lowStockThreshold !== undefined
+      ? Math.max(0, Math.floor(updates.lowStockThreshold))
+      : (targetWh.lowStockThreshold ?? 5);
+
     const updatedWh: VoucherWarehouse = {
       ...targetWh,
       ...updates,
+      lowStockThreshold: mergedThreshold,
       allowSingleCodePurchase: mergedAllowSingle,
       allowPackagePurchase: mergedAllowPackage,
       packageCodesCount: mergedAllowPackage
@@ -4862,6 +5117,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'success',
       title: 'تم تحديث بيانات المخزن',
       description: `تم حفظ تعديلات "${updatedWh.nameAr}" بنجاح.`
+    });
+  };
+
+  const setWarehouseLowStockThreshold = (warehouseId: string, threshold: number) => {
+    const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
+    if (!targetWh) return;
+    const normalized = Math.max(0, Math.floor(threshold));
+    const updatedWh: VoucherWarehouse = {
+      ...targetWh,
+      lowStockThreshold: normalized,
+      updatedAt: new Date().toISOString()
+    };
+    setVoucherWarehouses(prev => prev.map(w => (w.id === warehouseId ? updatedWh : w)));
+    firestoreSync.saveVoucherWarehouse(updatedWh).catch(console.error);
+
+    // If stock is already below or at new threshold, trigger immediate alert
+    if (updatedWh.codes.length <= normalized) {
+      addNotification({
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        targetRole: 'supplier',
+        title: updatedWh.codes.length === 0
+          ? `نفد مخزون فئة ${updatedWh.categoryName} (${updatedWh.nameAr}) ⚠️`
+          : `تنبيه مخزون منخفض: ${updatedWh.categoryName} (${updatedWh.nameAr}) ⚠️`,
+        message: `تم ضبط الحد الأدنى عند ${normalized} كود. المخزون الحالي (${updatedWh.codes.length} كود) وصل للحد الأدنى ويحتاج تعبئة.`,
+        type: 'low_stock',
+        warehouseId: updatedWh.id,
+        categoryName: updatedWh.categoryName,
+        remainingStock: updatedWh.codes.length,
+        lowStockThreshold: normalized,
+        actionTab: 'vouchers'
+      });
+    }
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث حد التنبيه',
+      description: `تم تعيين حد التنبيه لمخزون "${updatedWh.nameAr}" عند ${normalized} كود.`
     });
   };
 
@@ -5173,9 +5466,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     email: string;
     password?: string;
     phone: string;
+    country?: string;
+    isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }) => {
+  }): OfficeEmployee => {
     const cleanEmail = employeeData.email.trim().toLowerCase();
     const cleanPassword = employeeData.password?.trim() || '123456';
     const newEmp: OfficeEmployee = {
@@ -5185,6 +5480,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: cleanEmail,
       password: cleanPassword,
       phone: employeeData.phone.trim(),
+      country: employeeData.country?.trim() || undefined,
+      isTransferReceiverOnly: employeeData.isTransferReceiverOnly,
       roleTitle: employeeData.roleTitle.trim() || 'موظف مكتب',
       permissions: employeeData.permissions,
       createdAt: new Date().toISOString().substring(0, 10)
@@ -5222,6 +5519,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'تم إنشاء وتوثيق حساب الموظف بنجاح',
       description: `تم إضافة (${newEmp.name}) كحساب موظف معتمد في متجر (${supplier.name}) وحفظ كلمة المرور والصلاحيات في قاعدة البيانات.`
     });
+
+    return newEmp;
   };
 
   const updateOfficeEmployee = (empId: string, updates: Partial<OfficeEmployee>) => {
@@ -5548,6 +5847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         executeBalanceTransfer,
         submitDepositRequest,
         saveSupplierBankAccount,
+        saveBatchBankAccounts,
         toggleBankAccountTransferPrivilege,
         deleteSupplierBankAccount,
         confirmDepositReceiptByReceiver,
@@ -5581,6 +5881,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCodesToWarehouse,
         removeCodeFromWarehouse,
         updateVoucherWarehouse,
+        setWarehouseLowStockThreshold,
         publishWarehouseAsService,
         unpublishWarehouseFromService,
         deleteVoucherWarehouse,

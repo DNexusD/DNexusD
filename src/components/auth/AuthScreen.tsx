@@ -402,29 +402,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     }
   };
 
-  // Quick fill demo credentials
-  const fillDemoCredentials = (roleType: 'client' | 'supplier' | 'admin' | 'employee') => {
-    if (roleType === 'client') {
-      setLoginEmail('pos.alamal@digipos.sa');
-      setLoginPassword('PosClientPass2026!');
-    } else if (roleType === 'supplier') {
-      setLoginEmail('jamal.digital@supplier.sa');
-      setLoginPassword('SupplierPass2026!');
-    } else if (roleType === 'employee') {
-      setLoginEmail('ahmed.emp@supplier.sa');
-      setLoginPassword('123456');
-    } else {
-      setLoginEmail('admin@digipos-platform.com');
-      setLoginPassword('SuperAdminPass2026!');
-    }
-    setOtpSent(false);
-    setOtpSentToEmail(null);
-    setCooldownSeconds(0);
-    setRemainingSeconds(0);
-    setLoginOtp('');
-    lastAutoSubmittedOtpRef.current = '';
-  };
-
   const formatTimer = (sec: number) => {
     const mins = Math.floor(sec / 60);
     const secs = sec % 60;
@@ -748,36 +725,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       )}
                     </button>
 
-                    {/* Quick Demo Fill Buttons for Testing */}
-                    <div className="pt-2 border-t border-slate-800/80">
-                      <span className="text-[10px] text-slate-400 block mb-1.5 font-semibold">
-                        حسابات تجريبية سريعة لاختبار الصلاحيات:
-                      </span>
-                      <div className="grid grid-cols-3 gap-1.5 text-[11px]">
-                        <button
-                          type="button"
-                          onClick={() => fillDemoCredentials('supplier')}
-                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-center transition-colors font-medium"
-                        >
-                          المتجر (المالك)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => fillDemoCredentials('employee')}
-                          className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-center transition-colors font-bold"
-                          title="حساب موظف مع كلمة المرور (123456)"
-                        >
-                          موظف المكتب
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => fillDemoCredentials('client')}
-                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 text-center transition-colors font-medium"
-                        >
-                          نقطة بيع
-                        </button>
-                      </div>
-                    </div>
                   </form>
                 )}
               </div>
@@ -904,27 +851,33 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
 
                       {showSupplierDropdown && (
                         <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto p-1.5 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-                          {suppliers.map(sup => (
-                            <button
-                              key={sup.id}
-                              type="button"
-                              onClick={() => {
-                                setRegSupplierId(sup.id);
-                                setShowSupplierDropdown(false);
-                              }}
-                              className={`p-2 rounded-lg text-right transition-colors flex items-center justify-between ${
-                                regSupplierId === sup.id
-                                  ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30'
-                                  : 'hover:bg-slate-800 text-slate-300'
-                              }`}
-                            >
-                              <div>
-                                <div className="font-bold text-white text-xs">{sup.name} - {sup.storeName}</div>
-                                <div className="text-[10px] text-slate-400 font-mono">المعرف: {sup.id}</div>
-                              </div>
-                              {regSupplierId === sup.id && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
-                            </button>
-                          ))}
+                          {suppliers.length === 0 ? (
+                            <div className="p-3 text-center text-[11px] text-slate-400">
+                              لا توجد متاجر مسجلة في المنصة حالياً.
+                            </div>
+                          ) : (
+                            suppliers.map(sup => (
+                              <button
+                                key={sup.id}
+                                type="button"
+                                onClick={() => {
+                                  setRegSupplierId(sup.id);
+                                  setShowSupplierDropdown(false);
+                                }}
+                                className={`p-2 rounded-lg text-right transition-colors flex items-center justify-between ${
+                                  regSupplierId === sup.id
+                                    ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30'
+                                    : 'hover:bg-slate-800 text-slate-300'
+                                }`}
+                              >
+                                <div>
+                                  <div className="font-bold text-white text-xs">{sup.name} - {sup.storeName}</div>
+                                  <div className="text-[10px] text-slate-400 font-mono">المعرف: {sup.id}</div>
+                                </div>
+                                {regSupplierId === sup.id && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
+                              </button>
+                            ))
+                          )}
                         </div>
                       )}
 

@@ -7,7 +7,8 @@ import {
   updateDoc,
   deleteDoc,
   onSnapshot,
-  writeBatch
+  writeBatch,
+  DocumentReference
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import {
@@ -28,6 +29,11 @@ import {
   PlatformInterfaceSettings,
   VoucherWarehouse
 } from '../types';
+import {
+  FIRESTORE_COLLECTIONS_TO_CLEAR,
+  isPreservedAdminAuthUser,
+  mergeSuperAdminAccountsForPreservation
+} from '../utils/systemReset';
 
 function sanitizeData<T>(obj: T): T {
   if (obj === undefined || obj === null) return obj;
@@ -388,37 +394,158 @@ export const firestoreSync = {
     return { deletedCount };
   },
 
-  // Clear all users, suppliers, and posClients collections from Firestore
-  async clearUsersSuppliersAndClients(): Promise<{ usersCleared: number; suppliersCleared: number; clientsCleared: number }> {
+  async commitBatchDeletes(refs: DocumentReference[]): Promise<number> {
+    if (refs.length === 0) return 0;
+    const CHUNK_SIZE = 400;
+    let deleted = 0;
+    for (let i = 0; i < refs.length; i += CHUNK_SIZE) {
+      const chunk = refs.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const ref of chunk) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+      deleted += chunk.length;
+    }
+    return deleted;
+  },
+
+  // Reset all services, warehouses, non-fixed catalogs, operational data, and ALL users EXCEPT Super Admin & Admin staff
+  async resetServicesAndNonAdminData(
+    localSuperAdmin?: Partial<SuperAdmin> | null
+  ): Promise<{
+    usersCleared: number;
+    usersPreserved: number;
+    suppliersCleared: number;
+    clientsCleared: number;
+    servicesCleared: number;
+    warehousesCleared: number;
+    totalCleared: number;
+  }> {
     let usersCleared = 0;
+    let usersPreserved = 0;
     let suppliersCleared = 0;
     let clientsCleared = 0;
+    let servicesCleared = 0;
+    let warehousesCleared = 0;
+    let totalCleared = 0;
 
     try {
-      // 1. Delete all records in users collection
+      let remoteAdmin: Partial<SuperAdmin> | null = null;
+      try {
+        const adminSnap = await getDoc(doc(db, 'system', 'superAdmin'));
+        if (adminSnap.exists()) {
+          remoteAdmin = adminSnap.data() as Partial<SuperAdmin>;
+        }
+      } catch (err) {
+        console.warn('Could not read system/superAdmin before reset:', err);
+      }
+
+      const mergedAdmin = mergeSuperAdminAccountsForPreservation(localSuperAdmin, remoteAdmin);
+
+      // 1. Delete all docs in non-admin collections
+      for (const colName of FIRESTORE_COLLECTIONS_TO_CLEAR) {
+        const snap = await getDocs(collection(db, colName));
+        if (snap.empty) continue;
+        const refs = snap.docs.map(d => doc(db, colName, d.id));
+        const deletedCount = await this.commitBatchDeletes(refs);
+        totalCleared += deletedCount;
+        if (colName === 'suppliers') suppliersCleared = deletedCount;
+        if (colName === 'posClients') clientsCleared = deletedCount;
+        if (colName === 'services') servicesCleared = deletedCount;
+        if (colName === 'voucherWarehouses') warehousesCleared = deletedCount;
+      }
+
+      // 2. Delete non-fixed catalogs (preserve admin-fixed catalogs only)
+      const catalogsSnap = await getDocs(collection(db, 'catalogs'));
+      if (!catalogsSnap.empty) {
+        const catalogRefsToDelete: DocumentReference[] = [];
+        catalogsSnap.docs.forEach(docSnap => {
+          const catData = docSnap.data() as Partial<Catalog>;
+          const isFixed = Boolean(catData?.isFixedByAdmin === true || catData?.supplierId === 'all');
+          if (!isFixed) {
+            catalogRefsToDelete.push(doc(db, 'catalogs', docSnap.id));
+          }
+        });
+        totalCleared += await this.commitBatchDeletes(catalogRefsToDelete);
+      }
+
+      // 3. Delete all non-admin users while preserving Super Admin and Admin staff
       const usersSnap = await getDocs(collection(db, 'users'));
-      for (const docSnap of usersSnap.docs) {
-        await deleteDoc(doc(db, 'users', docSnap.id));
-        usersCleared++;
-      }
-
-      // 2. Delete all records in posClients collection
-      const clientsSnap = await getDocs(collection(db, 'posClients'));
-      for (const docSnap of clientsSnap.docs) {
-        await deleteDoc(doc(db, 'posClients', docSnap.id));
-        clientsCleared++;
-      }
-
-      // 3. Delete all records in suppliers collection
-      const suppliersSnap = await getDocs(collection(db, 'suppliers'));
-      for (const docSnap of suppliersSnap.docs) {
-        await deleteDoc(doc(db, 'suppliers', docSnap.id));
-        suppliersCleared++;
+      if (!usersSnap.empty) {
+        const userRefsToDelete: DocumentReference[] = [];
+        usersSnap.docs.forEach(docSnap => {
+          const userData = { id: docSnap.id, ...(docSnap.data() as Partial<AuthUser>) };
+          if (isPreservedAdminAuthUser(userData, mergedAdmin)) {
+            usersPreserved++;
+          } else {
+            userRefsToDelete.push(doc(db, 'users', docSnap.id));
+          }
+        });
+        usersCleared = await this.commitBatchDeletes(userRefsToDelete);
+        totalCleared += usersCleared;
       }
     } catch (err) {
-      console.error('Error clearing users, suppliers and posClients from Firestore:', err);
+      console.error('Error resetting services and non-admin data in Firestore:', err);
     }
 
-    return { usersCleared, suppliersCleared, clientsCleared };
+    return {
+      usersCleared,
+      usersPreserved,
+      suppliersCleared,
+      clientsCleared,
+      servicesCleared,
+      warehousesCleared,
+      totalCleared,
+    };
+  },
+
+  async ensureCleanStateMigrationOnce(
+    localSuperAdmin?: Partial<SuperAdmin> | null
+  ): Promise<{
+    migrated: boolean;
+    summary?: {
+      usersCleared: number;
+      usersPreserved: number;
+      suppliersCleared: number;
+      clientsCleared: number;
+      servicesCleared: number;
+      warehousesCleared: number;
+      totalCleared: number;
+    };
+  }> {
+    try {
+      const markerRef = doc(db, 'system', 'cleanStateMigrationV1');
+      const markerSnap = await getDoc(markerRef);
+      if (markerSnap.exists()) {
+        return { migrated: false };
+      }
+
+      const summary = await this.resetServicesAndNonAdminData(localSuperAdmin);
+      await setDoc(markerRef, {
+        completedAt: new Date().toISOString(),
+        preserved: 'super_admin_and_staff',
+        summary,
+      });
+      return { migrated: true, summary };
+    } catch (err) {
+      console.error('Error running one-time clean state migration:', err);
+      return { migrated: false };
+    }
+  },
+
+  // Clear all services, operational data, and non-admin users from Firestore (preserving Super Admin & staff)
+  async clearUsersSuppliersAndClients(
+    localSuperAdmin?: Partial<SuperAdmin> | null
+  ): Promise<{
+    usersCleared: number;
+    usersPreserved: number;
+    suppliersCleared: number;
+    clientsCleared: number;
+    servicesCleared: number;
+    warehousesCleared: number;
+    totalCleared: number;
+  }> {
+    return this.resetServicesAndNonAdminData(localSuperAdmin);
   }
 };

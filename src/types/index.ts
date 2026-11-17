@@ -170,6 +170,7 @@ export interface VoucherWarehouse {
   description?: string;
   codes: string[];
   usedCodesCount: number;
+  lowStockThreshold?: number; // Minimum stock alert threshold for this category/warehouse (e.g. 5)
   linkedServiceId?: string;
   linkedPackageId?: string;
   isPublishedAsService: boolean;
@@ -249,7 +250,9 @@ export interface OfficeEmployee {
   email: string;
   password?: string;
   phone: string;
+  country?: string;
   roleTitle: string;
+  isTransferReceiverOnly?: boolean;
   permissions: EmployeePermissions;
   createdAt: string;
 }
@@ -394,6 +397,7 @@ export interface LoanRepaymentRequest {
   receiverPosName?: string;
   receiverPosCode?: string;
   receiverPosEmail?: string;
+  receiverEmployeeId?: string;
   receiverConfirmationStatus?: ReceiverConfirmationStatus;
   receiverConfirmedAt?: string;
   receiverConfirmedByName?: string;
@@ -436,9 +440,11 @@ export interface SupplierBankAccount {
   accountHolderName: string;
   accountHolderEmail: string;
   accountHolderPhone?: string;
+  holderType?: 'employee' | 'client' | 'supplier';
   delegatedPosId?: string;
   delegatedPosName?: string;
   delegatedPosCode?: string;
+  delegatedEmployeeId?: string;
   canReceiveSupplierTransfers: boolean;
   isPrimary?: boolean;
   isActive: boolean;
@@ -478,6 +484,7 @@ export interface DepositRequest {
   receiverPosName?: string;
   receiverPosCode?: string;
   receiverPosEmail?: string;
+  receiverEmployeeId?: string;
   receiverConfirmationStatus?: ReceiverConfirmationStatus;
   receiverConfirmedAt?: string;
   receiverConfirmedByName?: string;
@@ -602,7 +609,8 @@ export type NotificationType =
   | 'tier_upgrade'
   | 'announcement'
   | 'transfer'
-  | 'receiver_confirmation';
+  | 'receiver_confirmation'
+  | 'low_stock';
 
 export interface AppNotification {
   id: string;
@@ -621,6 +629,10 @@ export interface AppNotification {
   depositId?: string;
   loanId?: string;
   repaymentRequestId?: string;
+  warehouseId?: string;
+  categoryName?: string;
+  remainingStock?: number;
+  lowStockThreshold?: number;
   amount?: number;
   actionTab?:
     | 'catalogs'

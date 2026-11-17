@@ -236,3 +236,82 @@ test('package-only mode enforces stock >= packageCodesCount and blocks single-co
   assert.equal(pkgAttempt.outOfStock, true);
 });
 
+import {
+  computeStockSummary,
+  isWarehouseLowStock,
+  DEFAULT_LOW_STOCK_THRESHOLD,
+} from './voucherWarehouses.ts';
+
+test('isWarehouseLowStock respects custom lowStockThreshold and default threshold', () => {
+  const defaultOk = makeWarehouse({ codes: ['1', '2', '3', '4', '5', '6'] });
+  assert.equal(isWarehouseLowStock(defaultOk), false);
+
+  const defaultLow = makeWarehouse({ codes: ['1', '2', '3', '4', '5'] });
+  assert.equal(isWarehouseLowStock(defaultLow), true);
+
+  const customOk = makeWarehouse({ codes: ['1', '2', '3'], lowStockThreshold: 2 });
+  assert.equal(isWarehouseLowStock(customOk), false);
+
+  const customLow = makeWarehouse({ codes: ['1', '2'], lowStockThreshold: 2 });
+  assert.equal(isWarehouseLowStock(customLow), true);
+
+  const zeroThresholdOk = makeWarehouse({ codes: ['1'], lowStockThreshold: 0 });
+  assert.equal(isWarehouseLowStock(zeroThresholdOk), false);
+
+  const zeroThresholdOut = makeWarehouse({ codes: [], lowStockThreshold: 0 });
+  assert.equal(isWarehouseLowStock(zeroThresholdOut), true);
+  assert.equal(DEFAULT_LOW_STOCK_THRESHOLD, 5);
+});
+
+test('computeStockSummary aggregates stocked, sold, remaining, and low stock counts by category', () => {
+  const wh1 = makeWarehouse({
+    id: 'wh-1',
+    categoryName: 'بطاقات بلايستيشن',
+    codes: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6'], // 6 remaining
+    usedCodesCount: 4, // 10 original stocked
+    lowStockThreshold: 5, // NOT low
+  });
+  const wh2 = makeWarehouse({
+    id: 'wh-2',
+    categoryName: 'بطاقات بلايستيشن',
+    codes: ['B1', 'B2'], // 2 remaining
+    usedCodesCount: 8, // 10 original stocked
+    lowStockThreshold: 3, // LOW
+  });
+  const wh3 = makeWarehouse({
+    id: 'wh-3',
+    categoryName: 'أكواد آيتونز',
+    codes: [], // 0 remaining
+    usedCodesCount: 5, // 5 original stocked
+    lowStockThreshold: 2, // LOW + OUT
+  });
+
+  const summary = computeStockSummary([wh1, wh2, wh3]);
+  assert.equal(summary.totalWarehouses, 3);
+  assert.equal(summary.totalCategories, 2);
+  assert.equal(summary.totalStocked, 25);
+  assert.equal(summary.totalSold, 17);
+  assert.equal(summary.totalRemaining, 8);
+  assert.equal(summary.lowStockCount, 2);
+  assert.equal(summary.outOfStockCount, 1);
+
+  const psnCat = summary.categories.find((c) => c.categoryName === 'بطاقات بلايستيشن');
+  assert.ok(psnCat);
+  assert.equal(psnCat.warehousesCount, 2);
+  assert.equal(psnCat.totalStocked, 20);
+  assert.equal(psnCat.totalSold, 12);
+  assert.equal(psnCat.totalRemaining, 8);
+  assert.equal(psnCat.lowStockCount, 1);
+  assert.equal(psnCat.outOfStockCount, 0);
+
+  const itunesCat = summary.categories.find((c) => c.categoryName === 'أكواد آيتونز');
+  assert.ok(itunesCat);
+  assert.equal(itunesCat.warehousesCount, 1);
+  assert.equal(itunesCat.totalStocked, 5);
+  assert.equal(itunesCat.totalSold, 5);
+  assert.equal(itunesCat.totalRemaining, 0);
+  assert.equal(itunesCat.lowStockCount, 1);
+  assert.equal(itunesCat.outOfStockCount, 1);
+});
+
+

@@ -1,4 +1,4 @@
-import { DepositRequest, LoanRepaymentRequest, POSClient, Supplier, SupplierBankAccount } from '../types';
+import { DepositRequest, LoanRepaymentRequest, OfficeEmployee, POSClient, Supplier, SupplierBankAccount } from '../types';
 import { isLoanDeposit } from './loanRepayments';
 
 export type IncomingTransferStatusFilter = 'all' | 'pending' | 'confirmed' | 'rejected';
@@ -76,6 +76,36 @@ export function resolveBankAccountReceiverPos(
       (p) => p.supplierId === account.supplierId && normalizeEmail(p.email) === targetEmail
     ) || posClients.find((p) => normalizeEmail(p.email) === targetEmail)
   );
+}
+
+export function resolveBankAccountReceiverEmployee(
+  account: Pick<
+    SupplierBankAccount,
+    'delegatedEmployeeId' | 'accountHolderEmail' | 'canReceiveSupplierTransfers' | 'supplierId' | 'holderType'
+  >,
+  employees: OfficeEmployee[] = []
+): OfficeEmployee | undefined {
+  if (!account.canReceiveSupplierTransfers || employees.length === 0) return undefined;
+
+  if (account.delegatedEmployeeId) {
+    const byId =
+      employees.find(
+        (e) => e.id === account.delegatedEmployeeId && (!account.supplierId || e.supplierId === account.supplierId)
+      ) || employees.find((e) => e.id === account.delegatedEmployeeId);
+    if (byId) return byId;
+  }
+
+  if (account.holderType === 'employee' || !account.holderType) {
+    const targetEmail = normalizeEmail(account.accountHolderEmail);
+    if (!targetEmail) return undefined;
+    return (
+      employees.find(
+        (e) => (!account.supplierId || e.supplierId === account.supplierId) && normalizeEmail(e.email) === targetEmail
+      ) || employees.find((e) => normalizeEmail(e.email) === targetEmail)
+    );
+  }
+
+  return undefined;
 }
 
 export function isAccountAssignedToPos(
@@ -309,3 +339,142 @@ export function validateBankAccountInput(input: {
   }
   return { valid: true };
 }
+
+export interface BankEntryDraft {
+  bankName: string;
+  accountNumber: string;
+  iban?: string;
+  notes?: string;
+}
+
+export interface BatchBankAccountsInput {
+  mode: 'employee' | 'client';
+  country: string;
+  accountHolderName: string;
+  accountHolderEmail: string;
+  accountHolderPhone?: string;
+  employeePassword?: string;
+  delegatedPosId?: string;
+  isActive?: boolean;
+  notes?: string;
+  banks: BankEntryDraft[];
+}
+
+export function validateBatchBankAccountsInput(
+  input: BatchBankAccountsInput
+): { valid: boolean; error?: string } {
+  if (!input.country.trim()) {
+    return { valid: false, error: 'يرجى اختيار الدولة التي تقع فيها الحسابات البنكية أولاً.' };
+  }
+  if (input.mode === 'client' && !input.delegatedPosId?.trim()) {
+    return { valid: false, error: 'يرجى اختيار العميل من قائمة عملاء المتجر أولاً.' };
+  }
+  if (!input.accountHolderName.trim()) {
+    return {
+      valid: false,
+      error: input.mode === 'employee' ? 'يرجى إدخال الاسم الكامل للموظف.' : 'يرجى إدخال اسم صاحب الحساب البنكي.',
+    };
+  }
+  const cleanEmail = normalizeEmail(input.accountHolderEmail);
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return {
+      valid: false,
+      error:
+        input.mode === 'employee'
+          ? 'يرجى إدخال بريد إلكتروني صحيح للموظف لتفعيل دخوله واستلام إشعارات الحوالات.'
+          : 'يرجى إدخال بريد إلكتروني صحيح للعميل صاحب الحساب.',
+    };
+  }
+  if (!input.banks || input.banks.length === 0) {
+    return { valid: false, error: 'يرجى إضافة حساب بنكي واحد على الأقل.' };
+  }
+  for (let i = 0; i < input.banks.length; i += 1) {
+    const bank = input.banks[i];
+    if (!bank.bankName.trim()) {
+      return { valid: false, error: `يرجى اختيار أو إدخال اسم البنك للحساب رقم ${i + 1}.` };
+    }
+    if (!bank.accountNumber.trim() && !(bank.iban || '').trim()) {
+      return {
+        valid: false,
+        error: `يرجى إدخال رقم الحساب البنكي أو الآيبان (IBAN) لبنك (${bank.bankName.trim()}).`,
+      };
+    }
+  }
+  return { valid: true };
+}
+
+export function normalizeSearchText(value?: string): string {
+  return (value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي');
+}
+
+export function filterSupplierBankAccounts(
+  accounts: SupplierBankAccount[],
+  query: string,
+  options: {
+    posClients?: POSClient[];
+    employees?: OfficeEmployee[];
+  } = {}
+): SupplierBankAccount[] {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return accounts;
+
+  const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return accounts;
+
+  const posClients = options.posClients || [];
+  const employees = options.employees || [];
+
+  return accounts.filter((acc) => {
+    const matchedPos = resolveBankAccountReceiverPos(
+      { ...acc, canReceiveSupplierTransfers: true },
+      posClients
+    );
+    const matchedEmp = resolveBankAccountReceiverEmployee(
+      { ...acc, canReceiveSupplierTransfers: true },
+      employees
+    );
+
+    const isEmployeeHolder =
+      acc.holderType === 'employee' || Boolean(acc.delegatedEmployeeId) || Boolean(matchedEmp);
+
+    const fields = [
+      acc.id,
+      acc.bankName,
+      acc.country,
+      acc.accountHolderName,
+      acc.accountHolderEmail,
+      acc.accountHolderPhone || '',
+      acc.accountNumber,
+      acc.iban || '',
+      acc.notes || '',
+      acc.delegatedPosName || '',
+      acc.delegatedPosCode || '',
+      matchedPos?.tradeName || '',
+      matchedPos?.ownerName || '',
+      matchedPos?.posCode || '',
+      matchedPos?.email || '',
+      matchedPos?.phone || '',
+      matchedEmployeeText(matchedEmp),
+      acc.isPrimary ? 'حساب رئيسي اساسي' : '',
+      acc.isActive !== false ? 'نشط مفعل متاح' : 'موقوف معطل',
+      acc.canReceiveSupplierTransfers ? 'مخول مفوض استلام حوالات' : 'حساب متجر مباشر',
+      isEmployeeHolder ? 'موظف استلام حوالات' : matchedPos ? 'عميل نقطه بيع' : 'متجر',
+    ];
+
+    const haystack = normalizeSearchText(fields.join(' '));
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
+function matchedEmployeeText(emp?: OfficeEmployee): string {
+  if (!emp) return '';
+  return [emp.name, emp.email, emp.phone, emp.country || '', emp.roleTitle || ''].join(' ');
+}
+
+
