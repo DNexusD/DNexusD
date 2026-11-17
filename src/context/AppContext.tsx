@@ -2070,6 +2070,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const purchaseOpts = resolvePackagePurchaseOptions(effectivePkg, voucherWarehouses);
     const effectiveUnit: WarehousePurchaseUnit = purchaseUnit || purchaseOpts.defaultPurchaseUnit;
 
+    if (!liveService || liveService.packages.length === 0 || !effectivePkg) {
+      const msg = `عذراً، الخدمة المطلوبة أو الباقة غير متوفرة حالياً لدى المتجر.`;
+      showToast({
+        type: 'error',
+        title: 'عدم توفر الخدمة المطلوبة',
+        description: msg
+      });
+      return { success: false, error: 'service_unavailable' };
+    }
+
     const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
     const activeOrderSupplier = currentPosSupplier || supplier;
     const pricing = calculateServicePurchasePricing({
@@ -2151,13 +2161,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (stockDeduction.outOfStock) {
+      const isVoucher = deliveryMethod === 'voucher_code';
+      const msg = isVoucher
+        ? (effectiveUnit === 'package'
+            ? `عذراً، الأكواد المتوفرة في المخزن غير كافية لتسليم باقة كاملة (${purchaseOpts.packageCodesCount} أكواد) لخدمة "${effectivePkg.name}". عذراً هذه الأكواد غير متوفرة حالياً.`
+            : `عذراً، لا تتوفر أكواد شحن متاحة لهذه الفئة (${effectivePkg.name}) حالياً في مخزن المتجر. هذه الأكواد غير متوفرة حالياً.`)
+        : `عذراً، الخدمة أو الباقة المطلوبة (${effectivePkg.name}) غير متوفرة حالياً لدى المتجر (نفد المخزون).`;
+
       showToast({
         type: 'error',
-        title: 'نفد المخزون',
-        description:
-          effectiveUnit === 'package'
-            ? `عذراً، المخزون المتوفر في "${effectivePkg.name}" غير كافٍ لتسليم باقة كاملة (${purchaseOpts.packageCodesCount} أكواد).`
-            : `عذراً، نفد مخزون "${effectivePkg.name}" حالياً. يرجى اختيار باقة أخرى أو التواصل مع المتجر لتعبئة المخزون.`
+        title: isVoucher ? 'عدم توفر الأكواد المطلوبة' : 'عدم توفر الخدمة المطلوبة',
+        description: msg
       });
       return { success: false, error: 'out_of_stock' };
     }
