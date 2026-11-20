@@ -3,6 +3,12 @@ import { useApp } from '../../context/AppContext';
 import { DigitalService, DeliveryMethod, ServicePackage, AccountTier } from '../../types';
 import { isCatalogFreeGifts } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
+import {
+  sanitizePackagesForDeliveryMethods,
+  splitPackagesByDeliveryMethod,
+  createEmptyPackageForMethod,
+  getDeliveryMethodLabelAr,
+} from '../../utils/voucherWarehouses';
 import { 
   X, 
   Upload, 
@@ -10,13 +16,13 @@ import {
   Plus, 
   Image as ImageIcon, 
   Check, 
+  CheckCircle2,
   Gamepad2, 
   CreditCard, 
   Tv, 
-  Layers, 
-  AlertCircle,
+  Lock,
+  Ticket,
   Package,
-  Sparkles,
   ToggleLeft,
   ToggleRight,
   Gift
@@ -32,11 +38,17 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
 
+  const initialMethods: DeliveryMethod[] =
+    service.deliveryMethods && service.deliveryMethods.length > 0
+      ? service.deliveryMethods
+      : ['player_id'];
+
   const [catalogId, setCatalogId] = useState(service.catalogId || supplierCatalogs[0]?.id || '');
   const [nameAr, setNameAr] = useState(service.nameAr || '');
   const [descriptionAr, setDescriptionAr] = useState(service.descriptionAr || '');
   const [imageUrl, setImageUrl] = useState<string>(service.imageUrl || '');
-  const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>(service.deliveryMethods || ['player_id']);
+  const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>(initialMethods);
+  const [activePackageMethod, setActivePackageMethod] = useState<DeliveryMethod>(initialMethods[0]);
   const [isActive, setIsActive] = useState<boolean>(service.isActive !== false);
 
   // Gift targeting state
@@ -50,17 +62,20 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
     service.giftTargetPosIds || []
   );
 
-  // Packages list state
-  const [packages, setPackages] = useState<ServicePackage[]>(
-    service.packages && service.packages.length > 0 
-      ? JSON.parse(JSON.stringify(service.packages))
-      : [{
-          id: `pkg-${Date.now()}`,
-          name: '',
-          tierPrices: { regular: 0, bronze: 0, silver: 0, gold: 0, vip: 0 },
-          availableStock: 0
-        }]
-  );
+  // Independent packages list per delivery method (migrates legacy untagged packages smoothly)
+  const [packagesByMethod, setPackagesByMethod] = useState<Record<DeliveryMethod, ServicePackage[]>>(() => {
+    const split = splitPackagesByDeliveryMethod(service.packages || [], initialMethods);
+    for (const m of initialMethods) {
+      if (!split[m] || split[m].length === 0) {
+        split[m] = [createEmptyPackageForMethod(m)];
+      }
+    }
+    return split;
+  });
+
+  const activePackages = packagesByMethod[activePackageMethod] || [];
+  const activeMethodIsVoucher = activePackageMethod === 'voucher_code';
+  const allActivePackages = deliveryMethods.flatMap(m => packagesByMethod[m] || []);
 
   // New package inline addition state
   const [showAddPackageForm, setShowAddPackageForm] = useState(false);
@@ -70,6 +85,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const [newPriceSilver, setNewPriceSilver] = useState<number>(0);
   const [newPriceGold, setNewPriceGold] = useState<number>(0);
   const [newPriceVip, setNewPriceVip] = useState<number>(0);
+  const [newVouchersInput, setNewVouchersInput] = useState('');
 
   // Delete service confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -106,64 +122,119 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
         showToast({ type: 'error', title: 'تنبيه', description: 'يجب اختيار طريقة تسليم واحدة على الأقل' });
         return;
       }
-      setDeliveryMethods(deliveryMethods.filter(m => m !== method));
+      const next = deliveryMethods.filter(m => m !== method);
+      setDeliveryMethods(next);
+      if (activePackageMethod === method) {
+        setActivePackageMethod(next[0]);
+        setShowAddPackageForm(false);
+      }
     } else {
-      setDeliveryMethods([...deliveryMethods, method]);
+      const next = [...deliveryMethods, method];
+      setDeliveryMethods(next);
+      setPackagesByMethod(prev => {
+        if (prev[method] && prev[method].length > 0) return prev;
+        return {
+          ...prev,
+          [method]: [createEmptyPackageForMethod(method)],
+        };
+      });
+      setActivePackageMethod(method);
+      setShowAddPackageForm(false);
     }
   };
 
   const handleUpdatePackagePrice = (pkgId: string, tier: 'regular' | 'bronze' | 'silver' | 'gold' | 'vip', val: number) => {
     const safeVal = Number.isFinite(val) && val >= 0 ? val : 0;
-    setPackages(prev => prev.map(p => {
-      if (p.id === pkgId) {
-        return {
-          ...p,
-          tierPrices: {
-            ...p.tierPrices,
-            [tier]: safeVal
-          }
-        };
-      }
-      return p;
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].map(p =>
+        p.id === pkgId
+          ? {
+              ...p,
+              tierPrices: {
+                ...p.tierPrices,
+                [tier]: safeVal,
+              },
+            }
+          : p
+      ),
     }));
   };
 
   const handleUpdatePackageName = (pkgId: string, name: string) => {
-    setPackages(prev => prev.map(p => p.id === pkgId ? { ...p, name } : p));
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].map(p => (p.id === pkgId ? { ...p, name } : p)),
+    }));
   };
 
   const handleDeletePackage = (pkgId: string) => {
-    if (packages.length <= 1) {
-      showToast({ type: 'error', title: 'تنبيه', description: 'يجب أن تحتوي الخدمة على باقة واحدة على الأقل' });
+    if (activePackages.length <= 1) {
+      showToast({
+        type: 'error',
+        title: 'تنبيه',
+        description: `يجب أن تحتوي طريقة "${getDeliveryMethodLabelAr(activePackageMethod)}" على باقة واحدة على الأقل`,
+      });
       return;
     }
-    setPackages(prev => prev.filter(p => p.id !== pkgId));
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].filter(p => p.id !== pkgId),
+    }));
   };
 
   const handleUpdatePackageStock = (pkgId: string, stock: number) => {
     const safeStock = Math.max(0, Math.floor(Number.isFinite(stock) ? stock : 0));
-    setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, availableStock: safeStock } : p)));
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].map(p =>
+        p.id === pkgId ? { ...p, availableStock: safeStock } : p
+      ),
+    }));
+  };
+
+  const handleUpdatePackageVouchers = (pkgId: string, raw: string) => {
+    const codes = raw.split(/[\r\n,]+/).map(v => v.trim()).filter(Boolean);
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].map(p =>
+        p.id === pkgId
+          ? {
+              ...p,
+              warehouseId: undefined,
+              vouchers: codes.length > 0 ? codes : undefined,
+              availableStock: codes.length > 0 ? codes.length : 0,
+            }
+          : p
+      ),
+    }));
   };
 
   const handleLinkPackageWarehouse = (pkgId: string, warehouseId: string) => {
     if (!warehouseId) {
-      setPackages(prev => prev.map(p => (p.id === pkgId ? { ...p, warehouseId: undefined } : p)));
+      setPackagesByMethod(prev => ({
+        ...prev,
+        [activePackageMethod]: prev[activePackageMethod].map(p =>
+          p.id === pkgId ? { ...p, warehouseId: undefined } : p
+        ),
+      }));
       return;
     }
     const wh = supplierWarehouses.find(w => w.id === warehouseId);
     if (!wh) return;
-    setPackages(prev =>
-      prev.map(p =>
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: prev[activePackageMethod].map(p =>
         p.id === pkgId
           ? {
               ...p,
               warehouseId: wh.id,
               vouchers: [...wh.codes],
-              availableStock: wh.codes.length
+              availableStock: wh.codes.length,
             }
           : p
-      )
-    );
+      ),
+    }));
   };
 
   const handleAddNewPackage = () => {
@@ -174,23 +245,49 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
     const parsePrice = (val: number, fallback: number) =>
       typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
 
+    const vouchers = activeMethodIsVoucher
+      ? newVouchersInput
+          .split('\n')
+          .map(v => v.trim())
+          .filter(Boolean)
+      : [];
+
     const newPkg: ServicePackage = {
-      id: `pkg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `pkg-${activePackageMethod}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: newPkgName.trim(),
       description: '',
+      deliveryMethod: activePackageMethod,
       tierPrices: {
         regular: parsePrice(newPriceRegular, 0),
         bronze: parsePrice(newPriceBronze, 0),
         silver: parsePrice(newPriceSilver, 0),
         gold: parsePrice(newPriceGold, 0),
-        vip: parsePrice(newPriceVip, 0)
+        vip: parsePrice(newPriceVip, 0),
       },
-      availableStock: 0
+      ...(activeMethodIsVoucher
+        ? {
+            availableStock: vouchers.length > 0 ? vouchers.length : 0,
+            vouchers: vouchers.length > 0 ? vouchers : undefined,
+          }
+        : {}),
     };
-    setPackages(prev => [...prev, newPkg]);
+    setPackagesByMethod(prev => ({
+      ...prev,
+      [activePackageMethod]: [...(prev[activePackageMethod] || []), newPkg],
+    }));
     setNewPkgName('');
+    setNewPriceRegular(0);
+    setNewPriceBronze(0);
+    setNewPriceSilver(0);
+    setNewPriceGold(0);
+    setNewPriceVip(0);
+    setNewVouchersInput('');
     setShowAddPackageForm(false);
-    showToast({ type: 'success', title: 'تمت إضافة الباقة', description: `تمت إضافة "${newPkg.name}" بنجاح` });
+    showToast({
+      type: 'success',
+      title: 'تمت إضافة الباقة',
+      description: `تمت إضافة "${newPkg.name}" إلى طريقة ${getDeliveryMethodLabelAr(activePackageMethod)}`,
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -199,12 +296,29 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى كتابة اسم الخدمة' });
       return;
     }
-    if (packages.length === 0) {
-      showToast({ type: 'error', title: 'تنبيه', description: 'يجب أن تحتوي الخدمة على باقة واحدة على الأقل' });
-      return;
+
+    for (const method of deliveryMethods) {
+      const methodPkgs = packagesByMethod[method] || [];
+      if (methodPkgs.length === 0 || methodPkgs.some(p => !p.name.trim())) {
+        setActivePackageMethod(method);
+        showToast({
+          type: 'error',
+          title: 'تنبيه',
+          description: `يرجى إدخال اسم كل باقة ضمن طريقة "${getDeliveryMethodLabelAr(method)}".`,
+        });
+        return;
+      }
     }
 
+    const combinedPackages = deliveryMethods.flatMap(method =>
+      (packagesByMethod[method] || []).map(p => ({
+        ...p,
+        deliveryMethod: method,
+      }))
+    );
+
     const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === catalogId));
+    const finalPackages = sanitizePackagesForDeliveryMethods(combinedPackages, deliveryMethods);
 
     updateService(service.id, {
       catalogId,
@@ -213,13 +327,19 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       imageUrl: imageUrl.trim() || undefined,
       deliveryMethods,
       isActive,
-      packages,
+      packages: finalPackages,
       giftTargetType: isGiftCat ? giftTargetType : undefined,
       giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
-      giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined
+      giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined,
     });
 
     onClose();
+  };
+
+  const renderMethodIcon = (method: DeliveryMethod) => {
+    if (method === 'player_id') return <Gamepad2 className="w-3.5 h-3.5" />;
+    if (method === 'account_login') return <Lock className="w-3.5 h-3.5" />;
+    return <Ticket className="w-3.5 h-3.5" />;
   };
 
   const handleDeleteService = () => {
@@ -443,16 +563,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
             </div>
           </div>
 
-          {/* Packages and 5-Tier Pricing Matrix */}
+          {/* Packages and 5-Tier Pricing Matrix (Independent Per Delivery Method) */}
           <div className="space-y-3 pt-2 border-t border-slate-800">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
                   <Package className="w-4 h-4 text-amber-400" />
-                  <span>باقات الخدمة وتسعيرات الرتب الـ 5:</span>
+                  <span>باقات الخدمة وتسعيرات الرتب الـ 5 (مستقلة لكل طريقة تسليم):</span>
                 </h4>
                 <p className="text-[10px] text-slate-400">
-                  يمكنك تعديل أسعار كل باقة حسب الرتب: عادي، نحاسي، فضي، ذهبي، ومميز VIP.
+                  اختر طريقة التسليم لتعديل باقاتها وأسعارها بشكل مستقل تماماً عن الطرق الأخرى.
                 </p>
               </div>
               <button
@@ -461,15 +581,54 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                 className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/40 text-xs font-bold flex items-center gap-1 transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>إضافة باقة جديدة</span>
+                <span>إضافة باقة لـ ({getDeliveryMethodLabelAr(activePackageMethod)})</span>
               </button>
+            </div>
+
+            {/* Segmented Tabs for Each Active Delivery Method */}
+            <div className="flex flex-wrap gap-2 p-1.5 rounded-xl bg-slate-950 border border-slate-800">
+              {deliveryMethods.map(method => {
+                const isActiveTab = activePackageMethod === method;
+                const count = (packagesByMethod[method] || []).length;
+                return (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => {
+                      setActivePackageMethod(method);
+                      setShowAddPackageForm(false);
+                    }}
+                    className={`flex-1 min-w-[140px] px-3 py-2 rounded-lg text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                      isActiveTab
+                        ? 'bg-amber-500 text-slate-950 shadow-sm'
+                        : 'bg-transparent text-slate-300 hover:bg-slate-900'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5 truncate">
+                      {renderMethodIcon(method)}
+                      <span className="truncate">{getDeliveryMethodLabelAr(method)}</span>
+                    </span>
+                    <span
+                      className={`font-mono tabular-nums text-[11px] px-1.5 py-0.5 rounded ${
+                        isActiveTab
+                          ? 'bg-slate-950/20 text-slate-950'
+                          : 'bg-slate-800 text-slate-300'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Inline Add Package Form */}
             {showAddPackageForm && (
               <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-xs text-amber-300">إضافة باقة جديدة للخدمة</span>
+                  <span className="font-bold text-xs text-amber-300">
+                    إضافة باقة جديدة لطريقة: {getDeliveryMethodLabelAr(activePackageMethod)}
+                  </span>
                   <button
                     type="button"
                     onClick={() => setShowAddPackageForm(false)}
@@ -548,6 +707,25 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                   </div>
                 </div>
 
+                {activeMethodIsVoucher ? (
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1">أكواد القسائم الخاصة بهذه الباقة (اختياري، كود بكل سطر):</label>
+                    <textarea
+                      rows={2}
+                      value={newVouchersInput}
+                      onChange={e => setNewVouchersInput(e.target.value)}
+                      placeholder="PUBG-VOUCHER-111&#10;PUBG-VOUCHER-222"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300 outline-none"
+                      dir="ltr"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-[11px] text-emerald-300 font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>الخدمة متوفرة دائماً بدون عدد ولا تحتاج إلى ربط بمخزن أكواد</span>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-1">
                   <button
                     type="button"
@@ -567,13 +745,15 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               </div>
             )}
 
-            {/* Existing Packages Cards */}
+            {/* Existing Packages Cards for activePackageMethod */}
             <div className="space-y-3">
-              {packages.map((pkg, idx) => (
+              {activePackages.map((pkg, idx) => (
                 <div key={pkg.id || idx} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1">
-                      <label className="text-[10px] text-slate-400 block mb-0.5">اسم الباقة:</label>
+                      <label className="text-[10px] text-slate-400 block mb-0.5">
+                        اسم الباقة ({getDeliveryMethodLabelAr(activePackageMethod)}):
+                      </label>
                       <input
                         type="text"
                         value={pkg.name}
@@ -581,7 +761,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                         className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-1.5 text-xs text-white font-medium outline-none"
                       />
                     </div>
-                    {packages.length > 1 && (
+                    {activePackages.length > 1 && (
                       <button
                         type="button"
                         onClick={() => handleDeletePackage(pkg.id)}
@@ -666,45 +846,74 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                     </div>
                   </div>
 
-                  {/* Warehouse Link & Stock Control */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-800/70 text-[11px]">
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-0.5">ربط بمخزن أكواد:</label>
-                      <select
-                        value={pkg.warehouseId || ''}
-                        onChange={e => handleLinkPackageWarehouse(pkg.id, e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white"
-                      >
-                        <option value="">-- بدون ربط بمخزن --</option>
-                        {supplierWarehouses.map(wh => (
-                          <option key={wh.id} value={wh.id}>
-                            {wh.categoryName} - {wh.nameAr} ({wh.codes.length} كود)
-                          </option>
-                        ))}
-                      </select>
+                  {/* Warehouse Link & Stock Control (Voucher services only) */}
+                  {activeMethodIsVoucher ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-800/70 text-[11px]">
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-0.5">ربط بمخزن أكواد:</label>
+                        <select
+                          value={pkg.warehouseId || ''}
+                          onChange={e => handleLinkPackageWarehouse(pkg.id, e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white"
+                        >
+                          <option value="">-- بدون ربط بمخزن --</option>
+                          {supplierWarehouses.map(wh => (
+                            <option key={wh.id} value={wh.id}>
+                              {wh.categoryName} - {wh.nameAr} ({wh.codes.length} كود)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-0.5">
+                          {pkg.warehouseId || Array.isArray(pkg.vouchers)
+                            ? 'الأكواد المتوفرة حالياً:'
+                            : 'كمية المخزون المتوفرة:'}
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
+                          value={
+                            pkg.warehouseId
+                              ? supplierWarehouses.find(w => w.id === pkg.warehouseId)?.codes.length ?? pkg.vouchers?.length ?? 0
+                              : Array.isArray(pkg.vouchers)
+                              ? pkg.vouchers.length
+                              : pkg.availableStock ?? 0
+                          }
+                          onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"
+                        />
+                      </div>
+                      {!pkg.warehouseId && (
+                        <div className="sm:col-span-2">
+                          <label className="block text-[10px] text-slate-400 mb-0.5">
+                            أكواد القسائم لهذه الباقة (أدخل الأكواد الحقيقية، كود في كل سطر):
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={(pkg.vouchers || []).join('\n')}
+                            onChange={e => handleUpdatePackageVouchers(pkg.id, e.target.value)}
+                            placeholder="أدخل أكواد القسائم الحقيقية أو اربط الباقة بمخزن أكواد"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300"
+                            dir="ltr"
+                          />
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-0.5">
-                        {pkg.warehouseId || Array.isArray(pkg.vouchers)
-                          ? 'الأكواد المتوفرة حالياً:'
-                          : 'كمية المخزون المتوفرة:'}
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
-                        value={
-                          pkg.warehouseId
-                            ? supplierWarehouses.find(w => w.id === pkg.warehouseId)?.codes.length ?? pkg.vouchers?.length ?? 0
-                            : Array.isArray(pkg.vouchers)
-                            ? pkg.vouchers.length
-                            : pkg.availableStock ?? 0
-                        }
-                        onChange={e => handleUpdatePackageStock(pkg.id, Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-white disabled:opacity-60"
-                      />
+                  ) : (
+                    <div className="pt-2 border-t border-slate-800/70">
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[11px]">
+                        <span className="font-bold text-emerald-300 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>متوفرة دائماً (بدون عدد)</span>
+                        </span>
+                        <span className="text-emerald-200/80 text-[10px]">
+                          التسليم عبر الحساب أو الأيدي لا يحتاج إلى ربط بمخزن أكواد أو تحديد كمية توفر
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -840,7 +1049,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                   </div>
                 )}
               </div>
-            ) : packages.some(p => Object.values(p.tierPrices || {}).some(v => Number(v) === 0)) ? (
+            ) : allActivePackages.some(p => Object.values(p.tierPrices || {}).some(v => Number(v) === 0)) ? (
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
                 ملاحظة: أي باقة أو رتبة سعرها <strong>0 ر.س</strong> ستظهر للعميل وتُحتسب بقيمة <strong>0.50 ر.س</strong>.
               </div>

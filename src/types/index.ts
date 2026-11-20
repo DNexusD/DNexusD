@@ -150,6 +150,7 @@ export interface ServicePackage {
   id: string;
   name: string;
   description?: string;
+  deliveryMethod?: DeliveryMethod;
   tierPrices: TierPrices;
   availableStock?: number;
   vouchers?: string[];

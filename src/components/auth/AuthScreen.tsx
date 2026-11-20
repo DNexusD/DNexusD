@@ -242,7 +242,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
       if (res.success) {
         setOtpSent(true);
         setOtpSentToEmail(res.email || loginEmail.trim().toLowerCase());
-        setCooldownSeconds(res.cooldownSeconds ?? 60);
+        setCooldownSeconds(res.cooldownSeconds ?? 15);
         setRemainingSeconds(res.remainingSeconds ?? 600);
         lastAutoSubmittedOtpRef.current = '';
         setAuthError(null);

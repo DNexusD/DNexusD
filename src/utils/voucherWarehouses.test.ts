@@ -9,8 +9,13 @@ import {
   syncWarehouseIntoService,
   resolvePackagePurchaseOptions,
   mergeWarehouseOptionsIntoPackage,
+  serviceRequiresVoucherWarehouse,
+  sanitizePackagesForDeliveryMethods,
+  getPackagesForDeliveryMethod,
+  splitPackagesByDeliveryMethod,
+  getServiceTotalStock,
 } from './voucherWarehouses.ts';
-import type { DigitalService, VoucherWarehouse } from '../types/index.ts';
+import type { DigitalService, ServicePackage, VoucherWarehouse } from '../types/index.ts';
 
 function makeWarehouse(overrides: Partial<VoucherWarehouse> = {}): VoucherWarehouse {
   return {
@@ -122,7 +127,7 @@ test('deductPackageStock blocks purchase when warehouse or voucher list is empty
   assert.equal(getPackageAvailableStock(srv.packages[0], [wh]), 0);
 });
 
-test('deductPackageStock decrements availableStock for non-voucher package purchases', () => {
+test('deductPackageStock does not decrement stock for player_id or account_login delivery methods', () => {
   const srv = makeService({
     deliveryMethods: ['player_id'],
     packages: [
@@ -142,7 +147,7 @@ test('deductPackageStock decrements availableStock for non-voucher package purch
   });
 
   assert.equal(res.outOfStock, false);
-  assert.equal(res.updatedService.packages[0].availableStock, 9);
+  assert.equal(res.updatedService.packages[0].availableStock, 10);
 });
 
 test('syncWarehouseIntoService updates linked package codes, stock, purchase modes, and prices', () => {
@@ -371,4 +376,170 @@ test('deductPackageStock and isPackageOutOfStock never fabricate fake voucher co
   assert.equal(untrackedAttempt.assignedVoucher, undefined);
   assert.equal(untrackedAttempt.deductedCount, 0);
 });
+
+test('account_login and player_id services do not require voucher warehouse or numeric stock and sanitize packages cleanly', () => {
+  assert.equal(serviceRequiresVoucherWarehouse(['player_id']), false);
+  assert.equal(serviceRequiresVoucherWarehouse(['account_login']), false);
+  assert.equal(serviceRequiresVoucherWarehouse(['player_id', 'account_login']), false);
+  assert.equal(serviceRequiresVoucherWarehouse(['player_id', 'voucher_code']), true);
+  assert.equal(serviceRequiresVoucherWarehouse(['voucher_code']), true);
+
+  const rawPackages = [
+    {
+      id: 'pkg-1',
+      name: 'باقة شحن عبر الأيدي',
+      tierPrices: { regular: 50, bronze: 45, silver: 40, gold: 35, vip: 30 },
+      warehouseId: 'wh-123',
+      vouchers: ['OLD-1', 'OLD-2'],
+      availableStock: 0,
+      allowSingleCodePurchase: true,
+      allowPackagePurchase: true,
+      packageCodesCount: 5,
+    },
+  ];
+
+  const sanitizedDirect = sanitizePackagesForDeliveryMethods(rawPackages, ['player_id', 'account_login']);
+  assert.equal(sanitizedDirect.length, 1);
+  assert.equal('warehouseId' in sanitizedDirect[0], false);
+  assert.equal('vouchers' in sanitizedDirect[0], false);
+  assert.equal('availableStock' in sanitizedDirect[0], false);
+  assert.equal(sanitizedDirect[0].name, 'باقة شحن عبر الأيدي');
+  assert.equal(sanitizedDirect[0].tierPrices.vip, 30);
+
+  assert.equal(isPackageOutOfStock(sanitizedDirect[0], 'player_id', []), false);
+  assert.equal(isPackageOutOfStock(sanitizedDirect[0], 'account_login', []), false);
+
+  const keptForVoucher = sanitizePackagesForDeliveryMethods(rawPackages, ['player_id', 'voucher_code']);
+  assert.equal(keptForVoucher[0].warehouseId, 'wh-123');
+  assert.deepEqual(keptForVoucher[0].vouchers, ['OLD-1', 'OLD-2']);
+  assert.equal(keptForVoucher[0].availableStock, 0);
+});
+
+test('getPackagesForDeliveryMethod isolates independent per-method packages and keeps legacy untagged fallback', () => {
+  const multiMethodService = makeService({
+    deliveryMethods: ['player_id', 'account_login', 'voucher_code'],
+    packages: [
+      {
+        id: 'pkg-id-60',
+        name: '60 شدة عبر الأيدي',
+        deliveryMethod: 'player_id',
+        tierPrices: { regular: 5, bronze: 4.5, silver: 4, gold: 3.5, vip: 3 },
+      },
+      {
+        id: 'pkg-acc-325',
+        name: '325 شدة عبر الحساب',
+        deliveryMethod: 'account_login',
+        tierPrices: { regular: 20, bronze: 19, silver: 18, gold: 17, vip: 16 },
+      },
+      {
+        id: 'pkg-vch-660',
+        name: 'كود 660 شدة',
+        deliveryMethod: 'voucher_code',
+        tierPrices: { regular: 40, bronze: 38, silver: 36, gold: 34, vip: 32 },
+        vouchers: ['CODE-A', 'CODE-B'],
+        availableStock: 2,
+      },
+    ],
+  });
+
+  const idPkgs = getPackagesForDeliveryMethod(multiMethodService, 'player_id');
+  const accPkgs = getPackagesForDeliveryMethod(multiMethodService, 'account_login');
+  const vchPkgs = getPackagesForDeliveryMethod(multiMethodService, 'voucher_code');
+
+  assert.deepEqual(idPkgs.map((p) => p.id), ['pkg-id-60']);
+  assert.deepEqual(accPkgs.map((p) => p.id), ['pkg-acc-325']);
+  assert.deepEqual(vchPkgs.map((p) => p.id), ['pkg-vch-660']);
+  assert.equal(getServiceTotalStock(multiMethodService), 2);
+
+  const legacyService = makeService({
+    deliveryMethods: ['player_id', 'voucher_code'],
+    packages: [
+      {
+        id: 'pkg-legacy',
+        name: 'باقة قديمة مشتركة',
+        tierPrices: { regular: 10, bronze: 9, silver: 8, gold: 7, vip: 6 },
+      },
+    ],
+  });
+  assert.deepEqual(getPackagesForDeliveryMethod(legacyService, 'player_id').map((p) => p.id), ['pkg-legacy']);
+  assert.deepEqual(getPackagesForDeliveryMethod(legacyService, 'voucher_code').map((p) => p.id), ['pkg-legacy']);
+});
+
+test('sanitizePackagesForDeliveryMethods strips voucher fields per-package for player_id/account_login while keeping voucher_code stock', () => {
+  const mixedPackages: ServicePackage[] = [
+    {
+      id: 'pkg-id',
+      name: 'باقة أيدي',
+      deliveryMethod: 'player_id',
+      tierPrices: { regular: 10, bronze: 9, silver: 8, gold: 7, vip: 6 },
+      warehouseId: 'wh-should-strip',
+      vouchers: ['SHOULD-STRIP'],
+      availableStock: 99,
+    },
+    {
+      id: 'pkg-acc',
+      name: 'باقة حساب',
+      deliveryMethod: 'account_login',
+      tierPrices: { regular: 15, bronze: 14, silver: 13, gold: 12, vip: 11 },
+      availableStock: 5,
+    },
+    {
+      id: 'pkg-vch',
+      name: 'باقة قسيمة',
+      deliveryMethod: 'voucher_code',
+      tierPrices: { regular: 25, bronze: 24, silver: 23, gold: 22, vip: 21 },
+      warehouseId: 'wh-psn-20',
+      vouchers: ['K1', 'K2'],
+      availableStock: 2,
+    },
+  ];
+
+  // When only player_id and voucher_code are enabled, account_login package is excluded,
+  // player_id is stripped of voucher/stock fields, and voucher_code keeps them.
+  const sanitized = sanitizePackagesForDeliveryMethods(mixedPackages, ['player_id', 'voucher_code']);
+  assert.equal(sanitized.length, 2);
+
+  const savedIdPkg = sanitized.find((p) => p.id === 'pkg-id')!;
+  assert.equal(savedIdPkg.deliveryMethod, 'player_id');
+  assert.equal('warehouseId' in savedIdPkg, false);
+  assert.equal('vouchers' in savedIdPkg, false);
+  assert.equal('availableStock' in savedIdPkg, false);
+
+  const savedVchPkg = sanitized.find((p) => p.id === 'pkg-vch')!;
+  assert.equal(savedVchPkg.deliveryMethod, 'voucher_code');
+  assert.equal(savedVchPkg.warehouseId, 'wh-psn-20');
+  assert.deepEqual(savedVchPkg.vouchers, ['K1', 'K2']);
+  assert.equal(savedVchPkg.availableStock, 2);
+});
+
+test('splitPackagesByDeliveryMethod migrates legacy shared packages cleanly across active delivery methods', () => {
+  const legacyPackages: ServicePackage[] = [
+    {
+      id: 'pkg-shared',
+      name: 'باقة عامة',
+      tierPrices: { regular: 50, bronze: 45, silver: 40, gold: 35, vip: 30 },
+      warehouseId: 'wh-1',
+      vouchers: ['V1', 'V2'],
+      availableStock: 2,
+    },
+  ];
+
+  const split = splitPackagesByDeliveryMethod(legacyPackages, ['player_id', 'voucher_code']);
+  assert.equal(split.voucher_code.length, 1);
+  assert.equal(split.player_id.length, 1);
+  assert.equal(split.account_login.length, 0);
+
+  // Voucher copy preserves original id and warehouse link
+  assert.equal(split.voucher_code[0].id, 'pkg-shared');
+  assert.equal(split.voucher_code[0].warehouseId, 'wh-1');
+  assert.equal(split.voucher_code[0].deliveryMethod, 'voucher_code');
+
+  // Player ID copy has distinct id, deliveryMethod='player_id', and no warehouse/stock fields
+  assert.notEqual(split.player_id[0].id, 'pkg-shared');
+  assert.equal(split.player_id[0].deliveryMethod, 'player_id');
+  assert.equal('warehouseId' in split.player_id[0], false);
+  assert.equal('availableStock' in split.player_id[0], false);
+});
+
+
 

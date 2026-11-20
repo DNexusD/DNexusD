@@ -97,6 +97,148 @@ export function isPackageVoucherBacked(
   );
 }
 
+export const DELIVERY_METHOD_ORDER: DeliveryMethod[] = [
+  'player_id',
+  'account_login',
+  'voucher_code',
+];
+
+export function getDeliveryMethodLabelAr(method: DeliveryMethod): string {
+  switch (method) {
+    case 'player_id':
+      return 'فوري عبر الأيدي';
+    case 'account_login':
+      return 'فوري عبر الحساب (2FA)';
+    case 'voucher_code':
+      return 'عبر تسليم كود قسيمة';
+  }
+}
+
+export function serviceRequiresVoucherWarehouse(
+  deliveryMethods?: DeliveryMethod[]
+): boolean {
+  return Array.isArray(deliveryMethods) && deliveryMethods.includes('voucher_code');
+}
+
+export function createEmptyPackageForMethod(
+  method: DeliveryMethod,
+  seed = `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+): ServicePackage {
+  return {
+    id: `pkg-${method}-${seed}`,
+    name: '',
+    description: '',
+    deliveryMethod: method,
+    tierPrices: { regular: 0, bronze: 0, silver: 0, gold: 0, vip: 0 },
+    ...(method === 'voucher_code' ? { availableStock: 0 } : {}),
+  };
+}
+
+export function getPackagesForDeliveryMethod(
+  service: Pick<DigitalService, 'packages' | 'deliveryMethods'>,
+  method: DeliveryMethod
+): ServicePackage[] {
+  const pkgs = Array.isArray(service?.packages) ? service.packages : [];
+  if (pkgs.length === 0) return [];
+  const taggedForMethod = pkgs.filter((pkg) => pkg.deliveryMethod === method);
+  const untaggedLegacy = pkgs.filter((pkg) => !pkg.deliveryMethod);
+  return [...taggedForMethod, ...untaggedLegacy];
+}
+
+function stripVoucherFields(pkg: ServicePackage): ServicePackage {
+  const {
+    warehouseId: _wh,
+    vouchers: _v,
+    availableStock: _stock,
+    allowSingleCodePurchase: _allowSingle,
+    allowPackagePurchase: _allowPkg,
+    packageCodesCount: _pkgCount,
+    packageNameAr: _pkgName,
+    packageTierPrices: _pkgPrices,
+    ...cleanPkg
+  } = pkg;
+  return cleanPkg;
+}
+
+export function splitPackagesByDeliveryMethod(
+  packages: ServicePackage[],
+  deliveryMethods: DeliveryMethod[]
+): Record<DeliveryMethod, ServicePackage[]> {
+  const result: Record<DeliveryMethod, ServicePackage[]> = {
+    player_id: [],
+    account_login: [],
+    voucher_code: [],
+  };
+
+  const activeMethods =
+    deliveryMethods && deliveryMethods.length > 0
+      ? deliveryMethods
+      : (['player_id'] as DeliveryMethod[]);
+
+  const safePackages = Array.isArray(packages) ? packages : [];
+
+  for (const pkg of safePackages) {
+    const cloned: ServicePackage = JSON.parse(JSON.stringify(pkg));
+    if (cloned.deliveryMethod) {
+      const m = cloned.deliveryMethod;
+      result[m].push(
+        m === 'voucher_code'
+          ? cloned
+          : { ...stripVoucherFields(cloned), deliveryMethod: m }
+      );
+    } else {
+      // Legacy shared package: assign cleanly to each enabled delivery method independently
+      const voucherFirstOrder: DeliveryMethod[] = activeMethods.includes('voucher_code')
+        ? ['voucher_code', ...activeMethods.filter((m) => m !== 'voucher_code')]
+        : [...activeMethods];
+
+      voucherFirstOrder.forEach((method, index) => {
+        const baseCopy: ServicePackage = JSON.parse(JSON.stringify(cloned));
+        const assignedId =
+          index === 0
+            ? baseCopy.id
+            : `${baseCopy.id}-${method}`;
+        if (method === 'voucher_code') {
+          result[method].push({
+            ...baseCopy,
+            id: assignedId,
+            deliveryMethod: method,
+          });
+        } else {
+          result[method].push({
+            ...stripVoucherFields(baseCopy),
+            id: assignedId,
+            deliveryMethod: method,
+          });
+        }
+      });
+    }
+  }
+
+  return result;
+}
+
+export function sanitizePackagesForDeliveryMethods(
+  packages: ServicePackage[],
+  deliveryMethods: DeliveryMethod[]
+): ServicePackage[] {
+  const activeSet = new Set(deliveryMethods || []);
+  const serviceHasVoucher = serviceRequiresVoucherWarehouse(deliveryMethods);
+
+  return packages
+    .filter((pkg) => !pkg.deliveryMethod || activeSet.has(pkg.deliveryMethod))
+    .map((pkg) => {
+      const pkgIsVoucher = pkg.deliveryMethod
+        ? pkg.deliveryMethod === 'voucher_code'
+        : serviceHasVoucher;
+
+      if (pkgIsVoucher) {
+        return pkg;
+      }
+      return stripVoucherFields(pkg);
+    });
+}
+
 export interface ResolvedPackagePurchaseOptions {
   allowSingleCode: boolean;
   allowPackage: boolean;
@@ -200,6 +342,9 @@ export function isPackageOutOfStock(
   warehouses?: VoucherWarehouse[],
   purchaseUnit?: WarehousePurchaseUnit
 ): boolean {
+  if (deliveryMethod === 'player_id' || deliveryMethod === 'account_login') {
+    return false;
+  }
   const opts = resolvePackagePurchaseOptions(pkg, warehouses);
   const stock = opts.availableCodesCount;
   const hasRealVoucherBacking = isPackageVoucherBacked(pkg, warehouses);
@@ -241,6 +386,9 @@ export function getServiceTotalStock(
   warehouses?: VoucherWarehouse[]
 ): number {
   return service.packages.reduce((sum, pkg) => {
+    if (pkg.deliveryMethod && pkg.deliveryMethod !== 'voucher_code') {
+      return sum;
+    }
     const stock = getPackageAvailableStock(pkg, warehouses);
     return sum + (stock ?? 0);
   }, 0);
@@ -275,6 +423,15 @@ export function deductPackageStock(params: {
     purchaseUnit,
     nowIso = new Date().toISOString(),
   } = params;
+
+  if (deliveryMethod === 'player_id' || deliveryMethod === 'account_login') {
+    return {
+      outOfStock: false,
+      deductedCount: 0,
+      updatedService: service,
+    };
+  }
+
   const targetPkg = service.packages.find((p) => p.id === pkgId);
   if (!targetPkg) {
     return { outOfStock: true, deductedCount: 0, updatedService: service };
@@ -440,6 +597,7 @@ export function syncWarehouseIntoService(
     id: warehouse.linkedPackageId || `pkg-${warehouse.id}`,
     name: warehouse.nameAr,
     description: warehouse.description || `فئة ${warehouse.categoryName}`,
+    deliveryMethod: 'voucher_code',
     tierPrices: { ...warehouse.tierPrices },
     packageTierPrices: warehouse.packageTierPrices
       ? { ...warehouse.packageTierPrices }

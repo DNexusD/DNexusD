@@ -20,32 +20,36 @@ import {
   initializeFirestore,
   doc,
   getDocFromServer,
-  collection,
-  setDoc,
-  getDoc,
-  getDocs,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
-  orderBy,
-  limit,
-  serverTimestamp,
-  writeBatch
+  enableNetwork,
+  disableNetwork,
+  setLogLevel
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  classifyFirestoreConnectionError,
+  createCoalescedProbe,
+  isFirestoreInternalAssertionError,
+  isNavigatorOffline,
+  isTransientFirestoreError
+} from '../utils/firestoreConnectivity';
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: Initialize Firestore with firestoreDatabaseId and forced long polling
-// to prevent WebChannel stream hangs in proxied/sandboxed iframe environments (Cloud Run).
+// Suppress internal SDK OnlineStateTracker console.error noise during transient WebChannel reconnects;
+// real permission/operation errors and connection status are still surfaced via handleFirestoreError and testConnection.
+setLogLevel('silent');
+
+// Initialize Firestore with auto-detect long-polling and ignoreUndefinedProperties
+// so WebChannel uses optimal transport and gracefully adapts behind proxies without forcing legacy XHR polling.
 function createFirestoreInstance() {
   try {
     return initializeFirestore(
       app,
-      { experimentalForceLongPolling: true },
+      {
+        experimentalAutoDetectLongPolling: true,
+        ignoreUndefinedProperties: true
+      },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
@@ -65,8 +69,31 @@ export {
   signInWithCustomToken,
   sendPasswordResetEmail,
   verifyPasswordResetCode,
-  confirmPasswordReset
+  confirmPasswordReset,
+  isTransientFirestoreError
 };
+
+let isNetworkExplicitlyDisabled = false;
+
+export async function enableFirestoreNetwork(): Promise<void> {
+  if (!isNetworkExplicitlyDisabled) return;
+  isNetworkExplicitlyDisabled = false;
+  try {
+    await enableNetwork(db);
+  } catch {
+    // ignore transient network toggle failure
+  }
+}
+
+export async function disableFirestoreNetwork(): Promise<void> {
+  if (isNetworkExplicitlyDisabled) return;
+  isNetworkExplicitlyDisabled = true;
+  try {
+    await disableNetwork(db);
+  } catch {
+    // ignore transient network toggle failure
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -117,16 +144,45 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   }
 }
 
+export function handleSnapshotError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null,
+  onTransientOffline?: () => void
+) {
+  if (
+    isTransientFirestoreError(error) ||
+    isFirestoreInternalAssertionError(error) ||
+    isNavigatorOffline()
+  ) {
+    console.warn(`Firestore snapshot paused due to transient network error (${path || 'unknown'}):`, error);
+    onTransientOffline?.();
+    return;
+  }
+  handleFirestoreError(error, operationType, path);
+}
+
 export interface ConnectionTestResult {
   success: boolean;
   message: string;
   latencyMs?: number;
 }
 
+const probeFirestoreServerOnce = createCoalescedProbe(async () => {
+  await getDocFromServer(doc(db, 'test', 'connection'));
+});
+
 /**
  * Validate Connection to Firestore on boot and before any login attempt
  */
 export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestResult> {
+  if (isNavigatorOffline()) {
+    return {
+      success: false,
+      message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
+    };
+  }
+
   const startTime = Date.now();
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   let timerId: ReturnType<typeof setTimeout> | undefined;
@@ -138,8 +194,7 @@ export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestR
       );
     });
 
-    const checkPromise = getDocFromServer(doc(db, 'test', 'connection'));
-    await Promise.race([checkPromise, timeoutPromise]);
+    await Promise.race([probeFirestoreServerOnce(), timeoutPromise]);
     if (timerId) clearTimeout(timerId);
     const latencyMs = Date.now() - startTime;
     return {
@@ -149,26 +204,11 @@ export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestR
     };
   } catch (error: unknown) {
     if (timerId) clearTimeout(timerId);
-    const err = error as { message?: string };
     console.warn("Database connection check:", error);
-    let errMsg = 'تعذر الوصول إلى خادم قاعدة بيانات Firebase Firestore.';
-    if (err?.message) {
-      if (err.message.includes('مهلة')) {
-        errMsg = err.message;
-      } else if (err.message.includes('offline') || err.message.includes('client is offline')) {
-        errMsg = 'العميل غير متصل بقاعدة البيانات (وضع غير متصل Offline).';
-      } else if (err.message.includes('permission-denied')) {
-        errMsg = 'تم رفض الاتصال بقاعدة البيانات بسبب قواعد الأمان.';
-      } else if (err.message.includes('unavailable')) {
-        errMsg = 'خدمة قاعدة بيانات Firestore غير متاحة حالياً أو انقطع الاتصال بالشبكة.';
-      }
-    }
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      errMsg = 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.';
-    }
+    const classified = classifyFirestoreConnectionError(error);
     return {
       success: false,
-      message: errMsg
+      message: classified.userMessageAr
     };
   }
 }

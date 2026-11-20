@@ -34,6 +34,7 @@ import {
 } from '../types';
 import {
   deductPackageStock,
+  getPackagesForDeliveryMethod,
   mergeCodesIntoWarehouse,
   mergeWarehouseOptionsIntoPackage,
   parseVoucherCodesInput,
@@ -101,13 +102,14 @@ import {
   auth,
   googleProvider,
   db,
-  handleFirestoreError,
+  handleSnapshotError,
   OperationType,
   ConnectionTestResult,
   sendPasswordResetEmail,
   verifyPasswordResetCode,
   confirmPasswordReset
 } from '../services/firebase';
+import { isNavigatorOffline } from '../utils/firestoreConnectivity';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { onSnapshot, collection, doc } from 'firebase/firestore';
 import { firestoreSync } from '../services/firestoreSync';
@@ -265,6 +267,7 @@ interface AppContextType {
     canReceiveSupplierTransfers: boolean;
     isPrimary?: boolean;
     isActive?: boolean;
+    currency?: string;
     notes?: string;
   }) => { success: boolean; error?: string; account?: SupplierBankAccount };
   saveBatchBankAccounts: (
@@ -685,13 +688,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Validate Connection to Firestore on boot and on-demand
   const checkDatabaseConnection = async (retries = 1): Promise<ConnectionTestResult> => {
+    if (isNavigatorOffline()) {
+      setIsFirestoreConnected(false);
+      return {
+        success: false,
+        message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
+      };
+    }
     let res = await testConnection(12000);
-    if (!res.success && retries > 0) {
+    if (!res.success && retries > 0 && !isNavigatorOffline()) {
       await new Promise(r => setTimeout(r, 1000));
       res = await testConnection(15000);
     }
     setIsFirestoreConnected(res.success);
     return res;
+  };
+
+  const bootstrapAuthDataFromFirestore = async () => {
+    try {
+      const bootData = await firestoreSync.fetchAuthBootstrapData();
+      if (bootData.platformSettings) {
+        setPlatformSettings(mergePlatformSettings(bootData.platformSettings));
+      }
+      if (bootData.superAdmin) {
+        const remoteAdmin = bootData.superAdmin;
+        setSuperAdmin(prev => ({
+          ...prev,
+          ...remoteAdmin,
+          adminAccounts: Array.isArray(remoteAdmin.adminAccounts)
+            ? remoteAdmin.adminAccounts
+            : (prev.adminAccounts || [])
+        }));
+      }
+      if (bootData.suppliers && bootData.suppliers.length > 0) {
+        setSuppliers(bootData.suppliers);
+      }
+      if (bootData.posClients && bootData.posClients.length > 0) {
+        setPosClients(bootData.posClients);
+      }
+      return bootData;
+    } catch (err) {
+      console.warn('Auth bootstrap fetch skipped:', err);
+      return {};
+    }
   };
 
   const applyLocalNonAdminStateReset = (preservedAdmin: SuperAdmin) => {
@@ -720,8 +759,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     let isMounted = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
     const runBootSync = async () => {
       try {
+        if (isNavigatorOffline()) {
+          if (isMounted) setIsFirestoreConnected(false);
+          return;
+        }
         const res = await checkDatabaseConnection();
         if (!isMounted) return;
         if (res.success) {
@@ -732,8 +777,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } else {
           console.warn('Firebase Firestore initial connection test:', res.message);
-          setTimeout(async () => {
-            if (!isMounted) return;
+          retryTimer = setTimeout(async () => {
+            if (!isMounted || isNavigatorOffline()) return;
             try {
               const retryRes = await checkDatabaseConnection(0);
               if (retryRes.success && isMounted) {
@@ -746,7 +791,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             } catch (e) {
               console.warn(e);
             }
-          }, 2000);
+          }, 2500);
         }
       } catch (err) {
         console.warn('Firestore connection check error:', err);
@@ -754,10 +799,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const handleOffline = () => {
+      if (!isMounted) return;
+      setIsFirestoreConnected(false);
+    };
+
+    const handleOnline = () => {
+      if (!isMounted) return;
+      void runBootSync();
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', handleOffline);
+      window.addEventListener('online', handleOnline);
+    }
+
     void runBootSync();
 
     return () => {
       isMounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('offline', handleOffline);
+        window.removeEventListener('online', handleOnline);
+      }
     };
   }, []);
 
@@ -866,12 +931,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubAuth();
   }, []);
 
-  // Real-time synchronization from Firestore
+  // Lightweight one-time metadata bootstrap while unauthenticated (avoids opening 11 Watch streams before login)
   useEffect(() => {
-    if (!isFirestoreConnected) return;
+    if (!isFirestoreConnected || isAuthenticated) return;
+    void bootstrapAuthDataFromFirestore();
+  }, [isFirestoreConnected, isAuthenticated]);
+
+  // Real-time synchronization from Firestore (attached once per authenticated session)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const handleTransientOffline = () => {
+      setIsFirestoreConnected(false);
+    };
+
+    const markConnectedIfLive = (fromCache: boolean) => {
+      if (!fromCache) {
+        setIsFirestoreConnected(prev => (prev ? prev : true));
+      }
+    };
 
     // 1. Orders live sync
     const unsubOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
+      markConnectedIfLive(snapshot.metadata.fromCache);
       const remoteOrders: Order[] = [];
       snapshot.forEach(docSnap => {
         remoteOrders.push(docSnap.data() as Order);
@@ -879,7 +961,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       remoteOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setOrders(remoteOrders);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'orders');
+      handleSnapshotError(err, OperationType.LIST, 'orders', handleTransientOffline);
     });
 
     // 2. Deposit Requests & Loans live sync
@@ -891,7 +973,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       remoteDeps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setDepositRequests(remoteDeps);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'depositRequests');
+      handleSnapshotError(err, OperationType.LIST, 'depositRequests', handleTransientOffline);
     });
 
     // 3. POS Clients live sync (Deduplicated by ID)
@@ -905,7 +987,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setPosClients(Array.from(clientMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'posClients');
+      handleSnapshotError(err, OperationType.LIST, 'posClients', handleTransientOffline);
     });
 
     // 4. Suppliers live sync (Deduplicated by ID)
@@ -919,7 +1001,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setSuppliers(Array.from(supMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'suppliers');
+      handleSnapshotError(err, OperationType.LIST, 'suppliers', handleTransientOffline);
     });
 
     // 5. Loan Repayment Requests live sync
@@ -931,7 +1013,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       remoteReqs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setLoanRepaymentRequests(remoteReqs);
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'loanRepaymentRequests');
+      handleSnapshotError(err, OperationType.LIST, 'loanRepaymentRequests', handleTransientOffline);
     });
 
     // 6. Supplier Bank Accounts live sync
@@ -945,7 +1027,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setSupplierBankAccounts(Array.from(accMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'supplierBankAccounts');
+      handleSnapshotError(err, OperationType.LIST, 'supplierBankAccounts', handleTransientOffline);
     });
 
     // 7. Catalogs live sync
@@ -959,11 +1041,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setCatalogs(Array.from(catMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'catalogs');
+      handleSnapshotError(err, OperationType.LIST, 'catalogs', handleTransientOffline);
     });
 
     // 8. Services live sync
     const unsubServices = onSnapshot(collection(db, 'services'), (snapshot) => {
+      markConnectedIfLive(snapshot.metadata.fromCache);
       const srvMap = new Map<string, DigitalService>();
       snapshot.forEach(docSnap => {
         const srv = docSnap.data() as DigitalService;
@@ -973,7 +1056,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setServices(Array.from(srvMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'services');
+      handleSnapshotError(err, OperationType.LIST, 'services', handleTransientOffline);
     });
 
     // 8b. Voucher Warehouses live sync
@@ -987,7 +1070,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setVoucherWarehouses(Array.from(whMap.values()));
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'voucherWarehouses');
+      handleSnapshotError(err, OperationType.LIST, 'voucherWarehouses', handleTransientOffline);
     });
 
     // 9. Platform Interface Settings live sync
@@ -996,11 +1079,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPlatformSettings(mergePlatformSettings(docSnap.data() as Partial<PlatformInterfaceSettings>));
       }
     }, (err) => {
-      handleFirestoreError(err, OperationType.GET, 'system/platformSettings');
+      handleSnapshotError(err, OperationType.GET, 'system/platformSettings', handleTransientOffline);
     });
 
     // 10. Super Admin & Admin Accounts live sync
     const unsubSuperAdmin = onSnapshot(doc(db, 'system', 'superAdmin'), (docSnap) => {
+      markConnectedIfLive(docSnap.metadata.fromCache);
       if (docSnap.exists()) {
         const remoteAdmin = docSnap.data() as Partial<SuperAdmin>;
         setSuperAdmin(prev => ({
@@ -1030,7 +1114,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     }, (err) => {
-      handleFirestoreError(err, OperationType.GET, 'system/superAdmin');
+      handleSnapshotError(err, OperationType.GET, 'system/superAdmin', handleTransientOffline);
     });
 
     return () => {
@@ -1046,7 +1130,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubPlatformSettings();
       unsubSuperAdmin();
     };
-  }, [isFirestoreConnected]);
+  }, [isAuthenticated]);
 
   // Sync to local storage
   useEffect(() => {
@@ -1102,15 +1186,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Google Login via Firebase Popup
   const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
-    if (!isFirestoreConnected) {
-      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
-      if (conn.success) {
-        setIsFirestoreConnected(true);
-      }
-    }
     try {
       const res = await signInWithPopup(auth, googleProvider);
-      setIsFirestoreConnected(true);
+      if (!isFirestoreConnected && !isNavigatorOffline()) {
+        void checkDatabaseConnection(0).catch(() => {});
+      }
       const fbUser = res.user;
       const cleanEmail = (fbUser.email || '').toLowerCase();
       const displayName = fbUser.displayName || 'مستخدم Google';
@@ -1280,11 +1360,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (fbErr?.code === 'auth/cancelled-popup-request') {
         msg = 'تم إلغاء طلب تسجيل الدخول السابق، يرجى المحاولة مرة أخرى.';
       } else if (fbErr?.code === 'auth/popup-blocked') {
-        msg = 'قام المتصفح بحظر النافذة المنبثقة. يرجى السماح بالنوافذ المنبثقة والمحاولة مجدداً.';
+        msg = 'قام المتصفح بحظر نافذة تسجيل الدخول المنبثقة (auth/popup-blocked). يرجى السماح بالنوافذ المنبثقة في متصفحك أو استخدام تسجيل الدخول بالبريد الإلكتروني ورمز التحقق (OTP).';
       } else if (fbErr?.code === 'auth/unauthorized-domain') {
         msg = 'نطاق الموقع الحالي غير مضاف في النطاقات المصرح بها داخل إعدادات Firebase Auth.';
       } else if (fbErr?.code === 'auth/network-request-failed') {
-        msg = 'تعذر الاتصال بخدمات جوجل، يرجى التحقق من اتصال الإنترنت.';
+        msg = 'تعذر الاتصال بخدمات جوجل بسبب قيود الشبكة أو المتصفح (network-request-failed). يرجى استخدام تسجيل الدخول بالبريد الإلكتروني ورمز التحقق (OTP).';
       }
       showToast({
         type: 'error',
@@ -1421,7 +1501,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       success: true, 
       code: generatedCode, 
       email: cleanEmail,
-      cooldownSeconds: 60,
+      cooldownSeconds: 15,
       remainingSeconds: 120 
     };
   };
@@ -2065,12 +2145,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     // 1. Resolve live service/package + linked warehouse purchase options & pricing
     const liveService = services.find(s => s.id === service.id) || service;
-    const rawLivePkg = liveService.packages.find(p => p.id === pkg.id) || pkg;
-    const effectivePkg = mergeWarehouseOptionsIntoPackage(rawLivePkg, voucherWarehouses);
-    const purchaseOpts = resolvePackagePurchaseOptions(effectivePkg, voucherWarehouses);
-    const effectiveUnit: WarehousePurchaseUnit = purchaseUnit || purchaseOpts.defaultPurchaseUnit;
+    const methodPackages = getPackagesForDeliveryMethod(liveService, deliveryMethod);
+    const rawLivePkg = methodPackages.find(p => p.id === pkg.id);
+    const effectivePkg = rawLivePkg
+      ? mergeWarehouseOptionsIntoPackage(rawLivePkg, voucherWarehouses)
+      : undefined;
+    const purchaseOpts = effectivePkg
+      ? resolvePackagePurchaseOptions(effectivePkg, voucherWarehouses)
+      : undefined;
+    const effectiveUnit: WarehousePurchaseUnit = purchaseUnit || purchaseOpts?.defaultPurchaseUnit || 'single_code';
 
-    if (!liveService || liveService.packages.length === 0 || !effectivePkg) {
+    if (!liveService || methodPackages.length === 0 || !effectivePkg || !purchaseOpts) {
       const msg = `عذراً، الخدمة المطلوبة أو الباقة غير متوفرة حالياً لدى المتجر.`;
       showToast({
         type: 'error',
@@ -4920,6 +5005,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: newPkgId,
           name: wh.nameAr,
           description: wh.description || `فئة ${wh.categoryName}`,
+          deliveryMethod: 'voucher_code',
           tierPrices: { ...wh.tierPrices },
           packageTierPrices: wh.packageTierPrices ? { ...wh.packageTierPrices } : undefined,
           allowSingleCodePurchase: allowSingle,

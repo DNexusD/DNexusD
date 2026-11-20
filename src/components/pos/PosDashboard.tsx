@@ -50,6 +50,8 @@ import {
   getServiceTotalStock,
   mergeWarehouseOptionsIntoPackage,
   resolvePackagePurchaseOptions,
+  serviceRequiresVoucherWarehouse,
+  getPackagesForDeliveryMethod,
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getStoreCatalogEmptyMessage } from '../../utils/availabilityMessages';
@@ -866,9 +868,9 @@ export const PosDashboard: React.FC = () => {
                         </span>
                       ))}
                       {(() => {
-                        const totalStock = getServiceTotalStock(srv, voucherWarehouses);
-                        const hasVoucherCodes = srv.deliveryMethods.includes('voucher_code') || srv.packages.some(p => Array.isArray(p.vouchers) || Boolean(p.warehouseId));
+                        const hasVoucherCodes = serviceRequiresVoucherWarehouse(srv.deliveryMethods);
                         if (hasVoucherCodes) {
+                          const totalStock = getServiceTotalStock(srv, voucherWarehouses);
                           return totalStock > 0 ? (
                             <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold font-mono">
                               {totalStock} كود متوفر
@@ -879,20 +881,20 @@ export const PosDashboard: React.FC = () => {
                             </span>
                           );
                         }
-                        if (totalStock > 0) {
-                          return (
-                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold font-mono">
-                              المخزون: {totalStock}
-                            </span>
-                          );
-                        }
-                        return null;
+                        return (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
+                            متوفرة دائماً
+                          </span>
+                        );
                       })()}
                     </div>
 
-                    {srv.packages.some(p => Array.isArray(p.vouchers) || Boolean(p.warehouseId) || typeof p.availableStock === 'number') && (
+                    {serviceRequiresVoucherWarehouse(srv.deliveryMethods) &&
+                      getPackagesForDeliveryMethod(srv, 'voucher_code').some(
+                        p => Array.isArray(p.vouchers) || Boolean(p.warehouseId) || typeof p.availableStock === 'number'
+                      ) && (
                       <div className="flex flex-wrap gap-1.5 pt-0.5">
-                        {srv.packages.slice(0, 4).map(rawPkg => {
+                        {getPackagesForDeliveryMethod(srv, 'voucher_code').slice(0, 4).map(rawPkg => {
                           const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
                           const pkgOpts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
                           const stock = getPackageAvailableStock(pkg, voucherWarehouses);

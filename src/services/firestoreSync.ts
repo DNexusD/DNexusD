@@ -42,6 +42,53 @@ function sanitizeData<T>(obj: T): T {
 }
 
 export const firestoreSync = {
+  // Lightweight one-time bootstrap for login / registration screens without opening Watch streams
+  async fetchAuthBootstrapData(): Promise<{
+    superAdmin?: Partial<SuperAdmin>;
+    platformSettings?: Partial<PlatformInterfaceSettings>;
+    suppliers?: Supplier[];
+    posClients?: POSClient[];
+  }> {
+    const result: {
+      superAdmin?: Partial<SuperAdmin>;
+      platformSettings?: Partial<PlatformInterfaceSettings>;
+      suppliers?: Supplier[];
+      posClients?: POSClient[];
+    } = {};
+
+    const [adminRes, settingsRes, suppliersRes, clientsRes] = await Promise.allSettled([
+      getDoc(doc(db, 'system', 'superAdmin')),
+      getDoc(doc(db, 'system', 'platformSettings')),
+      getDocs(collection(db, 'suppliers')),
+      getDocs(collection(db, 'posClients')),
+    ]);
+
+    if (adminRes.status === 'fulfilled' && adminRes.value.exists()) {
+      result.superAdmin = adminRes.value.data() as Partial<SuperAdmin>;
+    }
+    if (settingsRes.status === 'fulfilled' && settingsRes.value.exists()) {
+      result.platformSettings = settingsRes.value.data() as Partial<PlatformInterfaceSettings>;
+    }
+    if (suppliersRes.status === 'fulfilled') {
+      const supMap = new Map<string, Supplier>();
+      suppliersRes.value.forEach(docSnap => {
+        const sup = docSnap.data() as Supplier;
+        if (sup && sup.id) supMap.set(sup.id, sup);
+      });
+      result.suppliers = Array.from(supMap.values());
+    }
+    if (clientsRes.status === 'fulfilled') {
+      const clientMap = new Map<string, POSClient>();
+      clientsRes.value.forEach(docSnap => {
+        const client = docSnap.data() as POSClient;
+        if (client && client.id) clientMap.set(client.id, client);
+      });
+      result.posClients = Array.from(clientMap.values());
+    }
+
+    return result;
+  },
+
   // Sync User profile
   async saveUser(user: AuthUser): Promise<void> {
     const path = `users/${user.id}`;

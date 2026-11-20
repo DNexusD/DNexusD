@@ -17,12 +17,8 @@ import {
   Copy, 
   Wallet, 
   CreditCard, 
-  ArrowRight,
-  ShieldAlert,
-  Loader2,
-  Printer,
-  Sparkles,
-  MessageSquare,
+  Loader2, 
+  Printer, 
   Gift,
   Package,
   FileDown
@@ -33,7 +29,9 @@ import {
   isPackageOutOfStock,
   isPackageVoucherBacked,
   mergeWarehouseOptionsIntoPackage,
-  resolvePackagePurchaseOptions
+  resolvePackagePurchaseOptions,
+  getPackagesForDeliveryMethod,
+  getDeliveryMethodLabelAr,
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getServiceOrCodeAvailability } from '../../utils/availabilityMessages';
@@ -50,26 +48,42 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
   // Selected Delivery Method
   const [selectedMethod, setSelectedMethod] = useState<DeliveryMethod>(liveService.deliveryMethods[0]);
+  const methodPackages = getPackagesForDeliveryMethod(liveService, selectedMethod);
   
-  // Selected Package ID (resolved live against liveService so stock decrements immediately)
-  const [selectedPkgId, setSelectedPkgId] = useState<string>(liveService.packages[0]?.id || '');
+  // Selected Package ID (resolved live against methodPackages so switching delivery methods shows its own packages)
+  const [selectedPkgId, setSelectedPkgId] = useState<string>(
+    () => getPackagesForDeliveryMethod(liveService, liveService.deliveryMethods[0])[0]?.id || ''
+  );
+
+  useEffect(() => {
+    if (methodPackages.length === 0) {
+      if (selectedPkgId !== '') setSelectedPkgId('');
+      return;
+    }
+    if (!methodPackages.some(p => p.id === selectedPkgId)) {
+      setSelectedPkgId(methodPackages[0].id);
+    }
+  }, [selectedMethod, methodPackages, selectedPkgId]);
+
   const rawSelectedPkg: ServicePackage | undefined =
-    liveService.packages.find(p => p.id === selectedPkgId) || liveService.packages[0];
-  const selectedPkg: ServicePackage = rawSelectedPkg
+    methodPackages.find(p => p.id === selectedPkgId) || methodPackages[0];
+  const selectedPkg: ServicePackage | undefined = rawSelectedPkg
     ? mergeWarehouseOptionsIntoPackage(rawSelectedPkg, voucherWarehouses)
-    : liveService.packages[0];
+    : undefined;
   const selectedPkgOpts = selectedPkg
     ? resolvePackagePurchaseOptions(selectedPkg, voucherWarehouses)
     : undefined;
   const [selectedPurchaseUnit, setSelectedPurchaseUnit] = useState<WarehousePurchaseUnit>(
     selectedPkgOpts?.defaultPurchaseUnit || 'single_code'
   );
-  const effectivePurchaseUnit: WarehousePurchaseUnit =
-    selectedPurchaseUnit === 'package' && selectedPkgOpts?.allowPackage
-      ? 'package'
-      : selectedPkgOpts?.allowSingleCode
-      ? 'single_code'
-      : selectedPkgOpts?.defaultPurchaseUnit || 'single_code';
+  const isVoucherDelivery = selectedMethod === 'voucher_code';
+  const effectivePurchaseUnit: WarehousePurchaseUnit = !isVoucherDelivery
+    ? 'single_code'
+    : selectedPurchaseUnit === 'package' && selectedPkgOpts?.allowPackage
+    ? 'package'
+    : selectedPkgOpts?.allowSingleCode
+    ? 'single_code'
+    : selectedPkgOpts?.defaultPurchaseUnit || 'single_code';
 
   // Method 1: Player ID inputs
   const [playerId, setPlayerId] = useState('');
@@ -77,52 +91,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const [idVerified, setIdVerified] = useState(false);
   const [playerNickname, setPlayerNickname] = useState('');
 
-  // Method 2: Account Login inputs
+  // Method 2: Account Login inputs (submitted directly via Confirm Payment button)
   const [accountEmail, setAccountEmail] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
-  const [loginStep, setLoginStep] = useState<'credentials' | 'otp_verify' | 'verified'>('credentials');
-  const [verificationCode, setVerificationCode] = useState('');
   const [accountError, setAccountError] = useState<string | null>(null);
-  const [verifyingAccount, setVerifyingAccount] = useState(false);
-  const [supplierLiveMessage, setSupplierLiveMessage] = useState<string | null>(null);
-
-  // Listen to live message/OTP from supplier
-  useEffect(() => {
-    const handleLiveReply = (e: any) => {
-      const msg = e.detail?.message;
-      if (msg) {
-        setSupplierLiveMessage(msg);
-        setVerificationCode(msg);
-        showToast({
-          type: 'success',
-          title: 'وصلتك رسالة / رمز من المتجر فورا!',
-          description: `الرمز المستلم: ${msg}`
-        });
-      }
-    };
-
-    window.addEventListener('digipos_supplier_reply', handleLiveReply);
-
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'digipos_live_supplier_reply' && e.newValue) {
-        try {
-          const data = JSON.parse(e.newValue);
-          if (data?.message) {
-            setSupplierLiveMessage(data.message);
-            setVerificationCode(data.message);
-          }
-        } catch (err) {
-          // ignore
-        }
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-
-    return () => {
-      window.removeEventListener('digipos_supplier_reply', handleLiveReply);
-      window.removeEventListener('storage', handleStorage);
-    };
-  }, []);
 
   // Optional customer resale details
   const [customerName, setCustomerName] = useState('');
@@ -146,7 +118,6 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
   const [isExportingVoucherPdf, setIsExportingVoucherPdf] = useState(false);
-  const [verificationApprovalDone, setVerificationApprovalDone] = useState(selectedMethod !== 'account_login');
 
   // Current tier pricing calculation (with 0.5 SAR zero-price floor & Free Gifts admin fee % rule)
   const currentTier = currentPos.tier;
@@ -169,12 +140,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const totalAmount = selectedPricing.totalAmount;
   const clientDisplayedTotal = selectedPricing.isFreeGiftApplied ? 0 : totalAmount;
 
-  const selectedPkgStock = selectedPkg ? getPackageAvailableStock(selectedPkg, voucherWarehouses) : undefined;
+  const selectedPkgStock = isVoucherDelivery && selectedPkg
+    ? getPackageAvailableStock(selectedPkg, voucherWarehouses)
+    : undefined;
   const selectedPkgIsOutOfStock = selectedPkg
     ? isPackageOutOfStock(selectedPkg, selectedMethod, voucherWarehouses, effectivePurchaseUnit)
     : true;
   const serviceAvailability = getServiceOrCodeAvailability({
-    hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+    hasPackages: methodPackages.length > 0 && Boolean(selectedPkg),
     isOutOfStock: selectedPkgIsOutOfStock,
     deliveryMethod: selectedMethod,
     purchaseUnit: effectivePurchaseUnit,
@@ -207,53 +180,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     }, 300);
   };
 
-  // Handle Account Login verification
-  const handleAccountSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAccountError(null);
-    if (!accountEmail.includes('@') || accountPassword.length < 4) {
-      setAccountError('هناك خطأ في بيانات المستخدم أو كلمة المرور، يرجى التأكد منها والمحاولة مرة أخرى.');
-      return;
-    }
-    setVerifyingAccount(true);
-    setTimeout(() => {
-      setVerifyingAccount(false);
-      setLoginStep('otp_verify');
-      showToast({
-        type: 'info',
-        title: 'تم إرسال إشعار التحقق',
-        description: 'تم إرسال رمز التحقق إلى بريد الحساب أو الإشعارات. يرجى إدخال الرمز المكون من 6 أرقام.'
-      });
-    }, 800);
-  };
-
-  const handleVerifyOtp = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAccountError(null);
-    if (verificationCode.trim().length < 4) {
-      setAccountError('رمز التحقق غير صحيح أو غير مكتمل. يرجى مراجعة إشعارات البريد والمحاولة مرة أخرى.');
-      return;
-    }
-
-    setVerifyingAccount(true);
-    setTimeout(() => {
-      setVerifyingAccount(false);
-      // If code is not 0000 (simulating error testing if someone enters 0000)
-      if (verificationCode === '0000') {
-        setAccountError('رمز التحقق منتهي الصلاحية أو غير صحيح. يرجى طلب رمز جديد والمحاولة ثانية.');
-        return;
-      }
-      setLoginStep('verified');
-      showToast({
-        type: 'success',
-        title: 'تم التحقق من صحة البيانات',
-        description: 'تم توثيق الحساب بنجاح وجاهز لاستلام الشحن الفوري.'
-      });
-    }, 900);
-  };
-
   // Handle Purchase Confirmation
   const handleConfirmPurchase = async () => {
+    setAccountError(null);
+
     // Validation before purchase
     if (selectedMethod === 'player_id' && !idVerified) {
       showToast({
@@ -264,14 +194,23 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       return;
     }
 
-    // Direct submission on payment confirmation without validation barriers
     if (selectedMethod === 'account_login') {
-      // Send whatever is typed in accountEmail and accountPassword directly to supplier
+      const cleanEmail = accountEmail.trim();
+      if (!cleanEmail || !accountPassword.trim()) {
+        const msg = 'يرجى إدخال البريد الإلكتروني وكلمة المرور للحساب قبل تأكيد الدفع.';
+        setAccountError(msg);
+        showToast({
+          type: 'error',
+          title: 'بيانات الحساب مطلوبة',
+          description: msg
+        });
+        return;
+      }
     }
 
     if (!selectedPricing.isFreeGiftApplied && paymentMethod === 'wallet' && currentPos.walletBalance < totalAmount) {
       const balanceCheck = getServiceOrCodeAvailability({
-        hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+        hasPackages: methodPackages.length > 0 && Boolean(selectedPkg),
         isOutOfStock: false,
         deliveryMethod: selectedMethod,
         purchaseUnit: effectivePurchaseUnit,
@@ -290,9 +229,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
       return;
     }
 
-    if (liveService.packages.length === 0 || !selectedPkg || selectedPkgIsOutOfStock) {
+    if (methodPackages.length === 0 || !selectedPkg || selectedPkgIsOutOfStock) {
       const stockCheck = getServiceOrCodeAvailability({
-        hasPackages: liveService.packages.length > 0 && Boolean(selectedPkg),
+        hasPackages: methodPackages.length > 0 && Boolean(selectedPkg),
         isOutOfStock: true,
         deliveryMethod: selectedMethod,
         purchaseUnit: effectivePurchaseUnit,
@@ -330,9 +269,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         deliveryDetails: {
           playerId: selectedMethod === 'player_id' ? playerId : undefined,
           playerNickname: selectedMethod === 'player_id' ? playerNickname : undefined,
-          accountEmail: selectedMethod === 'account_login' ? accountEmail : undefined,
-          accountPassword: selectedMethod === 'account_login' ? accountPassword : undefined,
-          verificationCodeEntered: selectedMethod === 'account_login' ? verificationCode : undefined
+          accountEmail: selectedMethod === 'account_login' ? accountEmail.trim() : undefined,
+          accountPassword: selectedMethod === 'account_login' ? accountPassword : undefined
         },
         paymentMethod,
         customerName: customerName.trim() || undefined,
@@ -388,9 +326,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         orderId: completedOrderId || 'ORD-DONE',
         orderDate: completedOrderDate || new Date().toISOString().replace('T', ' ').substring(0, 16),
         serviceName: liveService.nameAr,
-        packageName: selectedPkg.name,
+        packageName: selectedPkg?.name || '',
         packageTitleAr: selectedPkgOpts?.packageNameAr,
-        packageDescription: selectedPkg.description,
+        packageDescription: selectedPkg?.description,
         purchaseUnit: effectivePurchaseUnit,
         codes: completedVoucherCodes,
         unitPrice: clientDisplayedTotal,
@@ -582,7 +520,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         ? completedVoucherCodes.length > 1 || effectivePurchaseUnit === 'package'
                           ? `تم شراء باقة الأكواد (${completedVoucherCodes.length} أكواد) بنجاح`
                           : 'تم شراء كود الشحن وتسليمه بنجاح'
-                        : 'تم إرسال الطلب بنجاح وانتظر إرسال كود التحقق'}
+                        : 'تم إرسال الطلب وبيانات الحساب بنجاح'}
                     </h4>
                     <p className="text-xs sm:text-sm text-cyan-300 font-medium">
                       رقم الطلب #{completedOrderId}
@@ -691,13 +629,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                   <span>الباقة / الفئة:</span>
                   <span className="font-semibold text-white">
-                    {selectedPkg.name}
-                    {completedDeductedCount > 1 && (
+                    {selectedPkg?.name || ''}
+                    {isVoucherDelivery && completedDeductedCount > 1 && (
                       <span className="mr-1.5 text-cyan-300 font-mono text-[11px]">
                         ({completedDeductedCount} أكواد)
                       </span>
                     )}
-                    {selectedPkgStock !== undefined && (
+                    {isVoucherDelivery && selectedPkg && selectedPkgStock !== undefined && (
                       <span className={`mr-2 font-mono text-[11px] ${selectedPkgStock > 0 ? 'text-amber-400' : 'text-rose-400'}`}>
                         ({isPackageVoucherBacked(selectedPkg, voucherWarehouses) ? `المتبقي: ${selectedPkgStock} كود` : `المخزون المتبقي: ${selectedPkgStock}`})
                       </span>
@@ -733,56 +671,21 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               </div>
 
               {/* Action buttons */}
-              {selectedMethod === 'account_login' && !verificationApprovalDone ? (
-                <div className="space-y-3 w-full">
-                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 text-center font-medium animate-pulse">
-                    يرجى النقر على زر "الموافقة على رمز التحقق" أدناه لتفعيل إيصال الطباعة وزر الإغلاق:
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVerificationApprovalDone(true);
-                      showToast({ type: 'success', title: 'تم اعتماد رمز التحقق', description: 'تم تفعيل زر طباعة الإيصال وزر إغلاق ومتابعة الطلب بنجاح.' });
-                    }}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 cursor-pointer transition-all"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-slate-950" />
-                    <span>الموافقة على رمز التحقق</span>
-                  </button>
-
-                  <div className="flex items-center gap-3 w-full opacity-40 pointer-events-none">
-                    <button
-                      disabled
-                      className="flex-1 py-3 px-4 rounded-xl bg-slate-800 text-white font-medium text-xs flex items-center justify-center gap-2 border border-slate-700"
-                    >
-                      <Printer className="w-4 h-4" />
-                      <span>طباعة إيصال الزبون بالأيدي</span>
-                    </button>
-                    <button
-                      disabled
-                      className="flex-1 py-3 px-4 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center"
-                    >
-                      تم، إغلاق ومتابعة الطلب
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3 w-full">
-                  <button
-                    onClick={() => window.print()}
-                    className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-medium text-xs flex items-center justify-center gap-2 border border-slate-700 transition-colors cursor-pointer"
-                  >
-                    <Printer className="w-4 h-4" />
-                    <span>طباعة إيصال الزبون بالأيدي</span>
-                  </button>
-                  <button
-                    onClick={onClose}
-                    className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center transition-colors cursor-pointer"
-                  >
-                    تم، إغلاق ومتابعة الطلب
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-3 w-full">
+                <button
+                  onClick={() => window.print()}
+                  className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-medium text-xs flex items-center justify-center gap-2 border border-slate-700 transition-colors cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>طباعة إيصال الزبون بالأيدي</span>
+                </button>
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  تم، إغلاق ومتابعة الطلب
+                </button>
+              </div>
             </div>
           )}
 
@@ -795,8 +698,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   1. اختر طريقة تسليم الخدمة:
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {service.deliveryMethods.map(method => {
+                  {liveService.deliveryMethods.map(method => {
                     const isSelected = selectedMethod === method;
+                    const countForMethod = getPackagesForDeliveryMethod(liveService, method).length;
                     let label = '';
                     let sub = '';
                     let icon = null;
@@ -807,7 +711,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       icon = <Gamepad2 className="w-4 h-4" />;
                     } else if (method === 'account_login') {
                       label = 'فوري عبر الحساب';
-                      sub = 'إيميل وباسورد وتوثيق 2FA';
+                      sub = 'إيميل وكلمة مرور الحساب';
                       icon = <Lock className="w-4 h-4" />;
                     } else {
                       label = 'عبر تسليم الكود';
@@ -819,7 +723,19 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       <button
                         key={method}
                         type="button"
-                        onClick={() => setSelectedMethod(method)}
+                        onClick={() => {
+                          setSelectedMethod(method);
+                          const nextPkgs = getPackagesForDeliveryMethod(liveService, method);
+                          const nextFirst = nextPkgs[0];
+                          setSelectedPkgId(nextFirst?.id || '');
+                          if (nextFirst) {
+                            const mergedFirst = method === 'voucher_code'
+                              ? mergeWarehouseOptionsIntoPackage(nextFirst, voucherWarehouses)
+                              : nextFirst;
+                            const firstOpts = resolvePackagePurchaseOptions(mergedFirst, voucherWarehouses);
+                            setSelectedPurchaseUnit(method === 'voucher_code' ? firstOpts.defaultPurchaseUnit : 'single_code');
+                          }
+                        }}
                         className={`p-3 rounded-2xl border text-right transition-all flex flex-col gap-1.5 ${
                           isSelected
                             ? 'bg-amber-500/10 border-amber-500 text-white shadow-sm ring-1 ring-amber-500/30'
@@ -830,7 +746,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           <span className={`p-1.5 rounded-lg ${isSelected ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-400'}`}>
                             {icon}
                           </span>
-                          {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                              {countForMethod} باقة
+                            </span>
+                            {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                          </div>
                         </div>
                         <span className="font-bold text-xs mt-1 text-white">{label}</span>
                         <span className="text-[10px] text-slate-400 leading-snug">{sub}</span>
@@ -840,18 +761,29 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
               </div>
 
-              {/* Step 2: Choose Package */}
+              {/* Step 2: Choose Package (filtered for selectedMethod) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  2. اختر باقة / فئة الشحن:
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    2. اختر باقة / فئة الشحن ({getDeliveryMethodLabelAr(selectedMethod)}):
+                  </label>
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400">
+                    {methodPackages.length} باقات
+                  </span>
+                </div>
                 <div className="space-y-2">
-                  {liveService.packages.map(rawPkg => {
-                    const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
+                  {methodPackages.length === 0 ? (
+                    <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-center text-xs text-slate-400">
+                      لا توجد باقات متاحة لطريقة "{getDeliveryMethodLabelAr(selectedMethod)}" حالياً.
+                    </div>
+                  ) : methodPackages.map(rawPkg => {
+                    const pkg = isVoucherDelivery
+                      ? mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses)
+                      : rawPkg;
                     const pkgOpts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
                     const isSelected = selectedPkg?.id === pkg.id;
-                    const pkgStock = getPackageAvailableStock(pkg, voucherWarehouses);
-                    const pkgIsVoucher = isPackageVoucherBacked(pkg, voucherWarehouses);
+                    const pkgStock = isVoucherDelivery ? getPackageAvailableStock(pkg, voucherWarehouses) : undefined;
+                    const pkgIsVoucher = isVoucherDelivery && isPackageVoucherBacked(pkg, voucherWarehouses);
                     const pkgOutOfStock = isPackageOutOfStock(pkg, selectedMethod, voucherWarehouses);
 
                     const singlePricing = calculateServicePurchasePricing({
@@ -865,7 +797,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       supplier: activeSup,
                       superAdmin
                     });
-                    const packagePricing = pkgOpts.allowPackage
+                    const packagePricing = isVoucherDelivery && pkgOpts.allowPackage
                       ? calculateServicePurchasePricing({
                           pkg,
                           clientTier: currentTier,
@@ -880,7 +812,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       : null;
 
                     const displayPricing =
-                      pkgOpts.allowSingleCode || !packagePricing
+                      !isVoucherDelivery || pkgOpts.allowSingleCode || !packagePricing
                         ? singlePricing
                         : packagePricing;
                     const pkgTotalWithFee = (displayPricing.isFreeGiftApplied ? 0 : displayPricing.totalAmount).toFixed(2);
@@ -892,7 +824,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         type="button"
                         onClick={() => {
                           setSelectedPkgId(pkg.id);
-                          setSelectedPurchaseUnit(pkgOpts.defaultPurchaseUnit);
+                          setSelectedPurchaseUnit(isVoucherDelivery ? pkgOpts.defaultPurchaseUnit : 'single_code');
                         }}
                         className={`w-full p-3.5 rounded-2xl border text-right transition-all flex items-center justify-between gap-3 ${
                           pkgOutOfStock
@@ -907,35 +839,44 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         <div className="space-y-0.5">
                           <div className="font-bold text-sm text-white flex items-center gap-2 flex-wrap">
                             <span>{pkg.name}</span>
-                            {pkgStock !== undefined && (
-                              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
-                                pkgStock > 0
-                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                              }`}>
-                                <Ticket className="w-3 h-3" />
-                                <span>
-                                  {pkgStock > 0
-                                    ? pkgIsVoucher
-                                      ? `${pkgStock} كود متوفر`
-                                      : `المخزون: ${pkgStock}`
-                                    : 'نفد المخزون'}
-                                </span>
+                            {!isVoucherDelivery ? (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>متوفرة دائماً</span>
                               </span>
-                            )}
-                            {pkgOpts.allowPackage && typeof pkgOpts.availablePackagesCount === 'number' && (
-                              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
-                                pkgOpts.availablePackagesCount > 0
-                                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                                  : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                              }`}>
-                                <Package className="w-3 h-3" />
-                                <span>
-                                  {pkgOpts.availablePackagesCount > 0
-                                    ? `${pkgOpts.availablePackagesCount} باقة (${pkgOpts.packageCodesCount} أكواد/باقة)`
-                                    : `أقل من باقة (${pkgOpts.packageCodesCount} أكواد)`}
-                                </span>
-                              </span>
+                            ) : (
+                              <>
+                                {pkgStock !== undefined && (
+                                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                                    pkgStock > 0
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                      : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                  }`}>
+                                    <Ticket className="w-3 h-3" />
+                                    <span>
+                                      {pkgStock > 0
+                                        ? pkgIsVoucher
+                                          ? `${pkgStock} كود متوفر`
+                                          : `المخزون: ${pkgStock}`
+                                        : 'نفد المخزون'}
+                                    </span>
+                                  </span>
+                                )}
+                                {pkgOpts.allowPackage && typeof pkgOpts.availablePackagesCount === 'number' && (
+                                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                                    pkgOpts.availablePackagesCount > 0
+                                      ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                                      : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                  }`}>
+                                    <Package className="w-3 h-3" />
+                                    <span>
+                                      {pkgOpts.availablePackagesCount > 0
+                                        ? `${pkgOpts.availablePackagesCount} باقة (${pkgOpts.packageCodesCount} أكواد/باقة)`
+                                        : `أقل من باقة (${pkgOpts.packageCodesCount} أكواد)`}
+                                    </span>
+                                  </span>
+                                )}
+                              </>
                             )}
                             {displayPricing.isFreeGiftApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-emerald-400 border border-purple-500/30 font-bold">
@@ -962,23 +903,23 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           ) : (
                             <div className="text-[10px] text-slate-400 pt-0.5">
                               سعر رتبة حسابك ({currentTierInfo.nameAr})
-                              {pkgOpts.allowSingleCode && pkgOpts.allowPackage && ' · متاح الشراء بالكود الواحد أو بالباقة'}
-                              {!pkgOpts.allowSingleCode && pkgOpts.allowPackage && ` · شراء بالباقة (${pkgOpts.packageCodesCount} أكواد)`}
+                              {isVoucherDelivery && pkgOpts.allowSingleCode && pkgOpts.allowPackage && ' · متاح الشراء بالكود الواحد أو بالباقة'}
+                              {isVoucherDelivery && !pkgOpts.allowSingleCode && pkgOpts.allowPackage && ` · شراء بالباقة (${pkgOpts.packageCodesCount} أكواد)`}
                             </div>
                           )}
                         </div>
 
                         <div className="text-left shrink-0 pl-2 space-y-0.5">
-                          {pkgOpts.allowSingleCode && (
+                          {(!isVoucherDelivery || pkgOpts.allowSingleCode) && (
                             <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
                               {singlePricing.isFreeGiftApplied ? (
-                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">{pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
+                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">{isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
                               ) : (
-                                <>{singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {pkgOpts.allowPackage ? '/ كود' : ''}</span></>
+                                <>{singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></>
                               )}
                             </div>
                           )}
-                          {pkgOpts.allowPackage && packagePricing && (
+                          {isVoucherDelivery && pkgOpts.allowPackage && packagePricing && (
                             <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? (packagePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-cyan-300') : 'text-base text-amber-400'}`}>
                               {packagePricing.isFreeGiftApplied ? (
                                 <span>مجاني <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
@@ -987,7 +928,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               )}
                             </div>
                           )}
-                          {!pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
+                          {isVoucherDelivery && !pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
                             <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
                               {displayPricing.isFreeGiftApplied ? (
                                 <span>مجاني</span>
@@ -1004,7 +945,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               </div>
 
               {/* Step 2B: Purchase Unit Selector (Single Code vs Package) when package mode is enabled */}
-              {selectedPkgOpts && selectedPkgOpts.allowPackage && (() => {
+              {isVoucherDelivery && selectedPkg && selectedPkgOpts && selectedPkgOpts.allowPackage && (() => {
                 const singleOptPricing = calculateServicePurchasePricing({
                   pkg: selectedPkg,
                   clientTier: currentTier,
@@ -1168,7 +1109,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <div className="space-y-3">
                     <span className="text-xs font-semibold text-white flex items-center gap-1.5">
                       <Lock className="w-4 h-4 text-amber-400" />
-                      التسليم فوري عبر الحساب (توثيق الحساب وإشعار الرمز):
+                      التسليم عبر الحساب (سيتم إرسال الإيميل وكلمة المرور عند تأكيد الدفع):
                     </span>
 
                     {accountError && (
@@ -1178,130 +1119,39 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       </div>
                     )}
 
-                    {loginStep === 'credentials' && (
-                      <form onSubmit={handleAccountSubmit} className="space-y-3">
-                        <div>
-                          <label className="block text-[11px] text-slate-400 mb-1">البريد الإلكتروني / الحساب:</label>
-                          <input
-                            type="email"
-                            required
-                            value={accountEmail}
-                            onChange={e => setAccountEmail(e.target.value)}
-                            placeholder="user@example.com"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-left"
-                            dir="ltr"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] text-slate-400 mb-1">كلمة المرور:</label>
-                          <input
-                            type="password"
-                            required
-                            value={accountPassword}
-                            onChange={e => setAccountPassword(e.target.value)}
-                            placeholder="••••••••"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-left"
-                            dir="ltr"
-                          />
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={verifyingAccount}
-                          className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          {verifyingAccount ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>جاري إرسال البيانات والتحقق...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span>إرسال بيانات الحساب وطلب رمز التحقق</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
-                            </>
-                          )}
-                        </button>
-                      </form>
-                    )}
-
-                    {loginStep === 'otp_verify' && (
-                      <form onSubmit={handleVerifyOtp} className="space-y-3 animate-in fade-in">
-                        {/* Live Message from Supplier Banner */}
-                        {supplierLiveMessage ? (
-                          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-500/20 via-slate-900 to-slate-900 border border-emerald-500/50 space-y-1 text-xs animate-in zoom-in-95">
-                            <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
-                              <Sparkles className="w-4 h-4 text-emerald-400 animate-pulse" />
-                              <span>وصلتك رسالة / رمز من المتجر فورا:</span>
-                            </div>
-                            <div className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-emerald-500/30">
-                              <span className="font-mono text-base font-black text-amber-300 tracking-widest">{supplierLiveMessage}</span>
-                              <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded-md">
-                                تم إدراج الرمز تلقائياً ✓
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-center justify-between">
-                            <span>بانتظار رد المتجر بالرمز أو إشعارات الإيميل ({accountEmail})...</span>
-                            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-                          </div>
-                        )}
-
-                        <div>
-                          <label className="block text-[11px] text-slate-300 mb-1">رمز التحقق المستلم (OTP):</label>
-                          <input
-                            type="text"
-                            maxLength={16}
-                            value={verificationCode}
-                            onChange={e => setVerificationCode(e.target.value)}
-                            placeholder="رمز التحقق أو رسالة المتجر"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-center text-lg font-mono tracking-widest text-white focus:outline-none focus:border-amber-500"
-                          />
-                        </div>
-
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setLoginStep('credentials')}
-                            className="py-2 px-3 rounded-xl bg-slate-800 text-slate-400 text-xs cursor-pointer"
-                          >
-                            تعديل الحساب
-                          </button>
-                          <button
-                            type="submit"
-                            disabled={verifyingAccount || !verificationCode}
-                            className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
-                          >
-                            {verifyingAccount ? (
-                              <>
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                <span>جاري التحقق والموافقة...</span>
-                              </>
-                            ) : (
-                              <span>الموافقة على رمز التحقق</span>
-                            )}
-                          </button>
-                        </div>
-                      </form>
-                    )}
-
-                    {loginStep === 'verified' && (
-                      <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>تم التحقق من صحة البيانات بنجاح والحساب جاهز.</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setLoginStep('credentials')}
-                          className="text-[10px] text-slate-400 hover:underline"
-                        >
-                          تغيير الحساب
-                        </button>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">البريد الإلكتروني / الحساب:</label>
+                        <input
+                          type="email"
+                          required
+                          value={accountEmail}
+                          onChange={e => {
+                            setAccountEmail(e.target.value);
+                            if (accountError) setAccountError(null);
+                          }}
+                          placeholder="user@example.com"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-left"
+                          dir="ltr"
+                        />
                       </div>
-                    )}
+
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">كلمة المرور:</label>
+                        <input
+                          type="password"
+                          required
+                          value={accountPassword}
+                          onChange={e => {
+                            setAccountPassword(e.target.value);
+                            if (accountError) setAccountError(null);
+                          }}
+                          placeholder="••••••••"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-left"
+                          dir="ltr"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -1494,10 +1344,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               {/* Confirm Purchase Button with clearly displayed price */}
               <button
                 type="button"
-                disabled={orderProcessing || selectedPkgIsOutOfStock || liveService.packages.length === 0 || !selectedPkg}
+                disabled={orderProcessing || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg}
                 onClick={handleConfirmPurchase}
                 className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
-                  selectedPkgIsOutOfStock || liveService.packages.length === 0 || !selectedPkg
+                  selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                     : !serviceAvailability.available
                     ? 'bg-rose-500/20 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
@@ -1507,7 +1357,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 }`}
               >
                 <span>
-                  {liveService.packages.length === 0 || !selectedPkg
+                  {methodPackages.length === 0 || !selectedPkg
                     ? 'عدم توفر الخدمة المطلوبة'
                     : selectedPkgIsOutOfStock
                     ? selectedMethod === 'voucher_code'

@@ -40,6 +40,7 @@ interface BankEntryRow {
   bankName: string;
   accountNumber: string;
   iban: string;
+  currency: string;
   notes: string;
   isCustomBank: boolean;
 }
@@ -70,6 +71,7 @@ interface EditBankAccountFormState {
   canReceiveSupplierTransfers: boolean;
   isPrimary: boolean;
   isActive: boolean;
+  currency: string;
   notes: string;
 }
 
@@ -78,6 +80,7 @@ const createBankEntryRow = (index = 1): BankEntryRow => ({
   bankName: '',
   accountNumber: '',
   iban: '',
+  currency: 'ر.س',
   notes: '',
   isCustomBank: false,
 });
@@ -217,6 +220,7 @@ export const BankAccountsView: React.FC = () => {
       canReceiveSupplierTransfers: Boolean(account.canReceiveSupplierTransfers),
       isPrimary: Boolean(account.isPrimary),
       isActive: account.isActive !== false,
+      currency: account.currency || 'ر.س',
       notes: account.notes || '',
     });
     setFormError('');
@@ -384,6 +388,7 @@ export const BankAccountsView: React.FC = () => {
         bankName: row.bankName,
         accountNumber: row.accountNumber,
         iban: row.iban,
+        currency: row.currency,
         notes: row.notes,
       })),
     });
@@ -414,6 +419,7 @@ export const BankAccountsView: React.FC = () => {
       canReceiveSupplierTransfers: editingAccount.canReceiveSupplierTransfers,
       isPrimary: editingAccount.isPrimary,
       isActive: editingAccount.isActive,
+      currency: editingAccount.currency,
       notes: editingAccount.notes,
     });
     if (!res.success) {
@@ -574,6 +580,10 @@ export const BankAccountsView: React.FC = () => {
                         <span>·</span>
                         <span className={acc.isActive !== false ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
                           {acc.isActive !== false ? 'نشط للتحويل' : 'موقوف'}
+                        </span>
+                        <span>·</span>
+                        <span className="text-amber-300 font-bold px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px]">
+                          العملة: {acc.currency || 'ر.س'}
                         </span>
                         {acc.isPrimary && (
                           <>
@@ -867,6 +877,17 @@ export const BankAccountsView: React.FC = () => {
                       placeholder="SA448000..."
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
                       dir="ltr"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-300 mb-1">العملة الأساسية للحساب:</label>
+                    <input
+                      type="text"
+                      value={editingAccount.currency || 'ر.س'}
+                      onChange={(e) => setEditingAccount({ ...editingAccount, currency: e.target.value })}
+                      placeholder="مثال: ر.س، دولار، ي.ر"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-amber-500"
                     />
                   </div>
                 </div>

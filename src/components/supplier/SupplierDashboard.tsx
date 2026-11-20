@@ -71,7 +71,9 @@ import {
   mergeWarehouseOptionsIntoPackage,
   resolvePackagePurchaseOptions,
   computeStockSummary,
-  isWarehouseLowStock
+  isWarehouseLowStock,
+  serviceRequiresVoucherWarehouse,
+  getDeliveryMethodLabelAr,
 } from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
 import { isCatalogFreeGifts } from '../../utils/pricing';
@@ -1176,6 +1178,7 @@ export const SupplierDashboard: React.FC = () => {
           <div className="space-y-4">
             {supplierServices.map(srv => {
               const cat = catalogs.find(c => c.id === srv.catalogId);
+              const isVoucherService = serviceRequiresVoucherWarehouse(srv.deliveryMethods);
               return (
                 <div key={srv.id} className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1193,6 +1196,12 @@ export const SupplierDashboard: React.FC = () => {
                           <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-400 text-[10px]">
                             {cat?.nameAr}
                           </span>
+                          {!isVoucherService && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              <span>متوفرة دائماً (بدون عدد)</span>
+                            </span>
+                          )}
                           {isCatalogFreeGifts(cat) && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-semibold">
                               <Gift className="w-3 h-3" />
@@ -1235,15 +1244,25 @@ export const SupplierDashboard: React.FC = () => {
                           <th className="py-2.5 px-3 text-center text-slate-200">فضي</th>
                           <th className="py-2.5 px-3 text-center text-yellow-400">ذهبي</th>
                           <th className="py-2.5 px-3 text-center text-purple-400 font-bold">مميز VIP</th>
-                          <th className="py-2.5 px-3 text-left">المخزون/الأكواد</th>
+                          <th className="py-2.5 px-3 text-left">{isVoucherService ? 'المخزون/الأكواد' : 'التوفر'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/60 font-mono">
                         {srv.packages.map(rawPkg => {
-                          const pkg = mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses);
-                          const opts = resolvePackagePurchaseOptions(pkg, voucherWarehouses);
-                          const stock = getPackageAvailableStock(pkg, voucherWarehouses);
-                          const hasVouchers = Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId);
+                          const pkgIsVoucher = rawPkg.deliveryMethod
+                            ? rawPkg.deliveryMethod === 'voucher_code'
+                            : isVoucherService;
+                          const pkg = pkgIsVoucher
+                            ? mergeWarehouseOptionsIntoPackage(rawPkg, voucherWarehouses)
+                            : rawPkg;
+                          const opts = pkgIsVoucher
+                            ? resolvePackagePurchaseOptions(pkg, voucherWarehouses)
+                            : null;
+                          const stock = pkgIsVoucher ? getPackageAvailableStock(pkg, voucherWarehouses) : undefined;
+                          const hasVouchers = pkgIsVoucher && (Array.isArray(pkg.vouchers) || Boolean(pkg.warehouseId));
+                          const displayedPrices = pkgIsVoucher && opts
+                            ? (opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices)
+                            : pkg.tierPrices;
 
                           return (
                             <React.Fragment key={pkg.id}>
@@ -1251,12 +1270,17 @@ export const SupplierDashboard: React.FC = () => {
                                 <td className="py-2.5 px-3 font-sans font-medium text-white">
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     <span>{pkg.name}</span>
-                                    {opts.allowSingleCode && (
+                                    {rawPkg.deliveryMethod && (
+                                      <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[9px] font-semibold">
+                                        {getDeliveryMethodLabelAr(rawPkg.deliveryMethod)}
+                                      </span>
+                                    )}
+                                    {pkgIsVoucher && opts?.allowSingleCode && (
                                       <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[9px] font-bold">
                                         {opts.allowPackage ? 'كود واحد' : 'بالكود'}
                                       </span>
                                     )}
-                                    {!opts.allowSingleCode && opts.allowPackage && (
+                                    {pkgIsVoucher && opts && !opts.allowSingleCode && opts.allowPackage && (
                                       <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 text-[9px] font-bold">
                                         باقة فقط ({opts.packageCodesCount} أكواد)
                                       </span>
@@ -1264,26 +1288,34 @@ export const SupplierDashboard: React.FC = () => {
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-300">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).regular} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.regular} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-amber-400 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).bronze} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.bronze} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-200 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).silver} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.silver} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-yellow-400 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).gold} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.gold} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
-                                  {isCatalogFreeGifts(cat) ? '0.00 ر.س' : `${(opts.allowSingleCode ? pkg.tierPrices : opts.packageTierPrices).vip} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? '0.00 ر.س' : `${displayedPrices.vip} ر.س`}
                                 </td>
                                 <td className="py-2.5 px-3 text-left font-sans text-[11px]">
                                   {(() => {
+                                    if (!pkgIsVoucher) {
+                                      return (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
+                                          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                                          <span>متوفرة دائماً</span>
+                                        </span>
+                                      );
+                                    }
                                     if (hasVouchers) {
                                       return stock && stock > 0 ? (
                                         <span className="text-amber-400 font-semibold">
-                                          {stock} كود{opts.allowPackage ? ` · ${opts.availablePackagesCount ?? 0} باقة` : ''}
+                                          {stock} كود{opts?.allowPackage ? ` · ${opts.availablePackagesCount ?? 0} باقة` : ''}
                                         </span>
                                       ) : (
                                         <span className="text-rose-400 font-semibold">نفد المخزون (0 كود)</span>
@@ -1301,7 +1333,7 @@ export const SupplierDashboard: React.FC = () => {
                                 </td>
                               </tr>
 
-                              {opts.allowSingleCode && opts.allowPackage && (
+                              {pkgIsVoucher && opts?.allowSingleCode && opts?.allowPackage && (
                                 <tr className="bg-cyan-950/15 hover:bg-cyan-950/25">
                                   <td className="py-2 px-3 font-sans text-[11px] text-cyan-300">
                                     ↳ {opts.packageNameAr} ({opts.packageCodesCount} أكواد)
