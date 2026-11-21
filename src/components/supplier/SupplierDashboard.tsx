@@ -61,6 +61,7 @@ import { EditCatalogModal } from './EditCatalogModal';
 import { EditServiceModal } from './EditServiceModal';
 import { InviteLinkModal } from './InviteLinkModal';
 import { EditSupplierProfileModal } from './EditSupplierProfileModal';
+import { GrantBalanceOrLoanModal } from './GrantBalanceOrLoanModal';
 import { LoansRegistryView } from '../loans/LoansRegistryView';
 import { OfficeEmployeesView } from './OfficeEmployeesView';
 import { BankAccountsView } from './BankAccountsView';
@@ -76,13 +77,23 @@ import {
   getDeliveryMethodLabelAr,
 } from '../../utils/voucherWarehouses';
 import { getSupplierBankAccounts } from '../../utils/bankAccounts';
-import { isCatalogFreeGifts } from '../../utils/pricing';
+import { isCatalogFreeGifts, formatGiftRemainingTimeAr, normalizeGiftMaxUses } from '../../utils/pricing';
 import {
   getCatalogsForSupplierView,
   canSupplierModifyCatalog,
   getActiveDropdownOptions,
   matchesStatementTransactionType,
 } from '../../utils/platformSettings';
+import {
+  SupplierDashboardTab,
+  EMPLOYEE_PERMISSION_BADGES,
+  resolveEffectiveEmployeePermissions,
+  isEmployeeTabAllowed,
+  getFirstAllowedSupplierTab,
+  isOrderVisibleToEmployee,
+  isDepositVisibleToEmployee,
+  findEmployeeRecordForUser,
+} from '../../utils/employeePermissions';
 
 export const SupplierDashboard: React.FC = () => {
   const { 
@@ -137,9 +148,26 @@ export const SupplierDashboard: React.FC = () => {
   const [newCatName, setNewCatName] = useState('');
   const [newCatDesc, setNewCatDesc] = useState('');
   const [newCatIsFreeGift, setNewCatIsFreeGift] = useState(false);
+  const [showGrantModal, setShowGrantModal] = useState(false);
+  const [grantModalClientPosId, setGrantModalClientPosId] = useState<string | undefined>(undefined);
+
+  const perms = useMemo(
+    () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
+    [currentUser, role, supplier]
+  );
+  const isStoreOwner = role === 'supplier' || role === 'super_admin';
 
   // Selected subtab inside supplier portal
-  const [subTab, setSubTab] = useState<'catalogs' | 'pending_orders' | 'account_orders' | 'deposits' | 'loans' | 'bank_accounts' | 'clients' | 'vouchers' | 'client_statements' | 'employees' | 'notifications'>('catalogs');
+  const [subTab, setSubTab] = useState<SupplierDashboardTab>(() =>
+    getFirstAllowedSupplierTab(resolveEffectiveEmployeePermissions(currentUser, role, supplier), role)
+  );
+
+  useEffect(() => {
+    if (!isEmployeeTabAllowed(subTab, perms, role)) {
+      setSubTab(getFirstAllowedSupplierTab(perms, role));
+    }
+  }, [subTab, perms, role]);
+
   const [depositFilter, setDepositFilter] = useState<'all' | 'pending' | 'delegated'>('all');
   const [viewingReceiptDeposit, setViewingReceiptDeposit] = useState<DepositRequest | null>(null);
 
@@ -198,8 +226,13 @@ export const SupplierDashboard: React.FC = () => {
   );
 
   const supplierDepositRequests = useMemo(
-    () => depositRequests.filter(d => !d.supplierId || d.supplierId === supplier.id),
-    [depositRequests, supplier.id]
+    () =>
+      depositRequests.filter(
+        d =>
+          (!d.supplierId || d.supplierId === supplier.id) &&
+          isDepositVisibleToEmployee(d, perms, role, currentUser?.employeeId)
+      ),
+    [depositRequests, supplier.id, perms, role, currentUser?.employeeId]
   );
 
   const pendingDeposits = supplierDepositRequests.filter(d => d.status === 'pending');
@@ -216,10 +249,14 @@ export const SupplierDashboard: React.FC = () => {
   const pendingLoanRepaymentsCount = loanRepaymentRequests.filter(r => r.supplierId === supplier.id && r.status === 'pending').length;
   const totalLoansActionBadge = pendingLoansCount + pendingLoanRepaymentsCount;
   const supplierOrders = useMemo(() => orders.filter(o => !o.supplierId || o.supplierId === supplier.id), [orders, supplier.id]);
+  const visibleSupplierOrders = useMemo(
+    () => supplierOrders.filter(o => isOrderVisibleToEmployee(o, perms, role)),
+    [supplierOrders, perms, role]
+  );
   const supplierServices = useMemo(() => services.filter(s => !s.supplierId || s.supplierId === supplier.id), [services, supplier.id]);
-  const pendingOrders = supplierOrders.filter(o => o.status === 'pending_supplier' || o.status === 'in_progress');
-  const pendingIdOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'player_id');
-  const pendingAccountOrders = supplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'account_login');
+  const pendingOrders = visibleSupplierOrders.filter(o => o.status === 'pending_supplier' || o.status === 'in_progress');
+  const pendingIdOrders = visibleSupplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'player_id');
+  const pendingAccountOrders = visibleSupplierOrders.filter(o => (o.status === 'pending_supplier' || o.status === 'in_progress') && o.deliveryMethod === 'account_login');
 
   const supplierWarehouses = useMemo(
     () => voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id),
@@ -231,26 +268,31 @@ export const SupplierDashboard: React.FC = () => {
   );
   const lowStockCount = stockSummary.lowStockCount;
 
-  // Active employee info for display in header
-  const activeEmployee = role === 'employee' 
+  // Logged-in employee info (when role === 'employee')
+  const liveEmployeeRecord = useMemo(
+    () => (role === 'employee' ? findEmployeeRecordForUser(currentUser, supplier) : undefined),
+    [role, currentUser, supplier]
+  );
+  const activeEmployee = role === 'employee'
     ? {
-        name: currentUser?.name || 'أحمد السعيد',
-        roleTitle: currentUser?.roleTitle || 'مسؤول شحن الأيدي والدعم',
-        permissions: currentUser?.permissions || {
-          canManageOrders: true,
-          canManageCatalogs: false,
-          canManageClients: true,
-          canReviewDeposits: false
-        }
+        name: liveEmployeeRecord?.name || currentUser?.name || 'موظف المتجر',
+        roleTitle: liveEmployeeRecord?.roleTitle || currentUser?.roleTitle || 'موظف مكتب',
+        permissions: perms,
       }
-    : (supplier.employees && supplier.employees.length > 0)
-    ? supplier.employees[0]
     : null;
 
   const [copiedIdOrderId, setCopiedIdOrderId] = useState<string | null>(null);
   const [copiedDetailsOrderId, setCopiedDetailsOrderId] = useState<string | null>(null);
   const [orderNotes, setOrderNotes] = useState<Record<string, string>>({});
-  const [orderFilterTab, setOrderFilterTab] = useState<'pending_id' | 'all_pending' | 'completed'>('pending_id');
+  const [orderFilterTab, setOrderFilterTab] = useState<'pending_id' | 'all_pending' | 'completed'>(() =>
+    perms.canManagePlayerIdOrders ? 'pending_id' : 'all_pending'
+  );
+
+  useEffect(() => {
+    if (!perms.canManagePlayerIdOrders && orderFilterTab === 'pending_id') {
+      setOrderFilterTab('all_pending');
+    }
+  }, [perms.canManagePlayerIdOrders, orderFilterTab]);
 
   const handleCopyPlayerId = (orderId: string, id: string) => {
     navigator.clipboard.writeText(id);
@@ -458,6 +500,14 @@ export const SupplierDashboard: React.FC = () => {
   };
 
   const handleExportPDF = async (mode: 'preview' | 'download' = 'preview') => {
+    if (!isStoreOwner && !perms.canViewReports) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية غير ممنوحة',
+        description: 'ليس لديك صلاحية عرض أو تصدير التقارير المالية.',
+      });
+      return;
+    }
     if (isExportingPdf) return;
     setIsExportingPdf(true);
     try {
@@ -528,7 +578,9 @@ export const SupplierDashboard: React.FC = () => {
           { label: 'عدد القيود', value: `${supplierStatementTotals.count} قيد`, tone: 'neutral' },
           { label: 'إجمالي المدين', value: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit'), tone: 'debit' },
           { label: 'إجمالي الدائن', value: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'), tone: 'credit' },
-          { label: 'رصيد المتجر الحالي', value: formatCurrencySar(supplier.walletBalance), tone: 'accent' },
+          isStoreOwner
+            ? { label: 'رصيد المتجر الحالي', value: formatCurrencySar(supplier.walletBalance), tone: 'accent' }
+            : { label: 'صافي حركة التقرير', value: formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit), tone: 'accent' },
         ],
         columns: [
           { key: 'date', label: 'التاريخ', width: '14%', mono: true },
@@ -548,7 +600,9 @@ export const SupplierDashboard: React.FC = () => {
           rowCountLabel: `إجمالي القيود المعروضة: ${supplierStatementTotals.count} قيد`,
           totalDebit: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit'),
           totalCredit: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'),
-          finalBalance: formatCurrencySar(supplier.walletBalance),
+          finalBalance: isStoreOwner
+            ? formatCurrencySar(supplier.walletBalance)
+            : formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit),
         },
         filename: `كشف_حساب_المتجر_${supplier.storeName}_${nowStr.slice(0, 10)}.pdf`,
       });
@@ -615,46 +669,73 @@ export const SupplierDashboard: React.FC = () => {
                           {supplier.name}
                         </span>
                       </h1>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditProfileSection('profile');
-                          setShowEditProfileModal(true);
-                        }}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 whitespace-nowrap inline-flex items-center justify-center"
-                        title="تعديل بيانات المتجر والشعار وروابط التواصل"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditProfileSection('social');
-                          setShowEditProfileModal(true);
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap inline-flex items-center gap-1.5"
-                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
-                      >
-                        <Share2 className="w-3 h-3 text-amber-400" />
-                        <span>روابط التواصل (اتصل بالمتجر)</span>
-                      </button>
+                      {isStoreOwner && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditProfileSection('profile');
+                              setShowEditProfileModal(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 whitespace-nowrap inline-flex items-center justify-center"
+                            title="تعديل بيانات المتجر والشعار وروابط التواصل"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditProfileSection('social');
+                              setShowEditProfileModal(true);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap inline-flex items-center gap-1.5"
+                            title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
+                          >
+                            <Share2 className="w-3 h-3 text-amber-400" />
+                            <span>روابط التواصل (اتصل بالمتجر)</span>
+                          </button>
+                        </>
+                      )}
                   </div>
                   </div>
-                  {/* Single line showing Employee Name, Role/Title */}
+                  {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
                   <div className="text-xs text-slate-300 mt-1 flex items-center gap-2 flex-wrap">
                     {activeEmployee ? (
-                      <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800 text-xs shrink-0">
-                        <UserCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span className="text-slate-400">اسم الموظف:</span>
+                      <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs">
+                        <UserCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span className="text-slate-400">دخول بصلاحية موظف:</span>
                         <strong className="text-white font-bold">{activeEmployee.name}</strong>
                         <span className="text-slate-600 mx-0.5">·</span>
-                        <span className="text-slate-400">الصفة:</span>
-                        <span className="text-amber-300 font-semibold">{activeEmployee.roleTitle || 'موظف مكتب'}</span>
+                        <span className="text-cyan-300 font-semibold">{activeEmployee.roleTitle}</span>
+                        <span className="text-slate-600 mx-0.5">·</span>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).length > 0 ? (
+                            EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).map(b => (
+                              <span
+                                key={b.key}
+                                className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold"
+                              >
+                                {b.labelAr}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px]">
+                              صلاحيات مقيدة
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1.5 text-slate-400">
-                        <UserCheck className="w-3.5 h-3.5 text-slate-500" />
-                        <span>لا يوجد موظف مكتب مسجل حالياً · يمكن لمالك المتجر إضافة موظفين وتحديد صلاحياتهم من قسم الموظفين</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                          <span>مالك المتجر (صلاحيات كاملة)</span>
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          {(supplier.employees?.length || 0) > 0
+                            ? `عدد موظفي المكتب المسجلين: ${supplier.employees?.length}`
+                            : 'يمكن لمالك المتجر إضافة موظفين وتحديد صلاحياتهم من قسم الموظفين'}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -710,48 +791,84 @@ export const SupplierDashboard: React.FC = () => {
 
           {/* Quick Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => {
-                if (!platformSettings.allowSuppliersCreateCustomCatalogs) {
-                  showToast({
-                    type: 'error',
-                    title: 'ميزة معطّلة من الإدارة',
-                    description: 'تم تقييد إضافة كتالوجات خاصة حالياً والالتزام بالكتالوجات الثابتة المعتمدة.',
-                  });
-                  return;
-                }
-                setShowAddCatalog(true);
-              }}
-              className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md ${
-                platformSettings.allowSuppliersCreateCustomCatalogs
-                  ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
-                  : 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
-              }`}
-              title={platformSettings.allowSuppliersCreateCustomCatalogs ? 'إضافة كاتالوج جديد' : 'تم تعطيل إنشاء كتالوجات مخصصة من مدير التطبيق'}
-            >
-              {platformSettings.allowSuppliersCreateCustomCatalogs ? (
-                <FolderPlus className="w-4 h-4 text-slate-600" />
-              ) : (
-                <Lock className="w-4 h-4 text-slate-400" />
-              )}
-              <span>إضافة كاتالوج</span>
-            </button>
+            {(isStoreOwner || perms.canAddCatalogs) && (
+              <button
+                onClick={() => {
+                  if (!platformSettings.allowSuppliersCreateCustomCatalogs) {
+                    showToast({
+                      type: 'error',
+                      title: 'ميزة معطّلة من الإدارة',
+                      description: 'تم تقييد إضافة كتالوجات خاصة حالياً والالتزام بالكتالوجات الثابتة المعتمدة.',
+                    });
+                    return;
+                  }
+                  setShowAddCatalog(true);
+                }}
+                className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md ${
+                  platformSettings.allowSuppliersCreateCustomCatalogs
+                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
+                }`}
+                title={platformSettings.allowSuppliersCreateCustomCatalogs ? 'إضافة كاتالوج جديد' : 'تم تعطيل إنشاء كتالوجات مخصصة من مدير التطبيق'}
+              >
+                {platformSettings.allowSuppliersCreateCustomCatalogs ? (
+                  <FolderPlus className="w-4 h-4 text-slate-600" />
+                ) : (
+                  <Lock className="w-4 h-4 text-slate-400" />
+                )}
+                <span>إضافة كاتالوج</span>
+              </button>
+            )}
 
-            <button
-              onClick={() => setShowAddService(true)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>إضافة خدمة وتسعيرة الرتب</span>
-            </button>
- 
-            <button
-              onClick={() => setShowInviteModal(true)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
-            >
-              <Link2 className="w-4 h-4" />
-              <span>رابط دعوة برتبة مسبقة</span>
-            </button>
+            {(isStoreOwner || perms.canAddServices) && (
+              <button
+                onClick={() => setShowAddService(true)}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>إضافة خدمة وتسعيرة الرتب</span>
+              </button>
+            )}
+
+            {(isStoreOwner || perms.canUpgradeClientTiers) && (
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
+              >
+                <Link2 className="w-4 h-4" />
+                <span>رابط دعوة برتبة مسبقة</span>
+              </button>
+            )}
+
+            {(isStoreOwner || perms.canReviewCashDeposits || perms.canReviewLoanDeposits) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setGrantModalClientPosId(undefined);
+                  setShowGrantModal(true);
+                }}
+                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer"
+                title="منح رصيد مجاني أو سلفة لنقطة بيع"
+              >
+                <HandCoins className="w-4 h-4" />
+                <span>دعم رصيد مجاني أو سلفة</span>
+              </button>
+            )}
+
+            {(isStoreOwner || perms.canManageEmployees) && (
+              <button
+                type="button"
+                onClick={() => setSubTab('employees')}
+                className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  subTab === 'employees'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-amber-500/40'
+                }`}
+              >
+                <ShieldCheck className={`w-4 h-4 ${subTab === 'employees' ? 'text-slate-950' : 'text-amber-400'}`} />
+                <span>صلاحيات الموظفين</span>
+              </button>
+            )}
 
             <button
               onClick={() => setSubTab('notifications')}
@@ -776,57 +893,67 @@ export const SupplierDashboard: React.FC = () => {
         </div>
 
         {/* Supplier KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-800/80 text-xs">
-          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">طلبات شحن الأيدي باللعبة (للمتجر)</span>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">
-                {pendingIdOrders.length}
-              </span>
-              {pendingIdOrders.length > 0 ? (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 animate-pulse">
-                  بانتظار الشحن باللعبة
-                </span>
-              ) : (
-                <span className="px-1.5 py-0.5 rounded text-[10px] text-slate-500">
-                  لا توجد طلبات معلقة
-                </span>
-              )}
-            </div>
-          </div>
+        {(isStoreOwner || perms.canManagePlayerIdOrders || perms.canReviewCashDeposits || perms.canViewClients || perms.canUpgradeClientTiers) && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-800/80 text-xs">
+            {(isStoreOwner || perms.canManagePlayerIdOrders) && (
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">طلبات شحن الأيدي باللعبة (للمتجر)</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">
+                    {pendingIdOrders.length}
+                  </span>
+                  {pendingIdOrders.length > 0 ? (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 animate-pulse">
+                      بانتظار الشحن باللعبة
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] text-slate-500">
+                      لا توجد طلبات معلقة
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
-          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">طلبات شحن رصيد المحافظ</span>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-lg font-bold font-mono text-cyan-400 tabular-nums">
-                {pendingDeposits.length}
-              </span>
-              {pendingDeposits.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300">
-                  مراجعة الحوالة
+            {(isStoreOwner || perms.canReviewCashDeposits) && (
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">طلبات شحن رصيد المحافظ</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-lg font-bold font-mono text-cyan-400 tabular-nums">
+                    {pendingDeposits.length}
+                  </span>
+                  {pendingDeposits.length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300">
+                      مراجعة الحوالة
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isStoreOwner && (
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">رصيد مبيعات المتجر الإجمالي</span>
+                <span className="text-lg font-bold font-mono text-white tabular-nums">
+                  {supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
                 </span>
-              )}
-            </div>
-          </div>
+              </div>
+            )}
 
-          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">رصيد مبيعات المتجر الإجمالي</span>
-            <span className="text-lg font-bold font-mono text-white tabular-nums">
-              {supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
-            </span>
+            {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block">نقاط البيع والوكلاء</span>
+                <span className="text-lg font-bold font-mono text-purple-400 tabular-nums">
+                  {posClients.length} عميل
+                </span>
+              </div>
+            )}
           </div>
-
-          <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className="text-[10px] text-slate-400 block">نقاط البيع والوكلاء</span>
-            <span className="text-lg font-bold font-mono text-purple-400 tabular-nums">
-              {posClients.length} عميل
-            </span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Low-stock warning alert banner */}
-      {lowStockCount > 0 && (
+      {lowStockCount > 0 && (isStoreOwner || perms.canManageVoucherStock) && (
         <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-rose-950/60 via-amber-950/30 to-slate-900 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg animate-in fade-in">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -857,7 +984,7 @@ export const SupplierDashboard: React.FC = () => {
 
       {/* Supplier Navigation Subtabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2 text-xs font-medium">
-        {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs) && (
+        {isEmployeeTabAllowed('catalogs', perms, role) && (
           <button
             onClick={() => setSubTab('catalogs')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
@@ -867,79 +994,83 @@ export const SupplierDashboard: React.FC = () => {
             }`}
           >
             <Layers className="w-4 h-4 shrink-0" />
-            <span>الكاتالوجات والخدمات ({services.length})</span>
+            <span>الكاتالوجات والخدمات ({supplierServices.length})</span>
           </button>
         )}
 
-        {(!currentUser?.permissions || currentUser.permissions.canManageOrders) && (
-          <>
-            <button
-              onClick={() => setSubTab('pending_orders')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
-                subTab === 'pending_orders'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
-              }`}
-            >
-              <Gamepad2 className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>طلبات شحن عبر الايدي ({pendingIdOrders.length})</span>
-              {pendingIdOrders.length > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0"></span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setSubTab('account_orders')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
-                subTab === 'account_orders'
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
-              }`}
-            >
-              <Lock className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>طلبات شحن عبر الحساب ({pendingAccountOrders.length})</span>
-              {pendingAccountOrders.length > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
-              )}
-            </button>
-          </>
+        {isEmployeeTabAllowed('pending_orders', perms, role) && (
+          <button
+            onClick={() => setSubTab('pending_orders')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+              subTab === 'pending_orders'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
+            }`}
+          >
+            <Gamepad2 className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              {perms.canManagePlayerIdOrders
+                ? `طلبات شحن عبر الايدي (${pendingIdOrders.length})`
+                : `طلبات الشحن والبطاقات (${pendingOrders.length})`}
+            </span>
+            {pendingOrders.length > 0 && (
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0"></span>
+            )}
+          </button>
         )}
 
-        {(!currentUser?.permissions || currentUser.permissions.canReviewDeposits) && (
-          <>
-            <button
-              onClick={() => setSubTab('deposits')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
-                subTab === 'deposits'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
-              }`}
-            >
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>مراجعة الإيداعات ({pendingDeposits.length})</span>
-              {pendingDeposits.length > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setSubTab('loans')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
-                subTab === 'loans'
-                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
-              }`}
-            >
-              <HandCoins className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>سجل السُّلَف والسداد ({totalLoansActionBadge})</span>
-              {totalLoansActionBadge > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
-              )}
-            </button>
-          </>
+        {isEmployeeTabAllowed('account_orders', perms, role) && (
+          <button
+            onClick={() => setSubTab('account_orders')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+              subTab === 'account_orders'
+                ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
+            }`}
+          >
+            <Lock className="w-4 h-4 text-cyan-400 shrink-0" />
+            <span>طلبات شحن عبر الحساب ({pendingAccountOrders.length})</span>
+            {pendingAccountOrders.length > 0 && (
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
+            )}
+          </button>
         )}
 
-        {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs || currentUser.permissions.canManageVoucherStock) && (
+        {isEmployeeTabAllowed('deposits', perms, role) && (
+          <button
+            onClick={() => setSubTab('deposits')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+              subTab === 'deposits'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>مراجعة الإيداعات ({pendingDeposits.length})</span>
+            {pendingDeposits.length > 0 && (
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0"></span>
+            )}
+          </button>
+        )}
+
+        {isEmployeeTabAllowed('loans', perms, role) && (
+          <button
+            onClick={() => setSubTab('loans')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+              subTab === 'loans'
+                ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
+                : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
+            }`}
+          >
+            <HandCoins className="w-4 h-4 text-cyan-400 shrink-0" />
+            <span>سجل السُّلَف والسداد ({totalLoansActionBadge})</span>
+            {totalLoansActionBadge > 0 && (
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
+            )}
+          </button>
+        )}
+
+        {isEmployeeTabAllowed('vouchers', perms, role) && (
           <button
             onClick={() => setSubTab('vouchers')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
@@ -958,38 +1089,35 @@ export const SupplierDashboard: React.FC = () => {
           </button>
         )}
 
-        {(!currentUser?.permissions || currentUser.permissions.canManageClients) && (
-          <>
-            <button
-              onClick={() => setSubTab('clients')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
-                subTab === 'clients'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
-              }`}
-            >
-              <Users className="w-4 h-4 shrink-0" />
-              <span>إدارة العملاء</span>
-            </button>
-
-            <button
-              onClick={() => setSubTab('client_statements')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
-                subTab === 'client_statements'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
-              }`}
-            >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span>كشف الحسابات</span>
-            </button>
-          </>
+        {isEmployeeTabAllowed('clients', perms, role) && (
+          <button
+            onClick={() => setSubTab('clients')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              subTab === 'clients'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
+            }`}
+          >
+            <Users className="w-4 h-4 shrink-0" />
+            <span>إدارة العملاء</span>
+          </button>
         )}
 
-        {(!currentUser?.permissions ||
-          currentUser.permissions.canManageBankAccounts ||
-          currentUser.permissions.canReviewDeposits ||
-          currentUser.permissions.canReviewCashDeposits) && (
+        {isEmployeeTabAllowed('client_statements', perms, role) && (
+          <button
+            onClick={() => setSubTab('client_statements')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+              subTab === 'client_statements'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 shrink-0" />
+            <span>التقارير وكشف الحسابات</span>
+          </button>
+        )}
+
+        {isEmployeeTabAllowed('bank_accounts', perms, role) && (
           <button
             onClick={() => setSubTab('bank_accounts')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 cursor-pointer ${
@@ -1003,7 +1131,7 @@ export const SupplierDashboard: React.FC = () => {
           </button>
         )}
 
-        {role !== 'employee' && (
+        {isEmployeeTabAllowed('employees', perms, role) && (
           <button
             onClick={() => setSubTab('employees')}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
@@ -1038,9 +1166,10 @@ export const SupplierDashboard: React.FC = () => {
       </div>
 
       {/* SUBTAB 1: CATALOGS & MULTI-TIER SERVICES */}
-      {subTab === 'catalogs' && (
+      {subTab === 'catalogs' && isEmployeeTabAllowed('catalogs', perms, role) && (
         <div className="space-y-6">
           {/* Executive Summary Card of Code Stock for Packages & Categories */}
+          {(isStoreOwner || perms.canManageVoucherStock) && (
           <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3.5 text-xs shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
@@ -1097,6 +1226,7 @@ export const SupplierDashboard: React.FC = () => {
               </div>
             </div>
           </div>
+          )}
 
           <div className="flex items-center justify-between">
             <div>
@@ -1105,13 +1235,15 @@ export const SupplierDashboard: React.FC = () => {
                 تسعير الخدمات لكل رتبة: مميز ٦٠ ر.س · ذهبي ٧٠ ر.س · فضي ٨٠ ر.س · نحاسي ٩٠ ر.س · عادي ١٠٠ ر.س
               </p>
             </div>
-            <button
-              onClick={() => setShowAddService(true)}
-              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center gap-1"
-            >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span>إضافة خدمة جديدة</span>
-            </button>
+            {(isStoreOwner || perms.canAddServices) && (
+              <button
+                onClick={() => setShowAddService(true)}
+                className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center gap-1"
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span>إضافة خدمة جديدة</span>
+              </button>
+            )}
           </div>
 
           {/* Catalogs Pills */}
@@ -1149,7 +1281,7 @@ export const SupplierDashboard: React.FC = () => {
                     </div>
                   )}
                   <div className="text-[11px] text-slate-400 line-clamp-1">{cat.descriptionAr}</div>
-                  {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs) && (
+                  {(isStoreOwner || perms.canAddCatalogs) && (
                     <div className="pt-2 border-t border-slate-800/80 flex items-center justify-end">
                       {canModify ? (
                         <button
@@ -1178,21 +1310,33 @@ export const SupplierDashboard: React.FC = () => {
           <div className="space-y-4">
             {supplierServices.map(srv => {
               const cat = catalogs.find(c => c.id === srv.catalogId);
+              const isGiftCat = isCatalogFreeGifts(cat);
               const isVoucherService = serviceRequiresVoucherWarehouse(srv.deliveryMethods);
+              const giftTargetSummary = !isGiftCat
+                ? null
+                : srv.giftTargetType === 'specific_clients'
+                ? `مخصصة لـ ${srv.giftTargetPosIds?.length || 0} عميل`
+                : srv.giftTargetType === 'specific_tiers'
+                ? `مخصصة لـ ${srv.giftTargetTiers?.length || 0} رتب`
+                : srv.giftTargetType === 'all_tiers'
+                ? 'ظاهرة لجميع العملاء'
+                : 'لحاملي ميزة الهدايا';
               return (
-                <div key={srv.id} className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
+                <div key={srv.id} className={`p-4 sm:p-5 rounded-3xl bg-slate-900 border space-y-4 ${isGiftCat ? 'border-purple-500/40' : 'border-slate-800'}`}>
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden">
+                      <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${isGiftCat ? 'bg-purple-500/15 border-purple-500/40 text-purple-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'}`}>
                         {srv.imageUrl ? (
                           <img src={srv.imageUrl} alt={srv.nameAr} className="w-full h-full object-cover" />
+                        ) : isGiftCat ? (
+                          <Gift className="w-5 h-5 text-purple-400" />
                         ) : (
                           <Gamepad2 className="w-5 h-5" />
                         )}
                       </div>
                       <div>
                         <div className="flex items-center flex-wrap gap-2">
-                          <h3 className="font-bold text-base text-white">{srv.nameAr}</h3>
+                          <h3 className={`font-bold text-base ${isGiftCat ? 'text-purple-400' : 'text-white'}`}>{srv.nameAr}</h3>
                           <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-400 text-[10px]">
                             {cat?.nameAr}
                           </span>
@@ -1202,12 +1346,41 @@ export const SupplierDashboard: React.FC = () => {
                               <span>متوفرة دائماً (بدون عدد)</span>
                             </span>
                           )}
-                          {isCatalogFreeGifts(cat) && (
+                          {isGiftCat && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-semibold">
                               <Gift className="w-3 h-3" />
-                              <span>هدية مجانية (0.00 ر.س)</span>
+                              <span>هدية مجانية (0.00 ر.س) · {giftTargetSummary}</span>
                             </span>
                           )}
+                          {isGiftCat && (() => {
+                            const maxUses = normalizeGiftMaxUses(srv.giftMaxUsesPerClient);
+                            const expiresMs = srv.giftExpiresAt ? Date.parse(srv.giftExpiresAt) : NaN;
+                            const hasExpiry = Number.isFinite(expiresMs);
+                            const isGiftExpired = hasExpiry && Date.now() >= expiresMs;
+                            return (
+                              <>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-950/60 text-purple-200 border border-purple-500/30 text-[10px] font-semibold">
+                                  <span>الاستخدام: {maxUses === 1 ? 'مرة واحدة/عميل' : `${maxUses} مرات/عميل`}</span>
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold ${
+                                    isGiftExpired
+                                      ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                      : 'bg-slate-950 text-purple-200 border-purple-500/30'
+                                  }`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  <span>
+                                    {hasExpiry
+                                      ? isGiftExpired
+                                        ? 'انتهت فترة الهدية (غير مفعلة للعملاء)'
+                                        : `تبقى: ${formatGiftRemainingTimeAr(expiresMs - Date.now())}`
+                                      : 'فترة مفتوحة'}
+                                  </span>
+                                </span>
+                              </>
+                            );
+                          })()}
                           {!srv.isActive && (
                             <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px]">
                               متوقفة مؤقتاً
@@ -1218,7 +1391,7 @@ export const SupplierDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    {(!currentUser?.permissions || currentUser.permissions.canManageCatalogs) && (
+                    {(isStoreOwner || perms.canAddServices || perms.canEditServicePrices) && (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -1227,7 +1400,7 @@ export const SupplierDashboard: React.FC = () => {
                           title="تعديل بيانات الخدمة والأسعار والباقات"
                         >
                           <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                          <span>تعديل الخدمة والأسعار</span>
+                          <span>{perms.canAddServices ? 'تعديل الخدمة والأسعار' : 'تعديل الأسعار'}</span>
                         </button>
                       </div>
                     )}
@@ -1372,7 +1545,7 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* SUBTAB 2: IN-GAME PLAYER ID FULFILLMENT CENTER FOR THE المتجر / SUPPLIER */}
-      {subTab === 'pending_orders' && (
+      {subTab === 'pending_orders' && isEmployeeTabAllowed('pending_orders', perms, role) && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -1387,17 +1560,19 @@ export const SupplierDashboard: React.FC = () => {
 
             {/* Filter buttons */}
             <div className="flex items-center gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-2xl text-xs shrink-0">
-              <button
-                type="button"
-                onClick={() => setOrderFilterTab('pending_id')}
-                className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
-                  orderFilterTab === 'pending_id'
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                شحن الأيدي المعلقة ({pendingIdOrders.length})
-              </button>
+              {perms.canManagePlayerIdOrders && (
+                <button
+                  type="button"
+                  onClick={() => setOrderFilterTab('pending_id')}
+                  className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
+                    orderFilterTab === 'pending_id'
+                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  شحن الأيدي المعلقة ({pendingIdOrders.length})
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1427,7 +1602,7 @@ export const SupplierDashboard: React.FC = () => {
 
           {/* Orders List */}
           <div className="space-y-4">
-            {orders
+            {visibleSupplierOrders
               .filter(order => {
                 if (orderFilterTab === 'pending_id') {
                   return (order.status === 'pending_supplier' || order.status === 'in_progress') && order.deliveryMethod === 'player_id';
@@ -1578,11 +1753,30 @@ export const SupplierDashboard: React.FC = () => {
                           <span className="text-[10px] text-cyan-300">انسخ البيانات لتسجيل الدخول وشحن الحساب</span>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                          {/* Account Type */}
+                          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                            <div className="truncate flex-1">
+                              <span className="text-[10px] text-slate-400 block">نوع الحساب:</span>
+                              <span className="text-xs text-purple-300 font-bold select-all truncate block">
+                                {order.deliveryDetails.accountType || 'غير محدد'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyField(order.deliveryDetails.accountType || '', `${order.id}_acctype`, 'نوع الحساب')}
+                              disabled={!order.deliveryDetails.accountType}
+                              className="px-2.5 py-1.5 rounded-lg bg-purple-950 hover:bg-purple-900 border border-purple-500/30 text-purple-300 text-xs font-bold flex items-center gap-1 shrink-0 disabled:opacity-40"
+                            >
+                              {copiedFields[`${order.id}_acctype`] ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedFields[`${order.id}_acctype`] ? 'تم' : 'نسخ'}</span>
+                            </button>
+                          </div>
+
                           {/* Email */}
                           <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
                             <div className="truncate flex-1">
-                              <span className="text-[10px] text-slate-400 block">البريد:</span>
+                              <span className="text-[10px] text-slate-400 block">البريد الإلكتروني / الحساب:</span>
                               <span className="font-mono text-xs text-cyan-200 font-bold select-all truncate block">
                                 {order.deliveryDetails.accountEmail || 'لا يوجد بريد'}
                               </span>
@@ -1733,7 +1927,7 @@ export const SupplierDashboard: React.FC = () => {
                 );
               })}
 
-            {orders.filter(order => {
+            {visibleSupplierOrders.filter(order => {
               if (orderFilterTab === 'pending_id') {
                 return (order.status === 'pending_supplier' || order.status === 'in_progress') && order.deliveryMethod === 'player_id';
               }
@@ -1760,7 +1954,7 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* SUBTAB: ACCOUNT LOGIN ORDERS FULFILLMENT & OTP SENDER */}
-      {subTab === 'account_orders' && (
+      {subTab === 'account_orders' && isEmployeeTabAllowed('account_orders', perms, role) && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -1778,7 +1972,7 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           <div className="space-y-4">
-            {orders
+            {visibleSupplierOrders
               .filter(o => o.deliveryMethod === 'account_login')
               .map(order => {
                 const isPending = order.status === 'pending_supplier' || order.status === 'in_progress';
@@ -1848,14 +2042,62 @@ export const SupplierDashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Two Dedicated Copyable Fields: Email & Password */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {/* Three Dedicated Copyable Fields: Account Type, Email & Password */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* Account Type Field */}
+                        <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 shadow-sm">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                              <Gamepad2 className="w-3.5 h-3.5 text-purple-400" />
+                              <span>نوع الحساب:</span>
+                            </label>
+                            <span className="text-[10px] text-purple-400 font-mono">منصة الدخول</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div
+                              onClick={() => order.deliveryDetails.accountType && handleCopyField(order.deliveryDetails.accountType, `${order.id}_acctype`, 'نوع الحساب')}
+                              className={`flex-1 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs font-bold truncate select-all ${
+                                order.deliveryDetails.accountType
+                                  ? 'text-purple-200 cursor-pointer hover:border-purple-500 transition-colors'
+                                  : 'text-slate-500'
+                              }`}
+                              title={order.deliveryDetails.accountType ? 'اضغط للنسخ السريع' : ''}
+                            >
+                              {order.deliveryDetails.accountType || 'غير محدد من العميل'}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyField(order.deliveryDetails.accountType || '', `${order.id}_acctype`, 'نوع الحساب')}
+                              disabled={!order.deliveryDetails.accountType}
+                              className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 ${
+                                !order.deliveryDetails.accountType
+                                  ? 'bg-slate-900 text-slate-600 border border-slate-800 cursor-not-allowed'
+                                  : copiedFields[`${order.id}_acctype`]
+                                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                                  : 'bg-purple-950 hover:bg-purple-900 border border-purple-500/40 text-purple-300 cursor-pointer'
+                              }`}
+                            >
+                              {copiedFields[`${order.id}_acctype`] ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-slate-950" />
+                                  <span>تم</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>نسخ</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
                         {/* Email Field */}
                         <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 shadow-sm">
                           <div className="flex items-center justify-between">
                             <label className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
                               <Mail className="w-3.5 h-3.5 text-cyan-400" />
-                              <span>البريد الإلكتروني للعميل:</span>
+                              <span>البريد الإلكتروني / الحساب:</span>
                             </label>
                             <span className="text-[10px] text-cyan-400 font-mono">حقل قابل للنسخ</span>
                           </div>
@@ -2036,7 +2278,7 @@ export const SupplierDashboard: React.FC = () => {
                 );
               })}
 
-            {orders.filter(o => o.deliveryMethod === 'account_login').length === 0 && (
+            {visibleSupplierOrders.filter(o => o.deliveryMethod === 'account_login').length === 0 && (
               <div className="py-12 text-center rounded-3xl bg-slate-900 border border-slate-800 space-y-2">
                 <Lock className="w-10 h-10 text-slate-600 mx-auto" />
                 <h3 className="font-bold text-white text-sm">لا توجد طلبات شحن عبر الحساب حالياً</h3>
@@ -2050,7 +2292,7 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* SUBTAB 3: DEPOSIT REQUESTS REVIEW (User's requirement) */}
-      {subTab === 'deposits' && (
+      {subTab === 'deposits' && isEmployeeTabAllowed('deposits', perms, role) && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -2361,37 +2603,41 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* SUBTAB FOR LOANS & CREDIT REGISTRY */}
-      {subTab === 'loans' && (
+      {subTab === 'loans' && isEmployeeTabAllowed('loans', perms, role) && (
         <LoansRegistryView filterSupplierId={supplier.id} />
       )}
 
       {/* SUBTAB FOR BANK ACCOUNTS & TRANSFER DELEGATION */}
-      {subTab === 'bank_accounts' && (
+      {subTab === 'bank_accounts' && isEmployeeTabAllowed('bank_accounts', perms, role) && (
         <BankAccountsView />
       )}
 
       {/* SUBTAB 4: VOUCHER WAREHOUSES BY CATEGORY */}
-      {subTab === 'vouchers' && (
+      {subTab === 'vouchers' && isEmployeeTabAllowed('vouchers', perms, role) && (
         <VoucherWarehousesView />
       )}
 
       {/* SUBTAB 5: POS CLIENTS & TIER UPGRADE (User's requirement) */}
-      {subTab === 'clients' && (
+      {subTab === 'clients' && isEmployeeTabAllowed('clients', perms, role) && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-bold text-white">إدارة العملاء والوكلاء وترقية الرتب</h2>
               <p className="text-xs text-slate-400">
-                يمكن للمتجر ترقية رتبة العميل فوراً إلى (نحاسي أو فضي أو ذهبي أو مميز) لتغيير أسعار المتجر لديه فورياً.
+                {(isStoreOwner || perms.canUpgradeClientTiers)
+                  ? 'يمكن للمتجر ترقية رتبة العميل فوراً إلى (نحاسي أو فضي أو ذهبي أو مميز) لتغيير أسعار المتجر لديه فورياً.'
+                  : 'صلاحية الاطلاع على العملاء مفعلة (عرض فقط بدون تعديل الرتب أو الميزات).'}
               </p>
             </div>
-            <button
-              onClick={() => setShowInviteModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1"
-            >
-              <Link2 className="w-3.5 h-3.5" />
-              <span>إرسال رابط تسجيل برتبة محددة</span>
-            </button>
+            {(isStoreOwner || perms.canUpgradeClientTiers) && (
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1"
+              >
+                <Link2 className="w-3.5 h-3.5" />
+                <span>إرسال رابط تسجيل برتبة محددة</span>
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2433,130 +2679,162 @@ export const SupplierDashboard: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Grant balance / loan button for this specific client */}
+                  {(isStoreOwner || perms.canReviewCashDeposits || perms.canReviewLoanDeposits) && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGrantModalClientPosId(client.id);
+                          setShowGrantModal(true);
+                        }}
+                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 hover:from-emerald-500/30 hover:to-teal-500/30 text-emerald-300 border border-emerald-500/40 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                        title="منح رصيد مجاني أو سلفة لهذا العميل مباشرة"
+                      >
+                        <HandCoins className="w-4 h-4 text-emerald-400" />
+                        <span>دعم رصيد مجاني أو سلفة لهذا العميل</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* Tier selector & Account Features (Tier + Features co-located) */}
-                  <div className="space-y-3 pt-1">
-                    {/* Tier selector */}
-                    <div className="space-y-1.5">
-                      <label className="block text-[11px] font-semibold text-slate-300">
-                        رتبة الحساب (تعديل الرتبة وتأثيرها على الأسعار):
-                      </label>
-                      <div className="grid grid-cols-5 gap-1 text-center">
-                        {(Object.keys(TIERS_CONFIG) as AccountTier[]).map(tKey => {
-                          const t = TIERS_CONFIG[tKey];
-                          const isSelected = client.tier === tKey;
+                  {(isStoreOwner || perms.canUpgradeClientTiers) ? (
+                    <div className="space-y-3 pt-1">
+                      {/* Tier selector */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-semibold text-slate-300">
+                          رتبة الحساب (تعديل الرتبة وتأثيرها على الأسعار):
+                        </label>
+                        <div className="grid grid-cols-5 gap-1 text-center">
+                          {(Object.keys(TIERS_CONFIG) as AccountTier[]).map(tKey => {
+                            const t = TIERS_CONFIG[tKey];
+                            const isSelected = client.tier === tKey;
 
-                          return (
-                            <button
-                              key={tKey}
-                              type="button"
-                              onClick={() => updatePosTier(client.id, tKey)}
-                              className={`py-1.5 px-1 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
-                                isSelected
-                                  ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-sm'
-                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              {t.nameAr}
-                            </button>
-                          );
-                        })}
+                            return (
+                              <button
+                                key={tKey}
+                                type="button"
+                                onClick={() => updatePosTier(client.id, tKey)}
+                                className={`py-1.5 px-1 rounded-xl border text-[11px] font-bold transition-all cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-sm'
+                                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                {t.nameAr}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Account Features section */}
+                      <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
+                        <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5 border-b border-slate-800/80 pb-1.5">
+                          <Check className="w-3.5 h-3.5 text-amber-400" />
+                          <span>ميزات الحساب المخصصة:</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {/* Loan Request Privilege */}
+                          <button
+                            type="button"
+                            onClick={() => togglePosLoanPrivilege(client.id)}
+                            className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              client.canRequestLoans
+                                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/25'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <HandCoins className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span className="truncate text-[11px]">ميزة طلب السلفة</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
+                              client.canRequestLoans ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
+                            }`}>
+                              {client.canRequestLoans ? 'مفعلة ✓' : 'مقفلة'}
+                            </span>
+                          </button>
+
+                          {/* Receive Supplier Transfers Privilege */}
+                          <button
+                            type="button"
+                            onClick={() => togglePosReceiveTransfersPrivilege(client.id)}
+                            className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              client.canReceiveSupplierTransfers
+                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <Landmark className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="truncate text-[11px]">استلام حوالات المتجر</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
+                              client.canReceiveSupplierTransfers ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
+                            }`}>
+                              {client.canReceiveSupplierTransfers ? 'مفعلة ✓' : 'مقفلة'}
+                            </span>
+                          </button>
+
+                          {/* Bonus Privilege */}
+                          <button
+                            type="button"
+                            onClick={() => togglePosBonusPrivilege(client.id)}
+                            className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              client.canGetBonus
+                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span className="truncate text-[11px]">ميزة الحصول على بونص</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
+                              client.canGetBonus ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
+                            }`}>
+                              {client.canGetBonus ? 'مفعلة ✓' : 'مقفلة'}
+                            </span>
+                          </button>
+
+                          {/* Gifts & Free Offers Privilege */}
+                          <button
+                            type="button"
+                            onClick={() => togglePosGiftsPrivilege(client.id)}
+                            className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              client.canViewGifts
+                                ? 'bg-purple-500/15 text-purple-300 border-purple-500/40 hover:bg-purple-500/25'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 truncate">
+                              <Gift className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                              <span className="truncate text-[11px]">الهدايا والعروض المجانية</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
+                              client.canViewGifts ? 'bg-purple-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
+                            }`}>
+                              {client.canViewGifts ? 'مفعلة ✓' : 'مقفلة'}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </div>
-
-                    {/* Account Features section */}
-                    <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                      <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5 border-b border-slate-800/80 pb-1.5">
-                        <Check className="w-3.5 h-3.5 text-amber-400" />
-                        <span>ميزات الحساب المخصصة:</span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {/* Loan Request Privilege */}
-                        <button
-                          type="button"
-                          onClick={() => togglePosLoanPrivilege(client.id)}
-                          className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                            client.canRequestLoans
-                              ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/25'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <HandCoins className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                            <span className="truncate text-[11px]">ميزة طلب السلفة</span>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
-                            client.canRequestLoans ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
-                          }`}>
-                            {client.canRequestLoans ? 'مفعلة ✓' : 'مقفلة'}
-                          </span>
-                        </button>
-
-                        {/* Receive Supplier Transfers Privilege */}
-                        <button
-                          type="button"
-                          onClick={() => togglePosReceiveTransfersPrivilege(client.id)}
-                          className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                            client.canReceiveSupplierTransfers
-                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <Landmark className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                            <span className="truncate text-[11px]">استلام حوالات المتجر</span>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
-                            client.canReceiveSupplierTransfers ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
-                          }`}>
-                            {client.canReceiveSupplierTransfers ? 'مفعلة ✓' : 'مقفلة'}
-                          </span>
-                        </button>
-
-                        {/* Bonus Privilege */}
-                        <button
-                          type="button"
-                          onClick={() => togglePosBonusPrivilege(client.id)}
-                          className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                            client.canGetBonus
-                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                            <span className="truncate text-[11px]">ميزة الحصول على بونص</span>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
-                            client.canGetBonus ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
-                          }`}>
-                            {client.canGetBonus ? 'مفعلة ✓' : 'مقفلة'}
-                          </span>
-                        </button>
-
-                        {/* Gifts & Free Offers Privilege */}
-                        <button
-                          type="button"
-                          onClick={() => togglePosGiftsPrivilege(client.id)}
-                          className={`p-2 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                            client.canViewGifts
-                              ? 'bg-purple-500/15 text-purple-300 border-purple-500/40 hover:bg-purple-500/25'
-                              : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 truncate">
-                            <Gift className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                            <span className="truncate text-[11px]">الهدايا والعروض المجانية</span>
-                          </div>
-                          <span className={`px-2 py-0.5 rounded text-[10px] shrink-0 font-mono ${
-                            client.canViewGifts ? 'bg-purple-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-500'
-                          }`}>
-                            {client.canViewGifts ? 'مفعلة ✓' : 'مقفلة'}
-                          </span>
-                        </button>
-                      </div>
+                  ) : (
+                    <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-400">
+                        الرتبة الحالية:{' '}
+                        <strong className={`px-2 py-0.5 rounded ${currentTier.badgeColor} ${currentTier.textColor}`}>
+                          {currentTier.nameAr}
+                        </strong>
+                      </span>
+                      <span className="text-[10px] text-slate-500">
+                        صلاحية اطلاع فقط بدون تعديل الرتب أو الميزات
+                      </span>
                     </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -2565,12 +2843,12 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* SUBTAB: OFFICE EMPLOYEES & PERMISSIONS */}
-      {subTab === 'employees' && (
+      {subTab === 'employees' && isEmployeeTabAllowed('employees', perms, role) && (
         <OfficeEmployeesView employees={supplier.employees} />
       )}
 
       {/* SUBTAB 6: CLIENT STATEMENTS & DEPOSITS & PURCHASES (User's requirement: كشف حساب للعملاء ومشترياتهم وايداعاتهم) */}
-      {subTab === 'client_statements' && (
+      {subTab === 'client_statements' && isEmployeeTabAllowed('client_statements', perms, role) && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -2647,8 +2925,16 @@ export const SupplierDashboard: React.FC = () => {
               <span className="text-base font-bold font-mono text-emerald-400 tabular-nums">+{supplierStatementTotals.totalCredit.toFixed(2)} ر.س</span>
             </div>
             <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-slate-400 block text-[10px]">رصيد المتجر</span>
-              <span className="text-base font-bold font-mono text-amber-400 tabular-nums">{supplier.walletBalance.toFixed(2)} ر.س</span>
+              <span className="text-slate-400 block text-[10px]">
+                {isStoreOwner ? 'رصيد المتجر' : 'صافي حركة التقرير'}
+              </span>
+              <span className="text-base font-bold font-mono text-amber-400 tabular-nums">
+                {(isStoreOwner
+                  ? supplier.walletBalance
+                  : supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit
+                ).toFixed(2)}{' '}
+                ر.س
+              </span>
             </div>
           </div>
 
@@ -2700,17 +2986,17 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* Add Service Modal */}
-      {showAddService && (
+      {showAddService && (isStoreOwner || perms.canAddServices) && (
         <AddServiceModal onClose={() => setShowAddService(false)} />
       )}
 
       {/* Invite Link Modal */}
-      {showInviteModal && (
+      {showInviteModal && (isStoreOwner || perms.canUpgradeClientTiers) && (
         <InviteLinkModal onClose={() => setShowInviteModal(false)} />
       )}
 
       {/* Add Catalog Modal */}
-      {showAddCatalog && (
+      {showAddCatalog && (isStoreOwner || perms.canAddCatalogs) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-4 text-slate-100">
             <h3 className="font-bold text-base text-white">إضافة كاتالوج جديد</h3>
@@ -2784,7 +3070,7 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* Edit Supplier Profile Modal */}
-      {showEditProfileModal && (
+      {showEditProfileModal && isStoreOwner && (
         <EditSupplierProfileModal
           initialSection={editProfileSection}
           onClose={() => setShowEditProfileModal(false)}
@@ -2812,7 +3098,7 @@ export const SupplierDashboard: React.FC = () => {
       />
 
       {/* Edit Catalog Modal */}
-      {editingCatalog && (
+      {editingCatalog && (isStoreOwner || perms.canAddCatalogs) && (
         <EditCatalogModal
           catalog={editingCatalog}
           onClose={() => setEditingCatalog(null)}
@@ -2820,10 +3106,21 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* Edit Service Modal */}
-      {editingService && (
+      {editingService && (isStoreOwner || perms.canAddServices || perms.canEditServicePrices) && (
         <EditServiceModal
           service={editingService}
           onClose={() => setEditingService(null)}
+        />
+      )}
+
+      {/* Grant Balance Or Loan Modal */}
+      {showGrantModal && (isStoreOwner || perms.canReviewCashDeposits || perms.canReviewLoanDeposits) && (
+        <GrantBalanceOrLoanModal
+          initialPosId={grantModalClientPosId}
+          onClose={() => {
+            setShowGrantModal(false);
+            setGrantModalClientPosId(undefined);
+          }}
         />
       )}
 

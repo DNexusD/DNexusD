@@ -23,10 +23,11 @@ export interface EmployeePermissions {
   // 5. تغذية الأكواد
   canManageVoucherStock?: boolean;
 
-  // 6. الاطلاع على العملاء وترقيتهم
+  // 6. الاطلاع على العملاء والتقارير وترقية العملاء
   canManageClients?: boolean;
   canViewClients?: boolean;
   canUpgradeClientTiers?: boolean;
+  canViewReports?: boolean;
 
   // 7. إضافة الموظفين
   canManageEmployees?: boolean;
@@ -210,6 +211,11 @@ export interface DigitalService {
   giftTargetType?: 'all_tiers' | 'specific_tiers' | 'specific_clients';
   giftTargetTiers?: AccountTier[];
   giftTargetPosIds?: string[];
+  giftMaxUsesPerClient?: number;
+  giftDurationValue?: number;
+  giftDurationUnit?: 'hours' | 'days';
+  giftExpiresAt?: string;
+  giftActivatedAt?: string;
 }
 
 export interface POSClient {
@@ -512,6 +518,7 @@ export interface Order {
   deliveryDetails: {
     playerId?: string;
     playerNickname?: string;
+    accountType?: string;
     accountEmail?: string;
     accountPassword?: string;
     verificationCodeEntered?: string;

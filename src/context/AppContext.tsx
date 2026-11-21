@@ -47,6 +47,17 @@ import {
   validateAdminAccountInput
 } from '../utils/adminAccounts';
 import {
+  filterSupplierNotificationsForEmployee,
+  getFirstAllowedSupplierTab,
+  isOrderVisibleToEmployee,
+  normalizeEmployeePermissions,
+  normalizeStoreEmail,
+  resolveEffectiveEmployeePermissions,
+  resolveStoreActorByEmail,
+  validateOfficeEmployeeInput,
+  verifyEmployeeCredentials
+} from '../utils/employeePermissions';
+import {
   DEFAULT_PLATFORM_INTERFACE_SETTINGS,
   mergePlatformSettings,
   normalizeDropdownValue
@@ -74,7 +85,7 @@ import {
   appendUsedGiftServiceId,
   calculateBaseSupplierFee,
   calculateServicePurchasePricing,
-  hasClientUsedGiftService,
+  evaluateClientGiftServiceStatus,
   isCatalogFreeGifts,
   resolveGiftClaimFeePayment,
   settlePendingGiftFeesOnRecharge,
@@ -224,6 +235,7 @@ interface AppContextType {
     deliveryDetails: {
       playerId?: string;
       playerNickname?: string;
+      accountType?: string;
       accountEmail?: string;
       accountPassword?: string;
       verificationCodeEntered?: string;
@@ -295,6 +307,12 @@ interface AppContextType {
   }) => Promise<{ success: boolean; requestId?: string; request?: LoanRepaymentRequest; error?: string }>;
   approveLoanRepaymentRequest: (requestId: string, overrideAmount?: number) => void;
   rejectLoanRepaymentRequest: (requestId: string, reason?: string) => void;
+  grantSupplierBalanceOrLoan: (params: {
+    posId: string;
+    amount: number;
+    supportType: 'cash' | 'loan';
+    reason: string;
+  }) => { success: boolean; error?: string };
   
   completeSupplierOrder: (orderId: string, notes?: string) => void;
   rejectSupplierOrder: (orderId: string, reason?: string) => void;
@@ -367,8 +385,8 @@ interface AppContextType {
     isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }) => OfficeEmployee;
-  updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => void;
+  }) => { success: boolean; error?: string; employee?: OfficeEmployee };
+  updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => { success: boolean; error?: string };
   removeOfficeEmployee: (empId: string) => void;
   addAdminAccount: (accountData: {
     name: string;
@@ -410,8 +428,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (parsed?.role === 'super_admin') {
           return getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(parsed, 'super_admin'));
         }
-        if (parsed?.role === 'supplier' || parsed?.role === 'employee') {
+        if (parsed?.role === 'supplier') {
           return 'catalogs';
+        }
+        if (parsed?.role === 'employee') {
+          return getFirstAllowedSupplierTab(
+            resolveEffectiveEmployeePermissions(parsed, 'employee'),
+            'employee'
+          );
         }
       }
     } catch {
@@ -448,7 +472,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return [];
   });
 
-  const [currentSupplierId, setCurrentSupplierId] = useState<string>('');
+  const [currentSupplierId, setCurrentSupplierId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('digipos_auth_user');
+      if (saved) {
+        const parsed = JSON.parse(saved) as AuthUser;
+        if (parsed?.role === 'employee' && (parsed.supplierId || parsed.associatedId)) {
+          return parsed.supplierId || parsed.associatedId || '';
+        }
+        if (parsed?.role === 'supplier' && parsed.associatedId) {
+          return parsed.associatedId;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return '';
+  });
   
   const supplier = suppliers.find(s => s.id === currentSupplierId) || suppliers[0] || EMPTY_SUPPLIER_FALLBACK;
   
@@ -854,14 +894,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let userRole: UserRole = 'pos_client';
         let adminAccountId: string | undefined;
         let adminPermissions: AdminPermissions | undefined;
+        let employeeId: string | undefined;
+        let supplierId: string | undefined;
+        let permissions: EmployeePermissions | undefined;
         let roleTitle: string | undefined;
         let resolvedName = fbUser.displayName || 'مستخدم فايربيس';
+        let associatedId = currentPosIdRef.current;
 
         // Check sub-admin accounts first before generic admin email checks
         const matchedAdminAcc = (superAdminRef.current.adminAccounts || []).find(
           a => a.email?.trim().toLowerCase() === cleanEmail
         );
-        const matchedSup = suppliersRef.current.find(s => s.email?.toLowerCase() === cleanEmail);
+        const storeActor = resolveStoreActorByEmail(cleanEmail, suppliersRef.current);
 
         if (matchedAdminAcc) {
           if (!matchedAdminAcc.isActive) {
@@ -871,6 +915,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           userRole = 'super_admin';
           resolvedName = matchedAdminAcc.name;
+          associatedId = 'admin';
           adminAccountId = matchedAdminAcc.id;
           adminPermissions = matchedAdminAcc.permissions;
           roleTitle = matchedAdminAcc.roleTitle;
@@ -890,13 +935,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setActiveNavTab(firstTab);
         } else if (cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin')) {
           userRole = 'super_admin';
+          associatedId = 'admin';
           setActiveNavTab('statement');
-        } else if (matchedSup || cleanEmail.includes('supplier')) {
+        } else if (storeActor?.kind === 'owner') {
           userRole = 'supplier';
-          if (matchedSup) setCurrentSupplierId(matchedSup.id);
+          resolvedName = storeActor.supplier.name || resolvedName;
+          associatedId = storeActor.supplier.id;
+          setCurrentSupplierId(storeActor.supplier.id);
+          setActiveNavTab('catalogs');
+        } else if (storeActor?.kind === 'employee') {
+          userRole = 'employee';
+          resolvedName = storeActor.employee.name || resolvedName;
+          associatedId = storeActor.supplier.id;
+          supplierId = storeActor.supplier.id;
+          employeeId = storeActor.employee.id;
+          roleTitle = storeActor.employee.roleTitle;
+          const normalizedPerms = normalizeEmployeePermissions(storeActor.employee.permissions);
+          permissions = normalizedPerms;
+          setCurrentSupplierId(storeActor.supplier.id);
+          setActiveNavTab(getFirstAllowedSupplierTab(normalizedPerms, 'employee'));
+        } else if (cleanEmail.includes('supplier')) {
+          userRole = 'supplier';
+          associatedId = currentSupplierIdRef.current || '';
           setActiveNavTab('catalogs');
         } else {
           userRole = 'pos_client';
+          associatedId = currentPosIdRef.current;
           setActiveNavTab('store');
         }
 
@@ -906,14 +970,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: resolvedName,
           role: userRole,
           phone: fbUser.phoneNumber || undefined,
-          associatedId:
-            userRole === 'super_admin'
-              ? 'admin'
-              : userRole === 'supplier'
-              ? (matchedSup?.id || currentSupplierIdRef.current || '')
-              : currentPosIdRef.current,
+          associatedId,
+          supplierId,
+          employeeId,
           adminAccountId,
           roleTitle,
+          permissions,
           adminPermissions
         };
         setCurrentUser(userObj);
@@ -990,7 +1052,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.LIST, 'posClients', handleTransientOffline);
     });
 
-    // 4. Suppliers live sync (Deduplicated by ID)
+    // 4. Suppliers live sync (Deduplicated by ID) + Live Employee Permission Sync
     const unsubSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
       const supMap = new Map<string, Supplier>();
       snapshot.forEach(docSnap => {
@@ -999,7 +1061,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supMap.set(sup.id, sup);
         }
       });
-      setSuppliers(Array.from(supMap.values()));
+      const syncedSuppliers = Array.from(supMap.values());
+      setSuppliers(syncedSuppliers);
+
+      if (syncedSuppliers.length > 0) {
+        setCurrentUser(prevUser => {
+          if (!prevUser) return prevUser;
+          const cleanPrevEmail = normalizeStoreEmail(prevUser.email);
+          if (prevUser.role === 'supplier') {
+            const ownerSup = syncedSuppliers.find(
+              s => s.id === prevUser.associatedId || normalizeStoreEmail(s.email) === cleanPrevEmail
+            );
+            if (ownerSup) {
+              setCurrentSupplierId(ownerSup.id);
+              return {
+                ...prevUser,
+                name: ownerSup.name,
+                associatedId: ownerSup.id,
+              };
+            }
+            return prevUser;
+          }
+          if (prevUser.role === 'employee') {
+            const targetSup = syncedSuppliers.find(
+              s => s.id === (prevUser.supplierId || prevUser.associatedId)
+            );
+            if (!targetSup) return prevUser;
+            // If email now belongs to store owner, upgrade to store owner
+            if (normalizeStoreEmail(targetSup.email) === cleanPrevEmail) {
+              setRole('supplier');
+              setCurrentSupplierId(targetSup.id);
+              return {
+                ...prevUser,
+                role: 'supplier',
+                name: targetSup.name,
+                associatedId: targetSup.id,
+                supplierId: undefined,
+                employeeId: undefined,
+                roleTitle: undefined,
+                permissions: undefined
+              };
+            }
+            const syncedEmp = (targetSup.employees || []).find(
+              e =>
+                (prevUser.employeeId && e.id === prevUser.employeeId) ||
+                normalizeStoreEmail(e.email) === cleanPrevEmail
+            );
+            if (!syncedEmp) {
+              // Employee removed by store owner -> revoke session immediately
+              return null;
+            }
+            setCurrentSupplierId(targetSup.id);
+            return {
+              ...prevUser,
+              name: syncedEmp.name,
+              email: normalizeStoreEmail(syncedEmp.email),
+              phone: syncedEmp.phone,
+              associatedId: targetSup.id,
+              supplierId: targetSup.id,
+              employeeId: syncedEmp.id,
+              roleTitle: syncedEmp.roleTitle,
+              permissions: normalizeEmployeePermissions(syncedEmp.permissions)
+            };
+          }
+          return prevUser;
+        });
+      }
     }, (err) => {
       handleSnapshotError(err, OperationType.LIST, 'suppliers', handleTransientOffline);
     });
@@ -1200,24 +1327,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let associatedId = '';
       let adminAccountId: string | undefined;
       let adminPermissions: AdminPermissions | undefined;
+      let employeeSupplierId: string | undefined;
+      let employeeId: string | undefined;
+      let employeePermissions: EmployeePermissions | undefined;
       let roleTitle: string | undefined;
 
       const matchedAdminAcc = (superAdmin.adminAccounts || []).find(
         a => a.email?.trim().toLowerCase() === cleanEmail
       );
-      const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
+      const storeActor = resolveStoreActorByEmail(cleanEmail, suppliers);
       const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
-
-      let matchedEmployeeSupplier: Supplier | undefined;
-      let matchedEmployeeName = '';
-      for (const sup of suppliers) {
-        if (sup.employees && sup.employees.some(e => e.email?.toLowerCase() === cleanEmail)) {
-          matchedEmployeeSupplier = sup;
-          const emp = sup.employees.find(e => e.email?.toLowerCase() === cleanEmail);
-          if (emp) matchedEmployeeName = emp.name;
-          break;
-        }
-      }
 
       if (matchedAdminAcc) {
         if (!matchedAdminAcc.isActive) {
@@ -1250,20 +1369,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           )
         );
         setActiveNavTab(firstTab);
-      } else if (matchedSup) {
+      } else if (storeActor?.kind === 'owner') {
         userRole = 'supplier';
-        userName = matchedSup.name;
-        associatedId = matchedSup.id;
-        setCurrentSupplierId(matchedSup.id);
+        userName = storeActor.supplier.name;
+        associatedId = storeActor.supplier.id;
+        setCurrentSupplierId(storeActor.supplier.id);
         setIsSupplierSelectionRequired(false);
         setActiveNavTab('catalogs');
-      } else if (matchedEmployeeSupplier) {
-        userRole = 'supplier';
-        userName = `${matchedEmployeeName} (موظف مكتب)`;
-        associatedId = matchedEmployeeSupplier.id;
-        setCurrentSupplierId(matchedEmployeeSupplier.id);
+      } else if (storeActor?.kind === 'employee') {
+        userRole = 'employee';
+        userName = storeActor.employee.name;
+        associatedId = storeActor.supplier.id;
+        employeeSupplierId = storeActor.supplier.id;
+        employeeId = storeActor.employee.id;
+        roleTitle = storeActor.employee.roleTitle;
+        const normalizedPerms = normalizeEmployeePermissions(storeActor.employee.permissions);
+        employeePermissions = normalizedPerms;
+        setCurrentSupplierId(storeActor.supplier.id);
         setIsSupplierSelectionRequired(false);
-        setActiveNavTab('catalogs');
+        setActiveNavTab(getFirstAllowedSupplierTab(normalizedPerms, 'employee'));
       } else if (isSuperAdminEmail) {
         userRole = 'super_admin';
         userName = superAdmin.name || displayName;
@@ -1327,8 +1451,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: userRole,
         phone: fbUser.phoneNumber || undefined,
         associatedId,
+        supplierId: employeeSupplierId,
+        employeeId,
         adminAccountId,
         roleTitle,
+        permissions: employeePermissions,
         adminPermissions
       };
 
@@ -1542,30 +1669,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'رمز التحقق المدخل غير متطابق. تأكد من الرمز المرسل.' };
     }
 
-    // 3. Identify user role based on email or existing accounts
+    // 3. Ensure fresh metadata if not matched locally yet (e.g. fresh device / newly added employee)
+    let activeSuppliers = suppliers;
+    let activeAdminAccounts = superAdmin.adminAccounts || [];
+    let activePosClients = posClients;
+
+    const initialStoreMatch = resolveStoreActorByEmail(cleanEmail, activeSuppliers);
+    const initialAdminMatch = activeAdminAccounts.find(
+      a => normalizeStoreEmail(a.email) === cleanEmail
+    );
+    const initialPosMatch = activePosClients.some(
+      p => normalizeStoreEmail(p.email) === cleanEmail
+    );
+
+    if (!initialStoreMatch && !initialAdminMatch && !initialPosMatch) {
+      const bootData = await bootstrapAuthDataFromFirestore();
+      if (bootData.suppliers && bootData.suppliers.length > 0) {
+        activeSuppliers = bootData.suppliers;
+      }
+      if (bootData.superAdmin?.adminAccounts) {
+        activeAdminAccounts = bootData.superAdmin.adminAccounts;
+      }
+      if (bootData.posClients && bootData.posClients.length > 0) {
+        activePosClients = bootData.posClients;
+      }
+    }
+
+    // 4. Identify user role based on email with strict owner > employee precedence
     let userRole: UserRole = 'pos_client';
     let userName = 'محمد العتيبي (نقطة البيع)';
     let associatedId = 'pos-1';
 
-    const matchedAdminAcc = (superAdmin.adminAccounts || []).find(
-      a => a.email?.trim().toLowerCase() === cleanEmail
+    const matchedAdminAcc = activeAdminAccounts.find(
+      a => normalizeStoreEmail(a.email) === cleanEmail
     );
-    const matchedSup = suppliers.find(s => s.email?.toLowerCase() === cleanEmail);
+    const storeActor = resolveStoreActorByEmail(cleanEmail, activeSuppliers);
+    const matchedSup = storeActor?.kind === 'owner' ? storeActor.supplier : undefined;
+    const matchedEmployeeSupplier = storeActor?.kind === 'employee' ? storeActor.supplier : undefined;
+    const matchedEmployee = storeActor?.kind === 'employee' ? storeActor.employee : undefined;
     const isSuperAdminEmail = cleanEmail === 'jmiyemen66@gmail.com' || cleanEmail.includes('admin') || cleanEmail.includes('super');
-
-    // Check if any supplier has an employee with this email
-    let matchedEmployeeSupplier: Supplier | undefined;
-    let matchedEmployee: OfficeEmployee | undefined;
-    for (const sup of suppliers) {
-      if (sup.employees && sup.employees.length > 0) {
-        const emp = sup.employees.find(e => e.email?.toLowerCase().trim() === cleanEmail);
-        if (emp) {
-          matchedEmployeeSupplier = sup;
-          matchedEmployee = emp;
-          break;
-        }
-      }
-    }
 
     if (matchedAdminAcc) {
       if (!matchedAdminAcc.isActive) {
@@ -1614,11 +1756,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       setActiveNavTab(firstTab);
     } else if (matchedEmployee && matchedEmployeeSupplier) {
-      // 3.A: Strict Password Verification against the password set by the store manager
-      const configuredPassword = (matchedEmployee.password || '').trim();
-      const enteredPassword = password.trim();
-
-      if (!configuredPassword || configuredPassword !== enteredPassword) {
+      // 4.A: Strict Password Verification against the password set by the store owner
+      if (!verifyEmployeeCredentials(matchedEmployee, password)) {
         showToast({
           type: 'error',
           title: 'كلمة المرور غير صحيحة',
@@ -1630,27 +1769,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      // Password matches! Authenticate as employee in this supplier's store
+      // Password matches! Authenticate strictly as store employee with granted permissions only
+      const effectiveEmpPerms = normalizeEmployeePermissions(matchedEmployee.permissions);
       userRole = 'employee';
       userName = matchedEmployee.name;
       associatedId = matchedEmployeeSupplier.id;
       setCurrentSupplierId(matchedEmployeeSupplier.id);
       setIsSupplierSelectionRequired(false);
-
-      // Direct employee to permitted section
-      if (matchedEmployee.permissions.canManageOrders) {
-        setActiveNavTab('pending_orders');
-      } else if (matchedEmployee.permissions.canManageCatalogs) {
-        setActiveNavTab('catalogs');
-      } else if (matchedEmployee.permissions.canReviewDeposits) {
-        setActiveNavTab('deposits');
-      } else if (matchedEmployee.permissions.canManageClients) {
-        setActiveNavTab('clients');
-      } else {
-        setActiveNavTab('catalogs');
-      }
+      setActiveNavTab(getFirstAllowedSupplierTab(effectiveEmpPerms, 'employee'));
     } else {
-      // 3.B: Verify password for non-employee roles
+      // 4.B: Verify password for store owners, master admin, and POS clients
       let isPasswordValid = false;
       const demoPasswords: Record<string, string> = {
         'admin@digipos-platform.com': 'SuperAdminPass2026!',
@@ -1679,8 +1807,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
           }
           // If not in Firebase Auth, check if it's registered locally or valid length
-          const posExists = posClients.some(p => p.email?.toLowerCase() === cleanEmail);
-          const supExists = suppliers.some(s => s.email?.toLowerCase() === cleanEmail);
+          const posExists = activePosClients.some(p => normalizeStoreEmail(p.email) === cleanEmail);
+          const supExists = activeSuppliers.some(s => normalizeStoreEmail(s.email) === cleanEmail);
           if (!posExists && !supExists && !isSuperAdminEmail) {
             showToast({
               type: 'error',
@@ -1711,6 +1839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (matchedSup) {
+        // Store Owner logs in strictly with full store owner role
         userRole = 'supplier';
         userName = matchedSup.name;
         associatedId = matchedSup.id;
@@ -1727,14 +1856,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userRole = 'pos_client';
         setActiveNavTab('store');
         setIsSupplierSelectionRequired(false);
-        const matchingPosRecords = posClients.filter(p => p.email?.toLowerCase() === cleanEmail);
+        const matchingPosRecords = activePosClients.filter(p => normalizeStoreEmail(p.email) === cleanEmail);
 
         if (matchingPosRecords.length > 0) {
           userName = matchingPosRecords[0].ownerName;
           associatedId = matchingPosRecords[0].id;
 
           const registeredSupIds = Array.from(new Set(matchingPosRecords.map(p => p.supplierId)));
-          const matchedSuppliers = suppliers.filter(s => registeredSupIds.includes(s.id));
+          const matchedSuppliers = activeSuppliers.filter(s => registeredSupIds.includes(s.id));
 
           if (matchedSuppliers.length >= 1) {
             setCurrentSupplierId(matchedSuppliers[0].id);
@@ -1742,7 +1871,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCurrentPosId(clientRecord.id);
           }
         } else {
-          const fallbackPos = posClients[0];
+          const fallbackPos = activePosClients[0];
           if (fallbackPos) {
             userName = fallbackPos.ownerName;
             associatedId = fallbackPos.id;
@@ -1771,7 +1900,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: cleanEmail,
       name: userName,
       role: userRole,
-      phone: matchedAdminAcc ? matchedAdminAcc.phone : undefined,
+      phone: matchedAdminAcc ? matchedAdminAcc.phone : matchedEmployee ? matchedEmployee.phone : undefined,
       associatedId,
       supplierId: matchedEmployeeSupplier ? matchedEmployeeSupplier.id : undefined,
       employeeId: matchedEmployee ? matchedEmployee.id : undefined,
@@ -1781,7 +1910,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : matchedEmployee
         ? matchedEmployee.roleTitle
         : undefined,
-      permissions: matchedEmployee ? matchedEmployee.permissions : undefined,
+      permissions: matchedEmployee
+        ? normalizeEmployeePermissions(matchedEmployee.permissions)
+        : undefined,
       adminPermissions: matchedAdminAcc ? matchedAdminAcc.permissions : undefined
     };
 
@@ -2062,13 +2193,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
   }, [suppliers, currentPos?.supplierId, supplier]);
 
+  const effectiveEmployeePerms = React.useMemo(
+    () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
+    [currentUser, role, supplier]
+  );
+
+  const assertEmployeePermission = (
+    allowed: boolean,
+    errorDesc = 'ليس لديك صلاحية تنفيذ هذا الإجراء من مالك المتجر.'
+  ): boolean => {
+    if (role !== 'employee') return true;
+    if (!allowed) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية غير ممنوحة',
+        description: errorDesc
+      });
+      return false;
+    }
+    return true;
+  };
+
   const supplierNotifications = React.useMemo(() => {
-    return notifications.filter(
+    const storeNotifs = notifications.filter(
       n =>
         (n.targetRole === 'supplier' || (!n.targetRole && !n.posId)) &&
         (!n.supplierId || n.supplierId === supplier?.id)
     );
-  }, [notifications, supplier?.id]);
+    return filterSupplierNotificationsForEmployee(storeNotifs, effectiveEmployeePerms, role);
+  }, [notifications, supplier?.id, effectiveEmployeePerms, role]);
 
   const clientNotifications = React.useMemo(() => {
     return notifications.filter(
@@ -2087,7 +2240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [clientNotifications]);
 
   const unreadNotificationsCount = React.useMemo(() => {
-    return role === 'supplier'
+    return role === 'supplier' || role === 'employee'
       ? unreadSupplierNotificationsCount
       : unreadPosNotificationsCount;
   }, [role, unreadSupplierNotificationsCount, unreadPosNotificationsCount]);
@@ -2131,6 +2284,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     deliveryDetails: {
       playerId?: string;
       playerNickname?: string;
+      accountType?: string;
       accountEmail?: string;
       accountPassword?: string;
       verificationCodeEntered?: string;
@@ -2183,23 +2337,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const feeAmount = pricing.feeAmount;
     const totalDeduction = pricing.totalAmount;
 
-    // 2.5 If this is a Free Gift, prevent re-claiming a gift service that has already been completed by this client
-    if (
-      pricing.isFreeGiftApplied &&
-      hasClientUsedGiftService({
-        serviceId: liveService.id,
-        isGiftService: true,
-        usedGiftServiceIds: currentPos.usedGiftServiceIds,
-        orders,
-        posId: currentPos.id,
-      })
-    ) {
-      showToast({
-        type: 'info',
-        title: 'تم استلام الهدية مسبقاً',
-        description: 'لقد قمت باستخدام هذه الهدية المجانية وإتمامها بالفعل.',
-      });
-      return { success: false, error: 'gift_already_used' };
+    // 2.5 If this is a Free Gift catalog service, enforce targeting, expiration period, and merchant max uses per client
+    const giftStatus = evaluateClientGiftServiceStatus({
+      service: liveService,
+      catalog: serviceCatalog,
+      clientPosId: currentPos.id,
+      clientTier: currentPos.tier,
+      clientCanViewGifts: Boolean(currentPos.canViewGifts),
+      usedGiftServiceIds: currentPos.usedGiftServiceIds,
+      orders,
+    });
+    if (giftStatus.isGiftCatalog) {
+      if (!giftStatus.isTargeted) {
+        showToast({
+          type: 'error',
+          title: 'غير متاح لحسابك',
+          description: 'هذه الهدية المجانية غير مخصصة لحسابك.',
+        });
+        return { success: false, error: 'gift_not_targeted' };
+      }
+      if (giftStatus.isExpired) {
+        showToast({
+          type: 'error',
+          title: 'انتهت صلاحية الهدية',
+          description: 'انتهت الفترة المحددة لهذه الهدية وأصبحت غير مفعلة لحسابك.',
+        });
+        return { success: false, error: 'gift_expired' };
+      }
+      if (giftStatus.isUsageExhausted) {
+        showToast({
+          type: 'info',
+          title: 'تم استنفاد مرات الاستخدام',
+          description: `لقد استخدمت هذه الهدية الحد الأقصى المحدد من المتجر (${giftStatus.usedCount}/${giftStatus.maxUses}) وأصبحت غير مفعلة لديك.`,
+        });
+        return { success: false, error: 'gift_usage_limit_reached' };
+      }
     }
 
     // 3. Balance verification for non-gift wallet purchases (free gifts are allowed even if wallet < app fee; fee is deferred silently)
@@ -2316,7 +2488,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
 
     const nextUsedGiftServiceIds =
-      pricing.isFreeGiftApplied && initialStatus === 'completed'
+      pricing.isFreeGiftApplied && giftStatus.usedCount + 1 >= giftStatus.maxUses
         ? appendUsedGiftServiceId(currentPos.usedGiftServiceIds, liveService.id)
         : currentPos.usedGiftServiceIds;
 
@@ -2558,7 +2730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deliveryMethod === 'player_id'
           ? `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن للأيدي (${deliveryDetails.playerId}) لباقة ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`
           : deliveryMethod === 'account_login'
-          ? `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن حساب (${deliveryDetails.accountEmail || 'حساب العميل'}) لباقة ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`
+          ? `أرسل العميل ${currentPos.tradeName} (${currentPos.posCode}) طلب شحن حساب (${deliveryDetails.accountType ? `${deliveryDetails.accountType} · ` : ''}${deliveryDetails.accountEmail || 'حساب العميل'}) لباقة ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`
           : `قام العميل ${currentPos.tradeName} (${currentPos.posCode}) بشراء ${pkg.name} بمبلغ ${unitPrice.toFixed(2)} ر.س.`,
       type: 'order_status',
       orderId,
@@ -2849,6 +3021,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     currency?: string;
     notes?: string;
   }): { success: boolean; error?: string; account?: SupplierBankAccount } => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageBankAccounts, 'ليس لديك صلاحية إضافة أو تعديل الحسابات البنكية.')) {
+      return { success: false, error: 'ليس لديك صلاحية إدارة الحسابات البنكية.' };
+    }
     const validation = validateBankAccountInput(input);
     if (!validation.valid) {
       showToast({
@@ -2970,6 +3145,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const saveBatchBankAccounts = (
     input: BatchBankAccountsInput
   ): { success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee } => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageBankAccounts, 'ليس لديك صلاحية إدارة الحسابات البنكية وتفويض الاستلام.')) {
+      return { success: false, error: 'ليس لديك صلاحية إدارة الحسابات البنكية.' };
+    }
     const validation = validateBatchBankAccountsInput(input);
     if (!validation.valid) {
       showToast({
@@ -2998,6 +3176,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           canReviewCashDeposits: true,
           canReviewLoanDeposits: true
         };
+        const updRes = updateOfficeEmployee(existingEmp.id, {
+          name: input.accountHolderName.trim(),
+          phone: input.accountHolderPhone?.trim() || existingEmp.phone,
+          country: input.country.trim(),
+          isTransferReceiverOnly: existingEmp.isTransferReceiverOnly ?? true,
+          password: input.employeePassword?.trim() || existingEmp.password,
+          roleTitle: existingEmp.roleTitle || `موظف استلام ومراجعة حوالات (${input.country.trim()})`,
+          permissions: mergedPermissions
+        });
+        if (!updRes.success) {
+          return { success: false, error: updRes.error };
+        }
         targetEmp = {
           ...existingEmp,
           name: input.accountHolderName.trim(),
@@ -3008,9 +3198,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           roleTitle: existingEmp.roleTitle || `موظف استلام ومراجعة حوالات (${input.country.trim()})`,
           permissions: mergedPermissions
         };
-        updateOfficeEmployee(existingEmp.id, targetEmp);
       } else {
-        targetEmp = addOfficeEmployee({
+        const addRes = addOfficeEmployee({
           name: input.accountHolderName.trim(),
           email: cleanEmail,
           password: input.employeePassword?.trim() || '123456',
@@ -3024,6 +3213,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             canReviewLoanDeposits: true
           }
         });
+        if (!addRes.success || !addRes.employee) {
+          return { success: false, error: addRes.error };
+        }
+        targetEmp = addRes.employee;
       }
 
       const createdAccounts: SupplierBankAccount[] = input.banks.map((bank, idx) => ({
@@ -3123,6 +3316,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleBankAccountTransferPrivilege = (accountId: string, enabled: boolean) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageBankAccounts, 'ليس لديك صلاحية تعديل صلاحيات الحسابات البنكية.')) return;
     const targetAcc = supplierBankAccounts.find(a => a.id === accountId);
     if (!targetAcc) return;
 
@@ -3170,6 +3364,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteSupplierBankAccount = (accountId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageBankAccounts, 'ليس لديك صلاحية حذف الحسابات البنكية.')) return;
     const targetAcc = supplierBankAccounts.find(a => a.id === accountId);
     if (!targetAcc) return;
 
@@ -3436,7 +3631,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const dep = depositRequests.find(d => d.id === depositId);
     if (!dep || dep.status !== 'pending') return;
 
-    const isLoan = dep.requestType === 'loan';
+    const isLoan = dep.requestType === 'loan' || Boolean(dep.loanReason);
+    if (!assertEmployeePermission(
+      isLoan ? effectiveEmployeePerms.canReviewLoanDeposits : effectiveEmployeePerms.canReviewCashDeposits,
+      isLoan ? 'ليس لديك صلاحية اعتماد طلبات السُّلَف.' : 'ليس لديك صلاحية اعتماد طلبات الحوالات والإيداعات.'
+    )) return;
     const approvedNotes = isLoan
       ? 'تمت الموافقة على طلب السلفة وقيد الرصيد الآجل في المحفظة'
       : 'تمت الموافقة ومطابقة الحوالة البنكية بنجاح';
@@ -3575,7 +3774,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const grantSupplierBalanceOrLoan = (params: {
+    posId: string;
+    amount: number;
+    supportType: 'cash' | 'loan';
+    reason: string;
+  }): { success: boolean; error?: string } => {
+    const isLoan = params.supportType === 'loan';
+    if (!assertEmployeePermission(
+      isLoan ? effectiveEmployeePerms.canReviewLoanDeposits : effectiveEmployeePerms.canReviewCashDeposits,
+      isLoan ? 'ليس لديك صلاحية منح سلف للعملاء.' : 'ليس لديك صلاحية منح رصيد مجاني للعملاء.'
+    )) {
+      return { success: false, error: 'ليس لديك صلاحية منح هذا الدعم.' };
+    }
+
+    const client = posClients.find(p => p.id === params.posId);
+    if (!client) {
+      return { success: false, error: 'لم يتم العثور على العميل المحدد برقم المعرف.' };
+    }
+
+    if (params.amount <= 0) {
+      return { success: false, error: 'يرجى إدخال مبلغ صحيح أكبر من الصفر.' };
+    }
+
+    const reasonText = params.reason.trim() || (isLoan ? 'منح سلفة / رصيد آجل مباشر من المتجر' : 'منح رصيد مجاني / دعم من المتجر');
+    const now = new Date();
+    const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const grantId = `grt-${Date.now().toString().slice(-6)}`;
+
+    const newDep: DepositRequest = {
+      id: grantId,
+      posId: client.id,
+      posName: client.tradeName,
+      posCode: client.posCode,
+      supplierId: supplier.id,
+      amount: params.amount,
+      transferNumber: `GRANT-${grantId}`,
+      transferSenderName: supplier.storeName,
+      bankName: isLoan ? 'سلفة مباشرة من المتجر' : 'دعم رصيد مجاني من المتجر',
+      date: formattedDate,
+      status: 'approved',
+      requestType: params.supportType,
+      loanReason: reasonText,
+      notes: isLoan ? `منح سلفة معتمدة مباشرة: ${reasonText}` : `منح رصيد مجاني مدعوم: ${reasonText}`
+    };
+
+    setDepositRequests(prev => [newDep, ...prev]);
+    firestoreSync.saveDepositRequest(newDep).catch(console.error);
+
+    const depositSettlement = settlePendingGiftFeesOnRecharge({
+      currentWalletBalance: client.walletBalance,
+      rechargeAmount: params.amount,
+      pendingGiftFees: client.pendingGiftFees,
+    });
+    const newBal = depositSettlement.finalWalletBalance;
+
+    setPosClients(prev => prev.map(p => {
+      if (p.id !== client.id) return p;
+      return {
+        ...p,
+        walletBalance: newBal,
+        pendingGiftFees: depositSettlement.remainingPendingGiftFees,
+      };
+    }));
+
+    firestoreSync.savePosClient({
+      ...client,
+      walletBalance: newBal,
+      pendingGiftFees: depositSettlement.remainingPendingGiftFees,
+    }).catch(console.error);
+
+    const accEntry: AccountingEntry = {
+      id: `acc-${Date.now()}-grant`,
+      date: formattedDate,
+      type: 'deposit',
+      referenceId: newDep.id,
+      posId: client.id,
+      supplierId: supplier.id,
+      description: isLoan
+        ? `منح سلفة رصيد آجل معتمدة مباشرة من المتجر (${supplier.name}) [السبب: ${reasonText}]`
+        : `منح رصيد مجاني ودعم مالي من المتجر (${supplier.name}) [السبب: ${reasonText}]`,
+      debit: 0,
+      credit: params.amount,
+      balanceAfter: newBal
+    };
+    setAccountingEntries(prev => [accEntry, ...prev]);
+    firestoreSync.saveAccountingEntry(accEntry).catch(console.error);
+
+    addNotification({
+      posId: client.id,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      title: isLoan ? 'تم منحك سلفة رصيد آجل 💰' : 'تم منحك رصيد مجاني / دعم 🎁',
+      message: isLoan
+        ? `قام المتجر ${supplier.name} بمنحك سلفة بقيمة ${params.amount.toFixed(2)} ر.س. السبب: ${reasonText}.`
+        : `قام المتجر ${supplier.name} بمنحك رصيد مجاني بقيمة ${params.amount.toFixed(2)} ر.س. السبب: ${reasonText}.`,
+      type: 'deposit'
+    });
+
+    showToast({
+      type: 'success',
+      title: isLoan ? 'تم منح السلفة وقيد الرصيد بنجاح' : 'تم منح الرصيد المجاني بنجاح',
+      description: `تم إضافة مبلغ ${params.amount.toFixed(2)} ر.س لمحفظة العميل (${client.tradeName}) بنجاح.`
+    });
+
+    return { success: true };
+  };
+
   const markLoanAsRepaid = (depositId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canReviewLoanDeposits, 'ليس لديك صلاحية إدارة وتوثيق سداد السُّلَف.')) return;
     const dep = depositRequests.find(d => d.id === depositId);
     if (!dep || dep.requestType !== 'loan' || dep.status !== 'approved') return;
 
@@ -4025,6 +4332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const approveLoanRepaymentRequest = (requestId: string, overrideAmount?: number) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canReviewLoanDeposits, 'ليس لديك صلاحية اعتماد طلبات سداد السُّلَف.')) return;
     const req = loanRepaymentRequests.find(r => r.id === requestId);
     if (!req || req.status !== 'pending') return;
 
@@ -4142,6 +4450,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectLoanRepaymentRequest = (requestId: string, reason?: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canReviewLoanDeposits, 'ليس لديك صلاحية رفض طلبات سداد السُّلَف.')) return;
     const req = loanRepaymentRequests.find(r => r.id === requestId);
     if (!req || req.status !== 'pending') return;
 
@@ -4178,6 +4487,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectDepositRequest = (depositId: string, reason?: string) => {
     const dep = depositRequests.find(d => d.id === depositId);
     if (!dep) return;
+    const isLoan = dep.requestType === 'loan' || Boolean(dep.loanReason);
+    if (!assertEmployeePermission(
+      isLoan ? effectiveEmployeePerms.canReviewLoanDeposits : effectiveEmployeePerms.canReviewCashDeposits,
+      isLoan ? 'ليس لديك صلاحية رفض طلبات السُّلَف.' : 'ليس لديك صلاحية رفض طلبات الحوالات والإيداعات.'
+    )) return;
     const updatedDep: DepositRequest = { ...dep, status: 'rejected', notes: reason || 'تم رفض الطلب لعدم مطابقة بيانات الحوالة' };
     setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedDep : d));
     firestoreSync.saveDepositRequest(updatedDep).catch(console.error);
@@ -4200,6 +4514,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const completeSupplierOrder = (orderId: string, notes?: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
+    if (!assertEmployeePermission(
+      isOrderVisibleToEmployee(targetOrder, effectiveEmployeePerms, role),
+      'ليس لديك صلاحية تنفيذ هذا النوع من الطلبات.'
+    )) return;
     const isPlayerId = targetOrder.deliveryMethod === 'player_id';
     const defaultNote = isPlayerId
       ? `تم الشحن بنجاح من داخل اللعبة باستخدام الأيدي (${targetOrder?.deliveryDetails.playerId || ''})`
@@ -4256,6 +4574,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const rejectSupplierOrder = (orderId: string, reason?: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
+    if (!assertEmployeePermission(
+      isOrderVisibleToEmployee(targetOrder, effectiveEmployeePerms, role),
+      'ليس لديك صلاحية إلغاء هذا النوع من الطلبات.'
+    )) return;
 
     // Refund customer & cancel any unpaid deferred gift fee associated with this rejected order
     const refundAmount = targetOrder.totalDeducted || 0;
@@ -4320,6 +4642,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Supplier sending OTP / reply message directly to the client
   const sendSupplierReplyToClient = (orderId: string, message: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
+    if (targetOrder && !assertEmployeePermission(
+      isOrderVisibleToEmployee(targetOrder, effectiveEmployeePerms, role),
+      'ليس لديك صلاحية إرسال رمز لهذا النوع من الطلبات.'
+    )) return;
 
     setOrders(prev => prev.map(o => {
       if (o.id !== orderId) return o;
@@ -4392,6 +4718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Update POS client tier
   const updatePosTier = (posId: string, newTier: AccountTier) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية ترقية أو تعديل رتب العملاء.')) return;
     setPosClients(prev => prev.map(p => {
       if (p.id !== posId) return p;
       const updated = { ...p, tier: newTier };
@@ -4414,6 +4741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const togglePosLoanPrivilege = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تعديل ميزات العملاء.')) return;
     let newGrantedState = false;
     setPosClients(prev => prev.map(p => {
       if (p.id !== posId) return p;
@@ -4444,6 +4772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const togglePosReceiveTransfersPrivilege = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تعديل ميزات العملاء.')) return;
     let newGrantedState = false;
     setPosClients(prev => prev.map(p => {
       if (p.id !== posId) return p;
@@ -4474,6 +4803,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const togglePosBonusPrivilege = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تعديل ميزات العملاء.')) return;
     let newGrantedState = false;
     setPosClients(prev => prev.map(p => {
       if (p.id !== posId) return p;
@@ -4504,6 +4834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const togglePosGiftsPrivilege = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تعديل ميزات العملاء.')) return;
     let newGrantedState = false;
     setPosClients(prev => prev.map(p => {
       if (p.id !== posId) return p;
@@ -4565,6 +4896,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSupplierProfile = (supplierId: string, updates: Partial<Supplier>) => {
+    if (!assertEmployeePermission(false, 'تعديل بيانات المتجر وإعدادات الحساب محصور لمالك المتجر فقط.')) return;
     const targetSup = suppliers.find(s => s.id === supplierId) || supplier;
     const normalizedUpdates: Partial<Supplier> = {
       ...updates,
@@ -4612,6 +4944,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       usedCount: 0,
       url: `https://digipos.app/join?ref=${code}&tier=${targetTier}&sup=${supplier.id}`
     };
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية إنشاء روابط دعوة العملاء.')) {
+      return newLink;
+    }
     setInviteLinks(prev => [newLink, ...prev]);
     firestoreSync.saveInviteLink(newLink).catch(console.error);
     showToast({
@@ -4624,6 +4959,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Add catalog
   const addCatalog = (nameAr: string, descriptionAr: string, icon: string, isFreeGiftsCatalog?: boolean) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canAddCatalogs, 'ليس لديك صلاحية إضافة الكتالوجات.')) return;
     if (role !== 'super_admin' && !platformSettings.allowSuppliersCreateCustomCatalogs) {
       showToast({
         type: 'error',
@@ -4652,6 +4988,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Update catalog
   const updateCatalog = (id: string, updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canAddCatalogs, 'ليس لديك صلاحية تعديل الكتالوجات.')) return;
     const targetCat = catalogs.find(c => c.id === id);
     if (targetCat && (targetCat.isFixedByAdmin || targetCat.supplierId === 'all') && role !== 'super_admin') {
       showToast({
@@ -4671,13 +5008,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     showToast({
       type: 'success',
-      title: 'تم تعديل الكتالوج',
+      title: 'تم تحديث الكتالوج',
       description: 'تم حفظ تعديلات بيانات الكتالوج بنجاح.'
     });
   };
 
   // Delete catalog
   const deleteCatalog = (id: string): { success: boolean; error?: string } => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canAddCatalogs, 'ليس لديك صلاحية حذف الكتالوجات.')) {
+      return { success: false, error: 'صلاحية غير ممنوحة' };
+    }
     const targetCat = catalogs.find(c => c.id === id);
     if (targetCat && (targetCat.isFixedByAdmin || targetCat.supplierId === 'all') && role !== 'super_admin') {
       showToast({
@@ -4881,6 +5221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Add service
   const addService = (serviceData: Omit<DigitalService, 'id' | 'supplierId' | 'isActive'>) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canAddServices, 'ليس لديك صلاحية إضافة الخدمات والباقات.')) return;
     const newSrv: DigitalService = {
       ...serviceData,
       id: `srv-${Date.now()}`,
@@ -4899,6 +5240,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Update service
   const updateService = (id: string, updates: Partial<Omit<DigitalService, 'id' | 'supplierId'>>) => {
+    if (!assertEmployeePermission(
+      effectiveEmployeePerms.canAddServices || effectiveEmployeePerms.canEditServicePrices,
+      'ليس لديك صلاحية تعديل الخدمات أو أسعارها.'
+    )) return;
     setServices(prev => {
       let oldCatalogId = '';
       const updatedList = prev.map(s => {
@@ -4931,6 +5276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Delete service
   const deleteService = (id: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canAddServices, 'ليس لديك صلاحية حذف الخدمات.')) return;
     const targetService = services.find(s => s.id === id);
     setServices(prev => prev.filter(s => s.id !== id));
     firestoreSync.deleteService(id).catch(console.error);
@@ -5057,6 +5403,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     targetServiceId?: string;
     newServiceNameAr?: string;
   }) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية إنشاء وإدارة مخزون الأكواد.')) {
+      return {
+        warehouse: {
+          id: '',
+          supplierId: supplier.id,
+          nameAr: '',
+          categoryName: '',
+          codes: [],
+          usedCodesCount: 0,
+          isPublishedAsService: false,
+          tierPrices: input.tierPrices,
+          createdAt: '',
+          updatedAt: ''
+        },
+        addedCount: 0
+      };
+    }
     const parsed = parseVoucherCodesInput(input.rawCodes || '');
     const nowIso = new Date().toISOString();
     const whId = `wh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
@@ -5119,6 +5482,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addCodesToWarehouse = (warehouseId: string, rawCodes: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية تغذية مخزون الأكواد.')) {
+      return { addedCount: 0, skippedDuplicates: 0 };
+    }
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return { addedCount: 0, skippedDuplicates: 0 };
 
@@ -5165,6 +5531,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeCodeFromWarehouse = (warehouseId: string, codeIndex: number) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية تعديل أو حذف أكواد المخزون.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
     const nextCodes = targetWh.codes.filter((_, idx) => idx !== codeIndex);
@@ -5190,6 +5557,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     warehouseId: string,
     updates: Partial<Pick<VoucherWarehouse, 'nameAr' | 'categoryName' | 'catalogId' | 'description' | 'allowSingleCodePurchase' | 'allowPackagePurchase' | 'packageCodesCount' | 'packageNameAr' | 'tierPrices' | 'packageTierPrices' | 'lowStockThreshold'>>
   ) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية تعديل إعدادات وأسعار مخزون الأكواد.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
     const mergedAllowPackage = updates.allowPackagePurchase !== undefined
@@ -5234,6 +5602,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setWarehouseLowStockThreshold = (warehouseId: string, threshold: number) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية ضبط تنبيهات مخزون الأكواد.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
     const normalized = Math.max(0, Math.floor(threshold));
@@ -5275,6 +5644,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     warehouseId: string,
     options: { catalogId: string; serviceId?: string; serviceNameAr?: string }
   ) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية إدارة ونشر مخزون الأكواد.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
     const updatedWh = publishWarehouseInternal(targetWh, options);
@@ -5286,6 +5656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unpublishWarehouseFromService = (warehouseId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية إدارة مخزون الأكواد.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     if (!targetWh) return;
     const updatedWh: VoucherWarehouse = {
@@ -5322,6 +5693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteVoucherWarehouse = (warehouseId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageVoucherStock, 'ليس لديك صلاحية حذف مخازن الأكواد.')) return;
     const targetWh = voucherWarehouses.find(w => w.id === warehouseId);
     setVoucherWarehouses(prev => prev.filter(w => w.id !== warehouseId));
     firestoreSync.deleteVoucherWarehouse(warehouseId).catch(console.error);
@@ -5583,11 +5955,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }): OfficeEmployee => {
-    const cleanEmail = employeeData.email.trim().toLowerCase();
-    const cleanPassword = employeeData.password?.trim() || '123456';
+  }): { success: boolean; error?: string; employee?: OfficeEmployee } => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageEmployees, 'ليس لديك صلاحية إضافة موظفين جدد للمتجر.')) {
+      return { success: false, error: 'ليس لديك صلاحية إضافة موظفين.' };
+    }
+
+    const restrictedEmails = [
+      superAdmin.email,
+      ...(superAdmin.adminAccounts || []).map(a => a.email),
+      ...suppliers.filter(s => s.id !== supplier.id).map(s => s.email),
+    ];
+    const validation = validateOfficeEmployeeInput(
+      employeeData,
+      supplier.employees || [],
+      supplier.email,
+      restrictedEmails
+    );
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'بيانات الموظف غير مكتملة أو غير صالحة',
+        description: validation.error
+      });
+      return { success: false, error: validation.error };
+    }
+
+    const cleanEmail = normalizeStoreEmail(employeeData.email);
+    const cleanPassword = (employeeData.password || '').trim();
+    const normalizedPerms = normalizeEmployeePermissions(employeeData.permissions);
     const newEmp: OfficeEmployee = {
-      id: `emp-${Date.now().toString().slice(-6)}`,
+      id: `emp-${Date.now().toString().slice(-6)}-${Math.floor(10 + Math.random() * 90)}`,
       supplierId: supplier.id,
       name: employeeData.name.trim(),
       email: cleanEmail,
@@ -5596,23 +5993,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       country: employeeData.country?.trim() || undefined,
       isTransferReceiverOnly: employeeData.isTransferReceiverOnly,
       roleTitle: employeeData.roleTitle.trim() || 'موظف مكتب',
-      permissions: employeeData.permissions,
+      permissions: normalizedPerms,
       createdAt: new Date().toISOString().substring(0, 10)
     };
 
-    // 1. Save in the supplier's employees array
-    setSuppliers(prev => prev.map(s => {
-      if (s.id !== supplier.id) return s;
-      const currentEmployees = s.employees || [];
-      const updated = {
-        ...s,
-        employees: [newEmp, ...currentEmployees.filter(e => e.email?.toLowerCase().trim() !== cleanEmail)]
-      };
-      firestoreSync.saveSupplier(updated).catch(console.error);
-      return updated;
-    }));
+    const currentSup = suppliers.find(s => s.id === supplier.id) || supplier;
+    const updatedSup: Supplier = {
+      ...currentSup,
+      employees: [
+        newEmp,
+        ...(currentSup.employees || []).filter(e => normalizeStoreEmail(e.email) !== cleanEmail)
+      ]
+    };
 
-    // 2. Register as a dedicated user account of type 'employee' in users collection!
+    // 1. Save in the supplier's employees array & Firestore
+    setSuppliers(prev => prev.map(s => (s.id === supplier.id ? updatedSup : s)));
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+
+    // 2. Register as a dedicated user account of type 'employee' in users collection
     const employeeUser: AuthUser = {
       id: newEmp.id,
       email: cleanEmail,
@@ -5623,55 +6021,116 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supplierId: supplier.id,
       employeeId: newEmp.id,
       roleTitle: newEmp.roleTitle,
-      permissions: newEmp.permissions
+      permissions: normalizedPerms
     };
     firestoreSync.saveUser(employeeUser).catch(console.error);
 
     showToast({
       type: 'success',
       title: 'تم إنشاء وتوثيق حساب الموظف بنجاح',
-      description: `تم إضافة (${newEmp.name}) كحساب موظف معتمد في متجر (${supplier.name}) وحفظ كلمة المرور والصلاحيات في قاعدة البيانات.`
+      description: `تم إضافة (${newEmp.name}) بحساب مستقل (بريد وكلمة مرور) في متجر (${supplier.name}) وفق الصلاحيات المحددة.`
     });
 
-    return newEmp;
+    return { success: true, employee: newEmp };
   };
 
-  const updateOfficeEmployee = (empId: string, updates: Partial<OfficeEmployee>) => {
-    let updatedEmp: OfficeEmployee | undefined;
+  const updateOfficeEmployee = (
+    empId: string,
+    updates: Partial<OfficeEmployee>
+  ): { success: boolean; error?: string } => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageEmployees, 'ليس لديك صلاحية تعديل بيانات أو صلاحيات الموظفين.')) {
+      return { success: false, error: 'ليس لديك صلاحية تعديل الموظفين.' };
+    }
 
-    setSuppliers(prev => prev.map(s => {
-      if (s.id !== supplier.id) return s;
-      const currentEmployees = s.employees || [];
-      const updatedList = currentEmployees.map(e => {
-        if (e.id === empId) {
-          updatedEmp = { ...e, ...updates };
-          return updatedEmp;
-        }
-        return e;
+    const currentSup = suppliers.find(s => s.id === supplier.id) || supplier;
+    const currentEmployees = currentSup.employees || [];
+    const targetEmp = currentEmployees.find(e => e.id === empId);
+    if (!targetEmp) {
+      return { success: false, error: 'لم يتم العثور على الموظف المحدد.' };
+    }
+
+    const nextEmail = normalizeStoreEmail(updates.email ?? targetEmp.email);
+    const nextPassword =
+      updates.password !== undefined && updates.password.trim().length > 0
+        ? updates.password.trim()
+        : (targetEmp.password || '').trim();
+    const nextPermissions = updates.permissions
+      ? normalizeEmployeePermissions(updates.permissions)
+      : normalizeEmployeePermissions(targetEmp.permissions);
+
+    const restrictedEmails = [
+      superAdmin.email,
+      ...(superAdmin.adminAccounts || []).map(a => a.email),
+      ...suppliers.filter(s => s.id !== supplier.id).map(s => s.email),
+    ];
+    const validation = validateOfficeEmployeeInput(
+      {
+        name: updates.name ?? targetEmp.name,
+        email: nextEmail,
+        password: updates.password,
+        permissions: nextPermissions,
+        isTransferReceiverOnly: updates.isTransferReceiverOnly ?? targetEmp.isTransferReceiverOnly,
+      },
+      currentEmployees,
+      currentSup.email,
+      restrictedEmails,
+      empId
+    );
+    if (!validation.valid) {
+      showToast({
+        type: 'error',
+        title: 'تعذر تحديث بيانات الموظف',
+        description: validation.error
       });
-      const updated = {
-        ...s,
-        employees: updatedList
-      };
-      firestoreSync.saveSupplier(updated).catch(console.error);
-      return updated;
-    }));
+      return { success: false, error: validation.error };
+    }
 
-    if (updatedEmp) {
-      const emp = updatedEmp as OfficeEmployee;
-      const employeeUser: AuthUser = {
-        id: emp.id,
-        email: emp.email.toLowerCase().trim(),
-        name: emp.name,
-        role: 'employee',
-        phone: emp.phone,
-        associatedId: supplier.id,
-        supplierId: supplier.id,
-        employeeId: emp.id,
-        roleTitle: emp.roleTitle,
-        permissions: emp.permissions
-      };
-      firestoreSync.saveUser(employeeUser).catch(console.error);
+    const mergedEmp: OfficeEmployee = {
+      ...targetEmp,
+      ...updates,
+      name: (updates.name ?? targetEmp.name).trim(),
+      email: nextEmail,
+      password: nextPassword,
+      phone: (updates.phone ?? targetEmp.phone).trim(),
+      roleTitle: (updates.roleTitle ?? targetEmp.roleTitle).trim() || 'موظف مكتب',
+      permissions: nextPermissions,
+    };
+
+    const updatedSup: Supplier = {
+      ...currentSup,
+      employees: currentEmployees.map(e => (e.id === empId ? mergedEmp : e))
+    };
+
+    setSuppliers(prev => prev.map(s => (s.id === supplier.id ? updatedSup : s)));
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+
+    const employeeUser: AuthUser = {
+      id: mergedEmp.id,
+      email: mergedEmp.email,
+      name: mergedEmp.name,
+      role: 'employee',
+      phone: mergedEmp.phone,
+      associatedId: supplier.id,
+      supplierId: supplier.id,
+      employeeId: mergedEmp.id,
+      roleTitle: mergedEmp.roleTitle,
+      permissions: mergedEmp.permissions
+    };
+    firestoreSync.saveUser(employeeUser).catch(console.error);
+
+    if (currentUser?.employeeId === empId) {
+      setCurrentUser(prev =>
+        prev
+          ? {
+              ...prev,
+              name: mergedEmp.name,
+              email: mergedEmp.email,
+              phone: mergedEmp.phone,
+              roleTitle: mergedEmp.roleTitle,
+              permissions: mergedEmp.permissions
+            }
+          : prev
+      );
     }
 
     showToast({
@@ -5679,24 +6138,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'تم تحديث بيانات الموظف',
       description: 'تم حفظ تعديلات وصلاحيات الموظف وكلمة المرور بنجاح في النظام.'
     });
+
+    return { success: true };
   };
 
   const removeOfficeEmployee = (empId: string) => {
-    setSuppliers(prev => prev.map(s => {
-      if (s.id !== supplier.id) return s;
-      const currentEmployees = s.employees || [];
-      const updated = {
-        ...s,
-        employees: currentEmployees.filter(e => e.id !== empId)
-      };
-      firestoreSync.saveSupplier(updated).catch(console.error);
-      return updated;
-    }));
+    if (!assertEmployeePermission(effectiveEmployeePerms.canManageEmployees, 'ليس لديك صلاحية حذف الموظفين.')) return;
+    const currentSup = suppliers.find(s => s.id === supplier.id) || supplier;
+    const currentEmployees = currentSup.employees || [];
+    const targetEmp = currentEmployees.find(e => e.id === empId);
+    const updatedSup: Supplier = {
+      ...currentSup,
+      employees: currentEmployees.filter(e => e.id !== empId)
+    };
+
+    setSuppliers(prev => prev.map(s => (s.id === supplier.id ? updatedSup : s)));
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+    firestoreSync.deleteUser(empId).catch(console.error);
+
+    if (currentUser?.employeeId === empId) {
+      setCurrentUser(null);
+    }
 
     showToast({
       type: 'info',
       title: 'تم حذف الموظف',
-      description: 'تم إزالة الموظف من صلاحيات مكتب المتجر.'
+      description: targetEmp
+        ? `تم إزالة الموظف (${targetEmp.name}) وسحب صلاحياته من المتجر.`
+        : 'تم إزالة الموظف من صلاحيات مكتب المتجر.'
     });
   };
 
@@ -5972,6 +6441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitLoanRepaymentRequest,
         approveLoanRepaymentRequest,
         rejectLoanRepaymentRequest,
+        grantSupplierBalanceOrLoan,
         completeSupplierOrder,
         rejectSupplierOrder,
         sendSupplierReplyToClient,

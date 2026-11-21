@@ -43,7 +43,12 @@ import { IncomingTransfersReviewView } from './IncomingTransfersReviewView';
 import { SupplierContactLinks } from '../common/SupplierContactLinks';
 import { getLoanRemainingAmount, isLoanDeposit } from '../../utils/loanRepayments';
 import { getIncomingLoanRepaymentsForPos, getIncomingTransfersForPos, hasSupplierTransferPrivilege } from '../../utils/bankAccounts';
-import { calculateServicePurchasePricing, hasClientUsedGiftService, isCatalogFreeGifts } from '../../utils/pricing';
+import {
+  calculateServicePurchasePricing,
+  evaluateClientGiftServiceStatus,
+  formatGiftRemainingTimeAr,
+  isCatalogFreeGifts,
+} from '../../utils/pricing';
 import { getCatalogsForPosView } from '../../utils/platformSettings';
 import {
   getPackageAvailableStock,
@@ -82,30 +87,41 @@ export const PosDashboard: React.FC = () => {
       }).length
     : 0;
 
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const activePosSupplierId = (currentPosSupplier || supplier).id;
-  const visibleCatalogs = getCatalogsForPosView(catalogs, activePosSupplierId, Boolean(currentPos.canViewGifts));
+  const targetedGiftStatuses = services
+    .filter(srv => {
+      if (!srv.isActive) return false;
+      if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
+      const srvCat = catalogs.find(c => c.id === srv.catalogId);
+      return isCatalogFreeGifts(srvCat);
+    })
+    .map(srv => {
+      const srvCat = catalogs.find(c => c.id === srv.catalogId);
+      return evaluateClientGiftServiceStatus({
+        service: srv,
+        catalog: srvCat,
+        clientPosId: currentPos.id,
+        clientTier: currentPos.tier,
+        clientCanViewGifts: Boolean(currentPos.canViewGifts),
+        usedGiftServiceIds: currentPos.usedGiftServiceIds,
+        orders,
+        nowMs,
+      });
+    })
+    .filter(st => st.isTargeted);
+
+  const freeGiftsCount = targetedGiftStatuses.filter(st => st.isActive).length;
+  const canSeeGiftsInStore = Boolean(currentPos.canViewGifts) || targetedGiftStatuses.length > 0;
+  const visibleCatalogs = getCatalogsForPosView(catalogs, activePosSupplierId, canSeeGiftsInStore);
   const giftCatalogs = visibleCatalogs.filter(c => isCatalogFreeGifts(c));
   const freeGiftsCatalog = giftCatalogs[0];
   const freeGiftsTargetId = freeGiftsCatalog?.id || 'free_gifts';
-  const freeGiftsCount = services.filter(srv => {
-    if (!srv.isActive) return false;
-    if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
-    const srvCat = catalogs.find(c => c.id === srv.catalogId);
-    const isGift = isCatalogFreeGifts(srvCat);
-    if (!isGift || !currentPos.canViewGifts) return false;
-    if (
-      hasClientUsedGiftService({
-        serviceId: srv.id,
-        isGiftService: true,
-        usedGiftServiceIds: currentPos.usedGiftServiceIds,
-        orders,
-        posId: currentPos.id,
-      })
-    ) {
-      return false;
-    }
-    return true;
-  }).length;
   const isFreeGiftsSelected =
     selectedCatalogId === 'free_gifts' ||
     giftCatalogs.some(c => c.id === selectedCatalogId);
@@ -123,13 +139,13 @@ export const PosDashboard: React.FC = () => {
   }, [activeNavTab, currentPos.canRequestLoans, setActiveNavTab]);
 
   useEffect(() => {
-    if (!currentPos.canViewGifts && selectedCatalogId !== 'all') {
+    if (!canSeeGiftsInStore && selectedCatalogId !== 'all') {
       const selCat = catalogs.find(c => c.id === selectedCatalogId);
       if (selectedCatalogId === 'free_gifts' || isCatalogFreeGifts(selCat)) {
         setSelectedCatalogId('all');
       }
     }
-  }, [currentPos.canViewGifts, selectedCatalogId, catalogs]);
+  }, [canSeeGiftsInStore, selectedCatalogId, catalogs]);
 
   // Live Supplier OTP Notification for the client
   const [supplierOtpNotification, setSupplierOtpNotification] = useState<{
@@ -252,23 +268,25 @@ export const PosDashboard: React.FC = () => {
     }
   };
 
-  // Filter services strictly by active POS supplier ID
+  // Filter services strictly by active POS supplier ID and merchant gift targeting
+  // Targeted gift services remain visible even if deactivated by expiry or usage exhaustion so client sees "غير مفعلة".
   const supplierBaseServices = services.filter(srv => {
     if (!srv.isActive) return false;
     if (srv.supplierId && srv.supplierId !== activePosSupplierId) return false;
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
-    const isGift = isCatalogFreeGifts(srvCat);
-    if (isGift && !currentPos.canViewGifts) return false;
-    if (
-      hasClientUsedGiftService({
-        serviceId: srv.id,
-        isGiftService: isGift,
+    const isGiftCat = isCatalogFreeGifts(srvCat);
+    if (isGiftCat) {
+      const giftStatus = evaluateClientGiftServiceStatus({
+        service: srv,
+        catalog: srvCat,
+        clientPosId: currentPos.id,
+        clientTier: currentPos.tier,
+        clientCanViewGifts: Boolean(currentPos.canViewGifts),
         usedGiftServiceIds: currentPos.usedGiftServiceIds,
         orders,
-        posId: currentPos.id,
-      })
-    ) {
-      return false;
+        nowMs,
+      });
+      return giftStatus.isTargeted;
     }
     return true;
   });
@@ -277,7 +295,7 @@ export const PosDashboard: React.FC = () => {
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
     const isGift = isCatalogFreeGifts(srvCat);
     if (isFreeGiftsSelected) {
-      if (!currentPos.canViewGifts || !isGift) return false;
+      if (!canSeeGiftsInStore || !isGift) return false;
     } else if (selectedCatalogId !== 'all' && srv.catalogId !== selectedCatalogId) {
       return false;
     }
@@ -384,7 +402,7 @@ export const PosDashboard: React.FC = () => {
       )}
 
       {/* Active Special Client Features Banner (Gifts, Free Offers, Loans & Bonus Privileges) */}
-      {(currentPos.canViewGifts || currentPos.canGetBonus || currentPos.canRequestLoans) && (
+      {(canSeeGiftsInStore || currentPos.canGetBonus || currentPos.canRequestLoans) && (
         <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-950/40 via-amber-950/30 to-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -407,33 +425,31 @@ export const PosDashboard: React.FC = () => {
                     <span>ميزة الحصول على بونص إضافي</span>
                   </span>
                 )}
-                {currentPos.canViewGifts && (
+                {canSeeGiftsInStore && (
                   <span className="px-2.5 py-1 rounded-xl bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold flex items-center gap-1 text-[11px]">
                     <Gift className="w-3.5 h-3.5 text-purple-400" />
-                    <span>ميزة ظهور الهدايا والعروض المجانية الحصرية</span>
+                    <span>هدايا وعروض مجانية مخصصة لك (0.00 ر.س)</span>
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          {currentPos.canViewGifts && (
+          {canSeeGiftsInStore && (
             <button
               type="button"
               onClick={() => {
                 setActiveNavTab('store');
-                if (freeGiftsCatalog) {
-                  setSelectedCatalogId(freeGiftsCatalog.id);
-                }
+                setSelectedCatalogId(freeGiftsTargetId);
               }}
               className="px-3.5 py-2 rounded-2xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-500/30 text-purple-200 text-center sm:text-right shrink-0 transition-colors cursor-pointer"
             >
               <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
                 <Gift className="w-4 h-4 text-purple-300" />
-                <span>🎁 هدايا وعروض مجانية متاحة (السعر: مجاني)</span>
+                <span>🎁 هدايا وعروض مجانية متاحة (السعر: 0.00 ر.س - مجاني)</span>
               </div>
               <div className="text-[10px] text-purple-200/80 mt-0.5">
-                {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر أو تواصل معه لتفعيل هديتك والعرض المجاني المخصص لك.'}
+                {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر لاستعراض الهدايا المجانية المخصصة لك.'}
               </div>
             </button>
           )}
@@ -718,11 +734,11 @@ export const PosDashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  if (!currentPos.canViewGifts) {
+                  if (!canSeeGiftsInStore) {
                     showToast({
                       type: 'info',
                       title: 'الهدايا المجانية',
-                      description: 'هذه الميزة مخصصة للحسابات المفعلة؛ تواصل مع المتجر لتفعيل الهدايا المجانية لحسابك.',
+                      description: 'لا توجد هدايا مجانية مخصصة لحسابك حالياً؛ تواصل مع المتجر لتفعيلها لك.',
                     });
                     return;
                   }
@@ -730,15 +746,15 @@ export const PosDashboard: React.FC = () => {
                 }}
                 className={`px-3 py-1.5 rounded-xl font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
                   isFreeGiftsSelected
-                    ? 'bg-purple-500 text-white font-bold shadow-sm'
-                    : currentPos.canViewGifts
+                    ? 'bg-purple-600 text-white font-bold shadow-sm'
+                    : canSeeGiftsInStore
                       ? 'bg-purple-950/50 text-purple-300 border border-purple-500/40 hover:bg-purple-900/60'
                       : 'bg-slate-950/80 text-purple-300/80 border border-purple-500/25 hover:border-purple-500/40 hover:text-purple-200'
                 }`}
               >
                 <Gift className="w-3.5 h-3.5 shrink-0" />
                 <span>الهدايا المجانية</span>
-                {currentPos.canViewGifts && freeGiftsCount > 0 && (
+                {canSeeGiftsInStore && freeGiftsCount > 0 && (
                   <span
                     className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold ${
                       isFreeGiftsSelected
@@ -806,30 +822,54 @@ export const PosDashboard: React.FC = () => {
                   : null;
 
               const isGiftService = pricing.isFreeGiftApplied;
+              const giftStatus = isGiftService
+                ? evaluateClientGiftServiceStatus({
+                    service: srv,
+                    catalog: srvCatalog,
+                    clientPosId: currentPos.id,
+                    clientTier: currentPos.tier,
+                    clientCanViewGifts: Boolean(currentPos.canViewGifts),
+                    usedGiftServiceIds: currentPos.usedGiftServiceIds,
+                    orders,
+                    nowMs,
+                  })
+                : null;
+              const isGiftDeactivated = Boolean(giftStatus && !giftStatus.isActive);
               const tierPriceWithFee = (isGiftService ? 0 : pricing.totalAmount).toFixed(2);
 
               return (
                 <div
                   key={srv.id}
-                  className={`p-5 rounded-3xl bg-slate-900 border transition-all flex flex-col justify-between gap-4 shadow-sm ${
-                    isGiftService
-                      ? 'border-purple-500/40 hover:border-purple-400/70'
-                      : 'border-slate-800 hover:border-slate-700'
+                  className={`p-5 rounded-3xl border transition-all flex flex-col justify-between gap-4 shadow-sm ${
+                    isGiftDeactivated
+                      ? 'bg-slate-900/60 border-slate-700/80 opacity-80'
+                      : isGiftService
+                      ? 'bg-gradient-to-br from-purple-950/25 via-slate-900 to-slate-900 border-purple-500/50 hover:border-purple-400/80 shadow-purple-500/10'
+                      : 'bg-slate-900 border-slate-800 hover:border-slate-700'
                   }`}
                 >
                   <div className="space-y-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-700/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden shadow-inner">
+                        <div
+                          className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 overflow-hidden shadow-inner ${
+                            isGiftDeactivated
+                              ? 'bg-slate-800/80 border-slate-700 text-purple-400/60'
+                              : isGiftService
+                              ? 'bg-gradient-to-br from-purple-500/25 to-purple-700/15 border-purple-500/40 text-purple-300'
+                              : 'bg-gradient-to-br from-amber-500/20 to-amber-700/10 border-amber-500/30 text-amber-400'
+                          }`}
+                        >
                           {srv.imageUrl ? (
                             <img src={srv.imageUrl} alt={srv.nameAr} className="w-full h-full object-cover" />
                           ) : (
                             <>
-                              {srv.catalogId === 'cat-games' && <Gamepad2 className="w-6 h-6" />}
-                              {srv.catalogId === 'cat-cards' && <CreditCard className="w-6 h-6" />}
-                              {srv.catalogId === 'cat-stream' && <Tv className="w-6 h-6" />}
-                              {srv.catalogId === 'cat-apps' && <Sparkles className="w-6 h-6" />}
-                              {(isGiftService || srv.catalogId === 'cat-free-gifts') && <Gift className="w-6 h-6 text-purple-400" />}
+                              {isGiftService && <Gift className="w-6 h-6 text-purple-300" />}
+                              {!isGiftService && srv.catalogId === 'cat-games' && <Gamepad2 className="w-6 h-6" />}
+                              {!isGiftService && srv.catalogId === 'cat-cards' && <CreditCard className="w-6 h-6" />}
+                              {!isGiftService && srv.catalogId === 'cat-stream' && <Tv className="w-6 h-6" />}
+                              {!isGiftService && srv.catalogId === 'cat-apps' && <Sparkles className="w-6 h-6" />}
+                              {!isGiftService && srv.catalogId === 'cat-free-gifts' && <Gift className="w-6 h-6 text-purple-400" />}
                               {!['cat-games', 'cat-cards', 'cat-stream', 'cat-apps', 'cat-free-gifts'].includes(srv.catalogId) && !isGiftService && (
                                 <Gamepad2 className="w-6 h-6" />
                               )}
@@ -838,17 +878,47 @@ export const PosDashboard: React.FC = () => {
                         </div>
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="font-bold text-base text-white">{srv.nameAr}</h3>
+                            <h3 className={`font-bold text-base ${isGiftDeactivated ? 'text-purple-300/70' : isGiftService ? 'text-purple-400' : 'text-white'}`}>
+                              {srv.nameAr}
+                            </h3>
                             {isGiftService && (
-                              <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-emerald-400 border border-purple-500/40 text-[10px] font-bold">
-                                🎁 هدية مجانية (مجاني)
+                              <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-bold">
+                                🎁 هدية مجانية · 0.00 ر.س
+                              </span>
+                            )}
+                            {isGiftDeactivated && giftStatus && (
+                              <span className="px-2 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/40 text-[10px] font-bold">
+                                {giftStatus.isExpired
+                                  ? 'غير مفعلة · انتهت فترة الهدية'
+                                  : `غير مفعلة · تم استنفاد الاستخدام (${giftStatus.usedCount}/${giftStatus.maxUses})`}
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                          <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
                             <span>{srv.packages.length} باقات متوفرة</span>
                             <span>·</span>
-                            <span className="text-amber-400 font-medium">تسليم فوري</span>
+                            <span className={`${isGiftService ? 'text-purple-300' : 'text-amber-400'} font-medium`}>تسليم فوري</span>
+                            {isGiftService && giftStatus && (
+                              <>
+                                <span>·</span>
+                                <span className={isGiftDeactivated ? 'text-rose-300 font-semibold' : 'text-purple-300 font-semibold'}>
+                                  {isGiftDeactivated
+                                    ? giftStatus.isExpired
+                                      ? 'انتهت الفترة المحددة للهدية'
+                                      : `استخدمت ${giftStatus.usedCount} من ${giftStatus.maxUses}`
+                                    : `متاح ${giftStatus.remainingUses} من ${giftStatus.maxUses} ${giftStatus.maxUses === 1 ? 'مرة' : 'مرات'}`}
+                                </span>
+                                {giftStatus.isActive && giftStatus.remainingMs !== null && (
+                                  <>
+                                    <span>·</span>
+                                    <span className="text-purple-200 font-semibold flex items-center gap-1">
+                                      <Clock className="w-3 h-3 text-purple-300" />
+                                      <span>تبقى {formatGiftRemainingTimeAr(giftStatus.remainingMs)}</span>
+                                    </span>
+                                  </>
+                                )}
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -928,7 +998,20 @@ export const PosDashboard: React.FC = () => {
 
                   {/* Pricing footer & CTA */}
                   <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-3">
-                    {srv.packages.length > 1 ? (
+                    {isGiftService && srv.packages.length > 1 ? (
+                      <div>
+                        <span className="text-[10px] text-purple-300 block">سعر الهدية لك:</span>
+                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                          <span className="text-xl font-bold font-mono tabular-nums text-purple-300">
+                            0.00 <span className="text-xs font-normal">ر.س</span>
+                          </span>
+                          <span className="text-[11px] font-bold text-emerald-400">(مجاني)</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">
+                          اضغط شحن وشراء فوري لاختيار الباقة
+                        </span>
+                      </div>
+                    ) : srv.packages.length > 1 ? (
                       <div>
                         <span className="text-[11px] font-medium text-slate-300 leading-relaxed block">
                           اضغط شحن وشراء فوري لإستعراض الباقات والاسعار
@@ -941,8 +1024,9 @@ export const PosDashboard: React.FC = () => {
                             {isGiftService ? 'السعر:' : 'سعر الكود الواحد:'}
                           </span>
                           {isGiftService ? (
-                            <span className="text-lg font-bold font-mono tabular-nums text-emerald-400">
-                              مجاني
+                            <span className="text-lg font-bold font-mono tabular-nums text-purple-300">
+                              0.00 <span className="text-[11px] font-normal">ر.س</span>{' '}
+                              <span className="text-xs font-sans text-emerald-400">(مجاني)</span>
                             </span>
                           ) : (
                             <span className="text-lg font-bold font-mono tabular-nums text-amber-400">
@@ -956,8 +1040,9 @@ export const PosDashboard: React.FC = () => {
                             <span>{isGiftService ? 'السعر (باقة):' : `سعر الباقة (${primaryOpts.packageCodesCount} أكواد):`}</span>
                           </span>
                           {isGiftService || packagePricing.isFreeGiftApplied ? (
-                            <span className="text-lg font-bold font-mono tabular-nums text-emerald-400">
-                              مجاني
+                            <span className="text-lg font-bold font-mono tabular-nums text-purple-300">
+                              0.00 <span className="text-[11px] font-normal">ر.س</span>{' '}
+                              <span className="text-xs font-sans text-emerald-400">(مجاني)</span>
                             </span>
                           ) : (
                             <span className="text-lg font-bold font-mono tabular-nums text-cyan-300">
@@ -979,9 +1064,12 @@ export const PosDashboard: React.FC = () => {
                         </span>
                         <div className="flex items-baseline gap-1.5 flex-wrap">
                           {isGiftService ? (
-                            <span className="text-xl font-bold font-mono tabular-nums text-emerald-400">
-                              مجاني
-                            </span>
+                            <>
+                              <span className="text-xl font-bold font-mono tabular-nums text-purple-300">
+                                0.00 <span className="text-xs font-normal">ر.س</span>
+                              </span>
+                              <span className="text-xs font-bold text-emerald-400">(مجاني)</span>
+                            </>
                           ) : (
                             <span className="text-xl font-bold font-mono tabular-nums text-amber-400">
                               {tierPriceWithFee} <span className="text-xs font-normal">ر.س</span>
@@ -997,14 +1085,22 @@ export const PosDashboard: React.FC = () => {
                     )}
 
                     <button
-                      onClick={() => setActivePurchaseService(srv)}
-                      className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md cursor-pointer shrink-0 whitespace-nowrap ${
-                        isGiftService
-                          ? 'bg-purple-500 hover:bg-purple-400 text-white'
-                          : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                      type="button"
+                      disabled={isGiftDeactivated}
+                      onClick={() => {
+                        if (isGiftDeactivated) return;
+                        setActivePurchaseService(srv);
+                      }}
+                      className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md shrink-0 whitespace-nowrap ${
+                        isGiftDeactivated
+                          ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed shadow-none'
+                          : isGiftService
+                          ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-500/25 cursor-pointer'
+                          : 'bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer'
                       }`}
                     >
-                      <span>{isGiftService ? 'استلام الهدية المجانية' : 'شحن وشراء فوري'}</span>
+                      {isGiftService && <Gift className="w-3.5 h-3.5" />}
+                      <span>{isGiftDeactivated ? 'غير مفعلة' : 'شحن وشراء فوري'}</span>
                     </button>
                   </div>
                 </div>
@@ -1142,6 +1238,26 @@ export const PosDashboard: React.FC = () => {
                       </div>
                     )}
 
+                    {/* Account Login Delivery Details Highlight */}
+                    {order.deliveryMethod === 'account_login' && (
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {order.deliveryDetails.accountType && (
+                            <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold text-[11px]">
+                              {order.deliveryDetails.accountType}
+                            </span>
+                          )}
+                          <span className="text-cyan-400 font-semibold text-[11px]">الحساب:</span>
+                          <span className="font-mono text-white font-bold select-all text-xs bg-slate-900 px-2 py-0.5 rounded border border-slate-700" dir="ltr">
+                            {order.deliveryDetails.accountEmail || 'غير محدد'}
+                          </span>
+                        </div>
+                        <span className={`text-[10px] ${isPending ? 'text-cyan-300' : 'text-emerald-400'}`}>
+                          {isPending ? 'أُرسل للمتجر لتنفيذ الشحن عبر الحساب' : 'تم التنفيذ عبر الحساب بنجاح'}
+                        </span>
+                      </div>
+                    )}
+
                     {/* Voucher Code delivery highlight */}
                     {order.deliveryMethod === 'voucher_code' && (order.deliveryDetails.voucherCodes?.length || order.deliveryDetails.voucherCode) && (() => {
                       const codesList =
@@ -1239,7 +1355,7 @@ export const PosDashboard: React.FC = () => {
                         const orderCat = orderSrv ? catalogs.find(c => c.id === orderSrv.catalogId) : undefined;
                         const isFreeGiftOrder = Boolean(order.isFreeGiftOrder || (orderCat && isCatalogFreeGifts(orderCat) && order.costPrice === 0));
                         if (isFreeGiftOrder) {
-                          return <span className="text-emerald-400 font-bold">مجاني</span>;
+                          return <span className="text-purple-300 font-bold">0.00 ر.س <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>;
                         }
                         return `${order.totalDeducted.toFixed(2)} ر.س`;
                       })()}

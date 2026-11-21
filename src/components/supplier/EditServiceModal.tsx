@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { DigitalService, DeliveryMethod, ServicePackage, AccountTier } from '../../types';
-import { isCatalogFreeGifts } from '../../utils/pricing';
+import { DigitalService, DeliveryMethod, ServicePackage, AccountTier, TIERS_CONFIG } from '../../types';
+import { isCatalogFreeGifts, computeGiftExpiresAt, GiftDurationUnit, formatGiftRemainingTimeAr } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
 import {
   sanitizePackagesForDeliveryMethods,
@@ -9,6 +9,7 @@ import {
   createEmptyPackageForMethod,
   getDeliveryMethodLabelAr,
 } from '../../utils/voucherWarehouses';
+import { resolveEffectiveEmployeePermissions } from '../../utils/employeePermissions';
 import { 
   X, 
   Upload, 
@@ -25,7 +26,8 @@ import {
   Package,
   ToggleLeft,
   ToggleRight,
-  Gift
+  Gift,
+  Clock
 } from 'lucide-react';
 
 interface EditServiceModalProps {
@@ -34,9 +36,15 @@ interface EditServiceModalProps {
 }
 
 export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onClose }) => {
-  const { catalogs, supplier, posClients, voucherWarehouses, updateService, deleteService, showToast } = useApp();
+  const { role, currentUser, catalogs, supplier, posClients, voucherWarehouses, updateService, deleteService, showToast } = useApp();
+  const perms = resolveEffectiveEmployeePermissions(currentUser, role, supplier);
+  const canEditDetails = role !== 'employee' || perms.canAddServices;
+  const canEditPrices = role !== 'employee' || perms.canEditServicePrices;
+  const canEditVoucherStock = role !== 'employee' || perms.canManageVoucherStock;
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
+  const supplierClients = posClients.filter(c => !c.supplierId || c.supplierId === supplier.id);
+  const targetableClients = supplierClients.length > 0 ? supplierClients : posClients;
 
   const initialMethods: DeliveryMethod[] =
     service.deliveryMethods && service.deliveryMethods.length > 0
@@ -51,7 +59,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const [activePackageMethod, setActivePackageMethod] = useState<DeliveryMethod>(initialMethods[0]);
   const [isActive, setIsActive] = useState<boolean>(service.isActive !== false);
 
-  // Gift targeting state
+  // Gift targeting, usage limit & visibility period state
   const [giftTargetType, setGiftTargetType] = useState<'all_tiers' | 'specific_tiers' | 'specific_clients'>(
     service.giftTargetType || 'all_tiers'
   );
@@ -60,6 +68,32 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   );
   const [giftTargetPosIds, setGiftTargetPosIds] = useState<string[]>(
     service.giftTargetPosIds || []
+  );
+  const [giftMaxUsesPerClient, setGiftMaxUsesPerClient] = useState<number>(
+    typeof service.giftMaxUsesPerClient === 'number' && service.giftMaxUsesPerClient >= 1
+      ? Math.floor(service.giftMaxUsesPerClient)
+      : 1
+  );
+  const toLocalDateTimeInput = (iso?: string): string => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const [giftPeriodMode, setGiftPeriodMode] = useState<'unlimited' | 'duration' | 'custom_date'>(
+    service.giftExpiresAt ? 'custom_date' : 'unlimited'
+  );
+  const [giftDurationValue, setGiftDurationValue] = useState<number>(
+    typeof service.giftDurationValue === 'number' && service.giftDurationValue > 0
+      ? service.giftDurationValue
+      : 7
+  );
+  const [giftDurationUnit, setGiftDurationUnit] = useState<GiftDurationUnit>(
+    service.giftDurationUnit || 'days'
+  );
+  const [giftCustomExpiryLocal, setGiftCustomExpiryLocal] = useState<string>(() =>
+    toLocalDateTimeInput(service.giftExpiresAt)
   );
 
   // Independent packages list per delivery method (migrates legacy untagged packages smoothly)
@@ -117,6 +151,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   };
 
   const toggleMethod = (method: DeliveryMethod) => {
+    if (!canEditDetails) return;
     if (deliveryMethods.includes(method)) {
       if (deliveryMethods.length === 1) {
         showToast({ type: 'error', title: 'تنبيه', description: 'يجب اختيار طريقة تسليم واحدة على الأقل' });
@@ -310,27 +345,80 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       }
     }
 
-    const combinedPackages = deliveryMethods.flatMap(method =>
-      (packagesByMethod[method] || []).map(p => ({
-        ...p,
-        deliveryMethod: method,
-      }))
+    const originalPkgMap = new Map((service.packages || []).map(p => [p.id, p]));
+    const combinedPackages = (canEditDetails ? deliveryMethods : initialMethods).flatMap(method =>
+      (packagesByMethod[method] || []).map(p => {
+        const orig = originalPkgMap.get(p.id);
+        return {
+          ...p,
+          name: canEditDetails ? p.name : (orig?.name ?? p.name),
+          tierPrices: canEditPrices ? p.tierPrices : (orig?.tierPrices ?? p.tierPrices),
+          deliveryMethod: method,
+        };
+      })
     );
 
-    const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === catalogId));
-    const finalPackages = sanitizePackagesForDeliveryMethods(combinedPackages, deliveryMethods);
+    const effectiveCatalogId = canEditDetails ? catalogId : service.catalogId;
+    const effectiveMethods = canEditDetails ? deliveryMethods : initialMethods;
+    const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === effectiveCatalogId));
+    if (canEditDetails && isGiftCat && giftTargetType === 'specific_tiers' && giftTargetTiers.length === 0) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد رتبة واحدة على الأقل لمن ستظهر لهم الهدية المجانية.' });
+      return;
+    }
+    if (canEditDetails && isGiftCat && giftTargetType === 'specific_clients' && giftTargetPosIds.length === 0) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى اختيار عميل واحد على الأقل لمن ستظهر لهم الهدية المجانية.' });
+      return;
+    }
+
+    let resolvedGiftExpiresAt: string | undefined = service.giftExpiresAt;
+    if (canEditDetails && isGiftCat) {
+      if (!Number.isFinite(giftMaxUsesPerClient) || giftMaxUsesPerClient < 1) {
+        showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد عدد مرات استخدام صحيح (مرة واحدة على الأقل).' });
+        return;
+      }
+      if (giftPeriodMode === 'unlimited') {
+        resolvedGiftExpiresAt = undefined;
+      } else if (giftPeriodMode === 'duration') {
+        if (!Number.isFinite(giftDurationValue) || giftDurationValue <= 0) {
+          showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال مدة صلاحية صحيحة للهدية أكبر من صفر.' });
+          return;
+        }
+        resolvedGiftExpiresAt = computeGiftExpiresAt({
+          durationValue: giftDurationValue,
+          durationUnit: giftDurationUnit,
+        });
+      } else if (giftPeriodMode === 'custom_date') {
+        const parsedCustom = giftCustomExpiryLocal ? Date.parse(giftCustomExpiryLocal) : NaN;
+        if (!Number.isFinite(parsedCustom)) {
+          showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد تاريخ ووقت انتهاء صحيح للهدية.' });
+          return;
+        }
+        resolvedGiftExpiresAt = new Date(parsedCustom).toISOString();
+      }
+    }
+
+    const finalPackages = sanitizePackagesForDeliveryMethods(combinedPackages, effectiveMethods);
 
     updateService(service.id, {
-      catalogId,
-      nameAr: nameAr.trim(),
-      descriptionAr: descriptionAr.trim(),
-      imageUrl: imageUrl.trim() || undefined,
-      deliveryMethods,
-      isActive,
+      ...(canEditDetails
+        ? {
+            catalogId: effectiveCatalogId,
+            nameAr: nameAr.trim(),
+            descriptionAr: descriptionAr.trim(),
+            imageUrl: imageUrl.trim() || undefined,
+            deliveryMethods: effectiveMethods,
+            isActive,
+            giftTargetType: isGiftCat ? giftTargetType : undefined,
+            giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
+            giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined,
+            giftMaxUsesPerClient: isGiftCat ? Math.max(1, Math.floor(giftMaxUsesPerClient)) : undefined,
+            giftDurationValue: isGiftCat && giftPeriodMode === 'duration' ? giftDurationValue : undefined,
+            giftDurationUnit: isGiftCat && giftPeriodMode === 'duration' ? giftDurationUnit : undefined,
+            giftExpiresAt: isGiftCat ? resolvedGiftExpiresAt : undefined,
+            giftActivatedAt: isGiftCat ? (service.giftActivatedAt || new Date().toISOString()) : undefined,
+          }
+        : {}),
       packages: finalPackages,
-      giftTargetType: isGiftCat ? giftTargetType : undefined,
-      giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
-      giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined,
     });
 
     onClose();
@@ -378,7 +466,19 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
 
         {/* Scrollable Form Content */}
         <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-5 custom-scrollbar flex-1">
+          {role === 'employee' && (!canEditDetails || !canEditPrices) && (
+            <div className="p-3 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-[11px] text-cyan-200 flex items-center gap-2">
+              <Lock className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span>
+                {!canEditDetails
+                  ? 'صلاحيتك الممنوحة لهذا القسم هي تعديل الأسعار فقط — لا يمكن تعديل بيانات الخدمة الأساسية أو إضافة/حذف الباقات.'
+                  : 'صلاحيتك تسمح بتعديل بيانات الخدمة والباقات دون تعديل تسعيرة الرتب.'}
+              </span>
+            </div>
+          )}
+
           {/* Service Image Section */}
+          {canEditDetails && (
           <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-white flex items-center gap-1.5">
@@ -444,6 +544,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               </div>
             </div>
           </div>
+          )}
 
           {/* Basic Fields */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -453,8 +554,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               </label>
               <select
                 value={catalogId}
+                disabled={!canEditDetails}
                 onChange={e => setCatalogId(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
+                className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors disabled:opacity-60"
               >
                 {supplierCatalogs.map(cat => (
                   <option key={cat.id} value={cat.id}>
@@ -471,14 +573,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               <input
                 type="text"
                 required
+                disabled={!canEditDetails}
                 value={nameAr}
                 onChange={e => setNameAr(e.target.value)}
                 placeholder="مثال: شحن شدات ببجي موبايل (PUBG Mobile)"
-                className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors"
+                className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors disabled:opacity-60"
               />
             </div>
           </div>
 
+          {canEditDetails && (
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
               وصف الخدمة وملاحظات التسليم:
@@ -491,8 +595,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white outline-none transition-colors resize-none"
             />
           </div>
+          )}
 
           {/* Delivery Methods & Status */}
+          {canEditDetails && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2 space-y-1.5">
               <label className="block text-xs font-semibold text-slate-300">
@@ -562,6 +668,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               </button>
             </div>
           </div>
+          )}
 
           {/* Packages and 5-Tier Pricing Matrix (Independent Per Delivery Method) */}
           <div className="space-y-3 pt-2 border-t border-slate-800">
@@ -575,14 +682,16 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                   اختر طريقة التسليم لتعديل باقاتها وأسعارها بشكل مستقل تماماً عن الطرق الأخرى.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAddPackageForm(!showAddPackageForm)}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/40 text-xs font-bold flex items-center gap-1 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>إضافة باقة لـ ({getDeliveryMethodLabelAr(activePackageMethod)})</span>
-              </button>
+              {canEditDetails && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddPackageForm(!showAddPackageForm)}
+                  className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/40 text-xs font-bold flex items-center gap-1 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>إضافة باقة لـ ({getDeliveryMethodLabelAr(activePackageMethod)})</span>
+                </button>
+              )}
             </div>
 
             {/* Segmented Tabs for Each Active Delivery Method */}
@@ -623,7 +732,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
             </div>
 
             {/* Inline Add Package Form */}
-            {showAddPackageForm && (
+            {showAddPackageForm && canEditDetails && (
               <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-xs text-amber-300">
@@ -656,9 +765,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       type="number"
                       min={0}
                       step="any"
+                      disabled={!canEditPrices}
                       value={newPriceRegular}
                       onChange={e => setNewPriceRegular(Math.max(0, Number(e.target.value)))}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center text-white"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center text-white disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -667,9 +777,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       type="number"
                       min={0}
                       step="any"
+                      disabled={!canEditPrices}
                       value={newPriceBronze}
                       onChange={e => setNewPriceBronze(Math.max(0, Number(e.target.value)))}
-                      className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-2 py-1 text-xs text-center text-amber-300 font-bold"
+                      className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-2 py-1 text-xs text-center text-amber-300 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -678,9 +789,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       type="number"
                       min={0}
                       step="any"
+                      disabled={!canEditPrices}
                       value={newPriceSilver}
                       onChange={e => setNewPriceSilver(Math.max(0, Number(e.target.value)))}
-                      className="w-full bg-slate-950 border border-slate-400/40 rounded-xl px-2 py-1 text-xs text-center text-slate-200 font-bold"
+                      className="w-full bg-slate-950 border border-slate-400/40 rounded-xl px-2 py-1 text-xs text-center text-slate-200 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -689,9 +801,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       type="number"
                       min={0}
                       step="any"
+                      disabled={!canEditPrices}
                       value={newPriceGold}
                       onChange={e => setNewPriceGold(Math.max(0, Number(e.target.value)))}
-                      className="w-full bg-slate-950 border border-yellow-500/40 rounded-xl px-2 py-1 text-xs text-center text-yellow-300 font-bold"
+                      className="w-full bg-slate-950 border border-yellow-500/40 rounded-xl px-2 py-1 text-xs text-center text-yellow-300 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
@@ -700,9 +813,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       type="number"
                       min={0}
                       step="any"
+                      disabled={!canEditPrices}
                       value={newPriceVip}
                       onChange={e => setNewPriceVip(Math.max(0, Number(e.target.value)))}
-                      className="w-full bg-slate-950 border border-purple-500/40 rounded-xl px-2 py-1 text-xs text-center text-purple-300 font-bold"
+                      className="w-full bg-slate-950 border border-purple-500/40 rounded-xl px-2 py-1 text-xs text-center text-purple-300 font-bold disabled:opacity-50"
                     />
                   </div>
                 </div>
@@ -756,12 +870,13 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                       </label>
                       <input
                         type="text"
+                        disabled={!canEditDetails}
                         value={pkg.name}
                         onChange={e => handleUpdatePackageName(pkg.id, e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-1.5 text-xs text-white font-medium outline-none"
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-1.5 text-xs text-white font-medium outline-none disabled:opacity-60"
                       />
                     </div>
-                    {activePackages.length > 1 && (
+                    {canEditDetails && activePackages.length > 1 && (
                       <button
                         type="button"
                         onClick={() => handleDeletePackage(pkg.id)}
@@ -782,9 +897,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
+                          disabled={!canEditPrices}
                           value={pkg.tierPrices?.regular ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-center font-mono text-white text-xs"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-center font-mono text-white text-xs disabled:opacity-50"
                         />
                       </div>
                     </div>
@@ -796,9 +912,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
+                          disabled={!canEditPrices}
                           value={pkg.tierPrices?.bronze ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-2 py-1 text-center font-mono text-amber-300 font-bold text-xs"
+                          className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-2 py-1 text-center font-mono text-amber-300 font-bold text-xs disabled:opacity-50"
                         />
                       </div>
                     </div>
@@ -810,9 +927,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
+                          disabled={!canEditPrices}
                           value={pkg.tierPrices?.silver ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-slate-400/40 rounded-xl px-2 py-1 text-center font-mono text-slate-200 font-bold text-xs"
+                          className="w-full bg-slate-900 border border-slate-400/40 rounded-xl px-2 py-1 text-center font-mono text-slate-200 font-bold text-xs disabled:opacity-50"
                         />
                       </div>
                     </div>
@@ -824,9 +942,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
+                          disabled={!canEditPrices}
                           value={pkg.tierPrices?.gold ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-yellow-500/40 rounded-xl px-2 py-1 text-center font-mono text-yellow-300 font-bold text-xs"
+                          className="w-full bg-slate-900 border border-yellow-500/40 rounded-xl px-2 py-1 text-center font-mono text-yellow-300 font-bold text-xs disabled:opacity-50"
                         />
                       </div>
                     </div>
@@ -838,9 +957,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           type="number"
                           min={0}
                           step="any"
+                          disabled={!canEditPrices}
                           value={pkg.tierPrices?.vip ?? 0}
                           onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
-                          className="w-full bg-purple-950/40 border border-purple-500/50 rounded-xl px-2 py-1 text-center font-mono text-purple-300 font-bold text-xs"
+                          className="w-full bg-purple-950/40 border border-purple-500/50 rounded-xl px-2 py-1 text-center font-mono text-purple-300 font-bold text-xs disabled:opacity-50"
                         />
                       </div>
                     </div>
@@ -853,8 +973,9 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                         <label className="block text-[10px] text-slate-400 mb-0.5">ربط بمخزن أكواد:</label>
                         <select
                           value={pkg.warehouseId || ''}
+                          disabled={!canEditVoucherStock}
                           onChange={e => handleLinkPackageWarehouse(pkg.id, e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white disabled:opacity-60"
                         >
                           <option value="">-- بدون ربط بمخزن --</option>
                           {supplierWarehouses.map(wh => (
@@ -873,7 +994,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                         <input
                           type="number"
                           min={0}
-                          disabled={Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
+                          disabled={!canEditVoucherStock || Boolean(pkg.warehouseId) || Array.isArray(pkg.vouchers)}
                           value={
                             pkg.warehouseId
                               ? supplierWarehouses.find(w => w.id === pkg.warehouseId)?.codes.length ?? pkg.vouchers?.length ?? 0
@@ -892,10 +1013,11 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                           </label>
                           <textarea
                             rows={2}
+                            disabled={!canEditVoucherStock}
                             value={(pkg.vouchers || []).join('\n')}
                             onChange={e => handleUpdatePackageVouchers(pkg.id, e.target.value)}
                             placeholder="أدخل أكواد القسائم الحقيقية أو اربط الباقة بمخزن أكواد"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 text-xs font-mono text-amber-300 disabled:opacity-60"
                             dir="ltr"
                           />
                         </div>
@@ -918,7 +1040,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               ))}
             </div>
 
-            {isCatalogFreeGifts(catalogs.find(c => c.id === catalogId)) ? (
+            {canEditDetails && isCatalogFreeGifts(catalogs.find(c => c.id === catalogId)) ? (
               <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/30 space-y-3">
                 <div className="flex items-start gap-2">
                   <Gift className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
@@ -1011,13 +1133,19 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                 {/* If specific_clients */}
                 {giftTargetType === 'specific_clients' && (
                   <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                    <span className="block text-[11px] font-semibold text-slate-300">اختر العملاء / نقاط البيع المستهدفة بالهدية:</span>
-                    {posClients.length === 0 ? (
+                    <div className="flex items-center justify-between">
+                      <span className="block text-[11px] font-semibold text-slate-300">اختر العملاء / نقاط البيع المستهدفة بالهدية:</span>
+                      <span className="text-[10px] font-mono text-purple-300 font-bold">
+                        المحدد: {giftTargetPosIds.length} عميل
+                      </span>
+                    </div>
+                    {targetableClients.length === 0 ? (
                       <p className="text-[11px] text-slate-400">لا توجد نقاط بيع مسجلة حالياً.</p>
                     ) : (
-                      <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
-                        {posClients.map(client => {
+                      <div className="max-h-40 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                        {targetableClients.map(client => {
                           const isSelected = giftTargetPosIds.includes(client.id);
+                          const clientTierInfo = TIERS_CONFIG[client.tier];
                           return (
                             <div
                               key={client.id}
@@ -1034,11 +1162,15 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                                   : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/50'
                               }`}
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-white">{client.tradeName}</span>
+                                <span className="font-mono text-[10px] text-amber-300">{client.posCode}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${clientTierInfo.badgeColor} ${clientTierInfo.textColor}`}>
+                                  {clientTierInfo.nameAr}
+                                </span>
                                 <span className="text-[10px] text-slate-400">({client.phone || client.ownerName})</span>
                               </div>
-                              <div className={`w-4 h-4 rounded-md border flex items-center justify-center ${isSelected ? 'bg-purple-500 border-purple-400 text-slate-950' : 'border-slate-700'}`}>
+                              <div className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${isSelected ? 'bg-purple-500 border-purple-400 text-slate-950' : 'border-slate-700'}`}>
                                 {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                               </div>
                             </div>
@@ -1048,6 +1180,163 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                     )}
                   </div>
                 )}
+
+                {/* Gift Usage Limit Per Client & Visibility Duration */}
+                <div className="pt-2 border-t border-purple-500/20 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Usage Limit Per Client */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-bold text-purple-300">
+                      عدد مرات الاستخدام المسموحة لكل عميل (غالباً مرة واحدة):
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={giftMaxUsesPerClient}
+                        onChange={e => setGiftMaxUsesPerClient(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                        className="w-24 bg-slate-900 border border-purple-500/40 rounded-lg px-2.5 py-1.5 text-center font-mono font-bold text-xs text-white outline-none focus:border-purple-400"
+                      />
+                      <span className="text-[11px] text-slate-400">
+                        {giftMaxUsesPerClient === 1 ? 'مرة واحدة لكل عميل' : `${giftMaxUsesPerClient} مرات لكل عميل`}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 5].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setGiftMaxUsesPerClient(preset)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                            giftMaxUsesPerClient === preset
+                              ? 'bg-purple-600 text-white border-purple-400'
+                              : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-purple-500/40'
+                          }`}
+                        >
+                          {preset === 1 ? 'مرة واحدة (1)' : preset === 2 ? 'مرتين (2)' : `${preset} مرات`}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      بمجرد استخدام العميل للهدية بهذا العدد، تصبح غير مفعلة لديه تلقائياً.
+                    </p>
+                  </div>
+
+                  {/* Gift Visibility / Active Period */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-bold text-purple-300 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-purple-400" />
+                      <span>فترة بقاء الهدية مفعلة للعملاء:</span>
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('unlimited')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'unlimited'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        مفتوحة دائماً
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('duration')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'duration'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        تجديد بمدة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('custom_date')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'custom_date'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        تاريخ محدد
+                      </button>
+                    </div>
+
+                    {giftPeriodMode === 'duration' && (
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={giftDurationValue}
+                            onChange={e => setGiftDurationValue(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                            className="w-20 bg-slate-900 border border-purple-500/40 rounded-lg px-2 py-1 text-center font-mono font-bold text-xs text-white outline-none focus:border-purple-400"
+                          />
+                          <select
+                            value={giftDurationUnit}
+                            onChange={e => setGiftDurationUnit(e.target.value as GiftDurationUnit)}
+                            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-purple-400"
+                          >
+                            <option value="hours">ساعة / ساعات من الآن</option>
+                            <option value="days">يوم / أيام من الآن</option>
+                          </select>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            { v: 24, u: 'hours' as GiftDurationUnit, label: '24 ساعة' },
+                            { v: 3, u: 'days' as GiftDurationUnit, label: '3 أيام' },
+                            { v: 7, u: 'days' as GiftDurationUnit, label: '7 أيام' },
+                            { v: 30, u: 'days' as GiftDurationUnit, label: '30 يوماً' },
+                          ].map(item => (
+                            <button
+                              key={item.label}
+                              type="button"
+                              onClick={() => {
+                                setGiftDurationValue(item.v);
+                                setGiftDurationUnit(item.u);
+                              }}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                                giftDurationValue === item.v && giftDurationUnit === item.u
+                                  ? 'bg-purple-500/30 text-purple-200 border-purple-400'
+                                  : 'bg-slate-900 text-slate-400 border-slate-700'
+                              }`}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {giftPeriodMode === 'custom_date' && (
+                      <div className="space-y-1.5 pt-1">
+                        <input
+                          type="datetime-local"
+                          value={giftCustomExpiryLocal}
+                          onChange={e => setGiftCustomExpiryLocal(e.target.value)}
+                          dir="ltr"
+                          className="w-full bg-slate-900 border border-purple-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white outline-none focus:border-purple-400"
+                        />
+                        {giftCustomExpiryLocal && (
+                          <div className="text-[10px] text-purple-200/90">
+                            {Date.parse(giftCustomExpiryLocal) > Date.now()
+                              ? `المتبقي حالياً: ${formatGiftRemainingTimeAr(Date.parse(giftCustomExpiryLocal) - Date.now())}`
+                              : 'تنبيه: التاريخ المحدد منتهي حالياً (ستظهر الهدية غير مفعلة للعملاء).'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      {giftPeriodMode === 'unlimited'
+                        ? 'تبقى الهدية متاحة حتى يستخدم العميل المرات المحددة له.'
+                        : 'إذا انتهت الفترة المحددة ولم يستخدم العميل الهدية، تصبح غير مفعلة عنده تلقائياً.'}
+                    </p>
+                  </div>
+                </div>
               </div>
             ) : allActivePackages.some(p => Object.values(p.tierPrices || {}).some(v => Number(v) === 0)) ? (
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
@@ -1057,7 +1346,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
           </div>
 
           {/* Delete service section */}
-          {showDeleteConfirm ? (
+          {canEditDetails && (showDeleteConfirm ? (
             <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2">
               <p className="text-xs text-rose-300 font-medium">
                 هل أنت متأكد من حذف خدمة "{service.nameAr}" نهائياً من المتجر؟
@@ -1090,7 +1379,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                 <span>حذف هذه الخدمة بالكامل</span>
               </button>
             </div>
-          )}
+          ))}
 
           {/* Action buttons */}
           <div className="flex items-center gap-2 pt-2 border-t border-slate-800">

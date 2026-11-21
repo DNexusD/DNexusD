@@ -11,6 +11,10 @@
         "role": { "type": "string", "enum": ["pos_client", "supplier", "super_admin", "employee"] },
         "phone": { "type": "string" },
         "associatedId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "roleTitle": { "type": "string" },
+        "permissions": { "type": "object" },
         "adminAccountId": { "type": "string" },
         "adminPermissions": { "type": "object" },
         "createdAt": { "type": "string" }
@@ -66,7 +70,8 @@
         "logoUrl": { "type": "string" },
         "country": { "type": "string" },
         "city": { "type": "string" },
-        "socialLinks": { "type": "object" }
+        "socialLinks": { "type": "object" },
+        "employees": { "type": "array" }
       },
       "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
     },
@@ -103,6 +108,7 @@
         "purchaseUnit": { "type": "string", "enum": ["single_code", "package"] },
         "quantityCodes": { "type": "number" },
         "deliveryMethod": { "type": "string", "enum": ["player_id", "account_login", "voucher_code"] },
+        "deliveryDetails": { "type": "object" },
         "costPrice": { "type": "number" },
         "salePriceToCustomer": { "type": "number" },
         "feeAmount": { "type": "number" },
@@ -262,7 +268,17 @@
         "descriptionAr": { "type": "string" },
         "icon": { "type": "string" },
         "imageUrl": { "type": "string" },
-        "isActive": { "type": "boolean" }
+        "deliveryMethods": { "type": "array" },
+        "packages": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "giftTargetType": { "type": "string" },
+        "giftTargetTiers": { "type": "array" },
+        "giftTargetPosIds": { "type": "array" },
+        "giftMaxUsesPerClient": { "type": "number" },
+        "giftDurationValue": { "type": "number" },
+        "giftDurationUnit": { "type": "string" },
+        "giftExpiresAt": { "type": "string" },
+        "giftActivatedAt": { "type": "string" }
       },
       "required": ["id", "catalogId", "supplierId", "nameAr", "isActive"]
     },

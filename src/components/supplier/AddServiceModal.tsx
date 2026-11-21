@@ -1,14 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { DeliveryMethod, AccountTier, ServicePackage } from '../../types';
-import { isCatalogFreeGifts } from '../../utils/pricing';
+import { DeliveryMethod, AccountTier, ServicePackage, TIERS_CONFIG } from '../../types';
+import { isCatalogFreeGifts, computeGiftExpiresAt, GiftDurationUnit } from '../../utils/pricing';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
 import {
   sanitizePackagesForDeliveryMethods,
   createEmptyPackageForMethod,
   getDeliveryMethodLabelAr,
 } from '../../utils/voucherWarehouses';
-import { X, Plus, Trash2, ArrowRight, Upload, Image as ImageIcon, Check, CheckCircle2, Gamepad2, Lock, Ticket, Gift, Package } from 'lucide-react';
+import { X, Plus, Trash2, ArrowRight, Upload, Image as ImageIcon, Check, CheckCircle2, Gamepad2, Lock, Ticket, Gift, Package, Clock } from 'lucide-react';
 
 interface AddServiceModalProps {
   onClose: () => void;
@@ -18,6 +18,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const { catalogs, supplier, posClients, voucherWarehouses, addService, showToast } = useApp();
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
+  const supplierClients = posClients.filter(c => !c.supplierId || c.supplierId === supplier.id);
+  const targetableClients = supplierClients.length > 0 ? supplierClients : posClients;
 
   const [catalogId, setCatalogId] = useState(supplierCatalogs[0]?.id || '');
   const [nameAr, setNameAr] = useState('');
@@ -25,10 +27,15 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>(['player_id', 'voucher_code']);
   const [activePackageMethod, setActivePackageMethod] = useState<DeliveryMethod>('player_id');
 
-  // Gift targeting state
+  // Gift targeting, usage limit & visibility period state
   const [giftTargetType, setGiftTargetType] = useState<'all_tiers' | 'specific_tiers' | 'specific_clients'>('all_tiers');
   const [giftTargetTiers, setGiftTargetTiers] = useState<AccountTier[]>(['regular', 'bronze', 'silver', 'gold', 'vip']);
   const [giftTargetPosIds, setGiftTargetPosIds] = useState<string[]>([]);
+  const [giftMaxUsesPerClient, setGiftMaxUsesPerClient] = useState<number>(1);
+  const [giftPeriodMode, setGiftPeriodMode] = useState<'unlimited' | 'duration' | 'custom_date'>('unlimited');
+  const [giftDurationValue, setGiftDurationValue] = useState<number>(7);
+  const [giftDurationUnit, setGiftDurationUnit] = useState<GiftDurationUnit>('days');
+  const [giftCustomExpiryLocal, setGiftCustomExpiryLocal] = useState<string>('');
 
   // Service image state
   const [imageUrl, setImageUrl] = useState<string>('');
@@ -272,6 +279,40 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
     );
 
     const isGiftCat = isCatalogFreeGifts(catalogs.find(c => c.id === catalogId));
+    if (isGiftCat && giftTargetType === 'specific_tiers' && giftTargetTiers.length === 0) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد رتبة واحدة على الأقل لمن ستظهر لهم الهدية المجانية.' });
+      return;
+    }
+    if (isGiftCat && giftTargetType === 'specific_clients' && giftTargetPosIds.length === 0) {
+      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى اختيار عميل واحد على الأقل لمن ستظهر لهم الهدية المجانية.' });
+      return;
+    }
+
+    let resolvedGiftExpiresAt: string | undefined;
+    if (isGiftCat) {
+      if (!Number.isFinite(giftMaxUsesPerClient) || giftMaxUsesPerClient < 1) {
+        showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد عدد مرات استخدام صحيح (مرة واحدة على الأقل).' });
+        return;
+      }
+      if (giftPeriodMode === 'duration') {
+        if (!Number.isFinite(giftDurationValue) || giftDurationValue <= 0) {
+          showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال مدة صلاحية صحيحة للهدية أكبر من صفر.' });
+          return;
+        }
+        resolvedGiftExpiresAt = computeGiftExpiresAt({
+          durationValue: giftDurationValue,
+          durationUnit: giftDurationUnit,
+        });
+      } else if (giftPeriodMode === 'custom_date') {
+        const parsedCustom = giftCustomExpiryLocal ? Date.parse(giftCustomExpiryLocal) : NaN;
+        if (!Number.isFinite(parsedCustom) || parsedCustom <= Date.now()) {
+          showToast({ type: 'error', title: 'تنبيه', description: 'يرجى تحديد تاريخ ووقت انتهاء مستقبلي صحيح للهدية.' });
+          return;
+        }
+        resolvedGiftExpiresAt = new Date(parsedCustom).toISOString();
+      }
+    }
+
     const finalPackages = sanitizePackagesForDeliveryMethods(combinedPackages, deliveryMethods);
 
     addService({
@@ -285,6 +326,11 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       giftTargetType: isGiftCat ? giftTargetType : undefined,
       giftTargetTiers: isGiftCat && giftTargetType === 'specific_tiers' ? giftTargetTiers : undefined,
       giftTargetPosIds: isGiftCat && giftTargetType === 'specific_clients' ? giftTargetPosIds : undefined,
+      giftMaxUsesPerClient: isGiftCat ? Math.max(1, Math.floor(giftMaxUsesPerClient)) : undefined,
+      giftDurationValue: isGiftCat && giftPeriodMode === 'duration' ? giftDurationValue : undefined,
+      giftDurationUnit: isGiftCat && giftPeriodMode === 'duration' ? giftDurationUnit : undefined,
+      giftExpiresAt: isGiftCat ? resolvedGiftExpiresAt : undefined,
+      giftActivatedAt: isGiftCat ? new Date().toISOString() : undefined,
     });
 
     showToast({ type: 'success', title: 'تمت إضافة الخدمة', description: 'تم حفظ الخدمة مع الباقات المستقلة لكل طريقة تسليم بنجاح' });
@@ -909,13 +955,19 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                 {/* If specific_clients */}
                 {giftTargetType === 'specific_clients' && (
                   <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                    <span className="block text-[11px] font-semibold text-slate-300">اختر العملاء / نقاط البيع المستهدفة بالهدية:</span>
-                    {posClients.length === 0 ? (
+                    <div className="flex items-center justify-between">
+                      <span className="block text-[11px] font-semibold text-slate-300">اختر العملاء / نقاط البيع المستهدفة بالهدية:</span>
+                      <span className="text-[10px] font-mono text-purple-300 font-bold">
+                        المحدد: {giftTargetPosIds.length} عميل
+                      </span>
+                    </div>
+                    {targetableClients.length === 0 ? (
                       <p className="text-[11px] text-slate-400">لا توجد نقاط بيع مسجلة حالياً.</p>
                     ) : (
-                      <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
-                        {posClients.map(client => {
+                      <div className="max-h-40 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                        {targetableClients.map(client => {
                           const isSelected = giftTargetPosIds.includes(client.id);
+                          const clientTierInfo = TIERS_CONFIG[client.tier];
                           return (
                             <div
                               key={client.id}
@@ -932,11 +984,15 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                                   : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/50'
                               }`}
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-white">{client.tradeName}</span>
+                                <span className="font-mono text-[10px] text-amber-300">{client.posCode}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${clientTierInfo.badgeColor} ${clientTierInfo.textColor}`}>
+                                  {clientTierInfo.nameAr}
+                                </span>
                                 <span className="text-[10px] text-slate-400">({client.phone || client.ownerName})</span>
                               </div>
-                              <div className={`w-4 h-4 rounded-md border flex items-center justify-center ${isSelected ? 'bg-purple-500 border-purple-400 text-slate-950' : 'border-slate-700'}`}>
+                              <div className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${isSelected ? 'bg-purple-500 border-purple-400 text-slate-950' : 'border-slate-700'}`}>
                                 {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
                               </div>
                             </div>
@@ -946,6 +1002,156 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                     )}
                   </div>
                 )}
+
+                {/* Gift Usage Limit Per Client & Visibility Duration */}
+                <div className="pt-2 border-t border-purple-500/20 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Usage Limit Per Client */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-bold text-purple-300">
+                      عدد مرات الاستخدام المسموحة لكل عميل (غالباً مرة واحدة):
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={giftMaxUsesPerClient}
+                        onChange={e => setGiftMaxUsesPerClient(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                        className="w-24 bg-slate-900 border border-purple-500/40 rounded-lg px-2.5 py-1.5 text-center font-mono font-bold text-xs text-white outline-none focus:border-purple-400"
+                      />
+                      <span className="text-[11px] text-slate-400">
+                        {giftMaxUsesPerClient === 1 ? 'مرة واحدة لكل عميل' : `${giftMaxUsesPerClient} مرات لكل عميل`}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 5].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setGiftMaxUsesPerClient(preset)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                            giftMaxUsesPerClient === preset
+                              ? 'bg-purple-600 text-white border-purple-400'
+                              : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-purple-500/40'
+                          }`}
+                        >
+                          {preset === 1 ? 'مرة واحدة (1)' : preset === 2 ? 'مرتين (2)' : `${preset} مرات`}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      بمجرد أن يستخدم العميل الهدية بهذا العدد، تصبح غير مفعلة لديه تلقائياً.
+                    </p>
+                  </div>
+
+                  {/* Gift Visibility / Active Period */}
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-bold text-purple-300 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-purple-400" />
+                      <span>فترة بقاء الهدية مفعلة للعملاء:</span>
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('unlimited')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'unlimited'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        مفتوحة دائماً
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('duration')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'duration'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        مدة محددة
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGiftPeriodMode('custom_date')}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                          giftPeriodMode === 'custom_date'
+                            ? 'bg-purple-600 text-white border-purple-400'
+                            : 'bg-slate-900 text-slate-300 border-slate-700'
+                        }`}
+                      >
+                        تاريخ محدد
+                      </button>
+                    </div>
+
+                    {giftPeriodMode === 'duration' && (
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={giftDurationValue}
+                            onChange={e => setGiftDurationValue(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                            className="w-20 bg-slate-900 border border-purple-500/40 rounded-lg px-2 py-1 text-center font-mono font-bold text-xs text-white outline-none focus:border-purple-400"
+                          />
+                          <select
+                            value={giftDurationUnit}
+                            onChange={e => setGiftDurationUnit(e.target.value as GiftDurationUnit)}
+                            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white outline-none focus:border-purple-400"
+                          >
+                            <option value="hours">ساعة / ساعات</option>
+                            <option value="days">يوم / أيام</option>
+                          </select>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            { v: 24, u: 'hours' as GiftDurationUnit, label: '24 ساعة' },
+                            { v: 3, u: 'days' as GiftDurationUnit, label: '3 أيام' },
+                            { v: 7, u: 'days' as GiftDurationUnit, label: '7 أيام' },
+                            { v: 30, u: 'days' as GiftDurationUnit, label: '30 يوماً' },
+                          ].map(item => (
+                            <button
+                              key={item.label}
+                              type="button"
+                              onClick={() => {
+                                setGiftDurationValue(item.v);
+                                setGiftDurationUnit(item.u);
+                              }}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                                giftDurationValue === item.v && giftDurationUnit === item.u
+                                  ? 'bg-purple-500/30 text-purple-200 border-purple-400'
+                                  : 'bg-slate-900 text-slate-400 border-slate-700'
+                              }`}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {giftPeriodMode === 'custom_date' && (
+                      <div className="pt-1">
+                        <input
+                          type="datetime-local"
+                          value={giftCustomExpiryLocal}
+                          onChange={e => setGiftCustomExpiryLocal(e.target.value)}
+                          dir="ltr"
+                          className="w-full bg-slate-900 border border-purple-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white outline-none focus:border-purple-400"
+                        />
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-slate-400 leading-relaxed">
+                      {giftPeriodMode === 'unlimited'
+                        ? 'تبقى الهدية متاحة حتى يستخدم العميل المرات المحددة له.'
+                        : 'إذا انتهت الفترة المحددة ولم يستخدم العميل الهدية، تصبح غير مفعلة عنده تلقائياً.'}
+                    </p>
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>

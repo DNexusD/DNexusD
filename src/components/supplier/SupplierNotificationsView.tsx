@@ -2,6 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AppNotification } from '../../types';
 import {
+  isEmployeeTabAllowed,
+  resolveEffectiveEmployeePermissions,
+  SupplierDashboardTab,
+} from '../../utils/employeePermissions';
+import {
   Bell,
   Search,
   Check,
@@ -48,6 +53,8 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
   onNavigateTab,
 }) => {
   const {
+    role,
+    currentUser,
     supplier,
     supplierNotifications,
     unreadSupplierNotificationsCount,
@@ -55,6 +62,11 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     markAllSupplierNotificationsAsRead,
     clearSupplierNotifications,
   } = useApp();
+
+  const perms = useMemo(
+    () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
+    [currentUser, role, supplier]
+  );
 
   const [activeCategory, setActiveCategory] = useState<NotificationCategory>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,16 +140,20 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
 
   const handleActionClick = (notif: AppNotification) => {
     markNotificationAsRead(notif.id);
+    let targetTab: SupplierDashboardTab | null = null;
     if (notif.actionTab) {
-      onNavigateTab(notif.actionTab);
+      targetTab = notif.actionTab;
     } else if (notif.type === 'low_stock') {
-      onNavigateTab('vouchers');
+      targetTab = 'vouchers';
     } else if (notif.type === 'deposit') {
-      onNavigateTab('deposits');
+      targetTab = 'deposits';
     } else if (notif.type === 'loan' || notif.type === 'loan_repayment') {
-      onNavigateTab('loans');
+      targetTab = 'loans';
     } else if (notif.type === 'order_status') {
-      onNavigateTab('pending_orders');
+      targetTab = 'pending_orders';
+    }
+    if (targetTab && isEmployeeTabAllowed(targetTab, perms, role)) {
+      onNavigateTab(targetTab);
     }
   };
 
@@ -217,6 +233,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     if (notif.actionTab === 'deposits') return 'الانتقال لمراجعة الإيداع';
     if (notif.actionTab === 'loans') return 'الانتقال لسجل السلف والسداد';
     if (notif.actionTab === 'clients') return 'الانتقال لإدارة العملاء';
+    if (notif.actionTab === 'client_statements') return 'الانتقال للتقارير وكشف الحسابات';
     if (notif.actionTab === 'bank_accounts') return 'الانتقال لإدارة الحسابات البنكية';
     if (notif.type === 'deposit') return 'الانتقال لمراجعة الإيداع';
     if (notif.type === 'loan' || notif.type === 'loan_repayment') return 'الانتقال لسجل السلف';
@@ -458,14 +475,32 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
                 {/* Card Actions Footer */}
                 <div className="pr-0 sm:pr-13 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleActionClick(notif)}
-                      className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-                    >
-                      <span>{getActionLabel(notif)}</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+                    {(() => {
+                      const targetTab: SupplierDashboardTab | null = notif.actionTab
+                        ? notif.actionTab
+                        : notif.type === 'low_stock'
+                        ? 'vouchers'
+                        : notif.type === 'deposit'
+                        ? 'deposits'
+                        : notif.type === 'loan' || notif.type === 'loan_repayment'
+                        ? 'loans'
+                        : notif.type === 'order_status'
+                        ? 'pending_orders'
+                        : null;
+                      if (!targetTab || !isEmployeeTabAllowed(targetTab, perms, role)) {
+                        return null;
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => handleActionClick(notif)}
+                          className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                        >
+                          <span>{getActionLabel(notif)}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      );
+                    })()}
                   </div>
 
                   <div className="flex items-center gap-1.5 text-[11px]">

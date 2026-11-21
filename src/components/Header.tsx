@@ -62,7 +62,7 @@ export const Header: React.FC = () => {
 
   const [showNotificationsPopover, setShowNotificationsPopover] = useState(false);
 
-  const isSupplierRole = role === 'supplier';
+  const isSupplierRole = role === 'supplier' || role === 'employee';
 
   const clientNotifications = useMemo(() => {
     return notifications.filter(n => !n.posId || n.posId === currentPos?.id);
@@ -369,10 +369,10 @@ export const Header: React.FC = () => {
           {(role === 'supplier' || role === 'employee') && (
             <div className="flex flex-wrap items-center gap-4 text-slate-300">
               {role === 'employee' ? (
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-bold text-xs flex items-center gap-1.5">
                     <UserCheck className="w-3.5 h-3.5" />
-                    <span>حساب موظف معتمد: {currentUser?.name} ({currentUser?.roleTitle || 'موظف مكتب'})</span>
+                    <span>موظف متجر: {currentUser?.name} ({currentUser?.roleTitle || 'موظف مكتب'})</span>
                   </span>
                   <span className="text-slate-400">تابع لمتجر: <strong className="text-white">{supplier.name} ({supplier.storeName})</strong></span>
                 </div>
@@ -393,12 +393,16 @@ export const Header: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span className="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5" />
-                    <span>المتجر المسجل: {supplier.name} ({supplier.storeName})</span>
+                    <span>مالك المتجر: {supplier.name} ({supplier.storeName})</span>
                   </span>
                 </div>
               )}
-              <span className="text-slate-400 hidden sm:inline">·</span>
-              <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
+              {role === 'supplier' && (
+                <>
+                  <span className="text-slate-400 hidden sm:inline">·</span>
+                  <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
+                </>
+              )}
             </div>
           )}
 

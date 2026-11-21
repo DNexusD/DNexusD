@@ -87,6 +87,38 @@ export function calculateBaseSupplierFee(
   return parseFloat(fee.toFixed(2));
 }
 
+export function isClientEligibleForGiftService(params: {
+  service?: DigitalService | null;
+  catalog?: Catalog | null;
+  clientPosId?: string;
+  clientTier: AccountTier;
+  clientCanViewGifts?: boolean;
+}): boolean {
+  const { service, catalog, clientPosId, clientTier, clientCanViewGifts = false } = params;
+  if (!isCatalogFreeGifts(catalog)) return false;
+
+  if (service?.giftTargetType === 'specific_clients') {
+    return Boolean(
+      clientPosId &&
+        Array.isArray(service.giftTargetPosIds) &&
+        service.giftTargetPosIds.includes(clientPosId)
+    );
+  }
+
+  if (service?.giftTargetType === 'specific_tiers') {
+    return Boolean(
+      Array.isArray(service.giftTargetTiers) &&
+        service.giftTargetTiers.includes(clientTier)
+    );
+  }
+
+  if (service?.giftTargetType === 'all_tiers') {
+    return true;
+  }
+
+  return Boolean(clientCanViewGifts);
+}
+
 export function calculateServicePurchasePricing(params: {
   pkg: ServicePackage | null | undefined;
   clientTier: AccountTier;
@@ -101,24 +133,15 @@ export function calculateServicePurchasePricing(params: {
   const { pkg, clientTier, purchaseUnit = 'single_code', clientCanViewGifts = false, clientPosId, service, catalog, supplier, superAdmin } = params;
 
   const originalTierPrice = getPackageTierPrice(pkg, clientTier, purchaseUnit);
-  const freeGiftCatalog = isCatalogFreeGifts(catalog);
   const appFeePct = getEffectiveAppFeePercentage(supplier, superAdmin);
 
-  let isGiftEligible = freeGiftCatalog && clientCanViewGifts;
-  if (isGiftEligible && service) {
-    const targetType = service.giftTargetType || 'all_tiers';
-    if (targetType === 'specific_tiers') {
-      const allowedTiers = service.giftTargetTiers || [];
-      if (!allowedTiers.includes(clientTier)) {
-        isGiftEligible = false;
-      }
-    } else if (targetType === 'specific_clients') {
-      const allowedPosIds = service.giftTargetPosIds || [];
-      if (!clientPosId || !allowedPosIds.includes(clientPosId)) {
-        isGiftEligible = false;
-      }
-    }
-  }
+  const isGiftEligible = isClientEligibleForGiftService({
+    service,
+    catalog,
+    clientPosId,
+    clientTier,
+    clientCanViewGifts,
+  });
 
   if (isGiftEligible) {
     const giftFee = parseFloat(((originalTierPrice * appFeePct) / 100).toFixed(2));
@@ -304,3 +327,162 @@ export function hasClientUsedGiftService(params: {
   }
   return false;
 }
+
+export type GiftDurationUnit = 'hours' | 'days';
+
+export function normalizeGiftMaxUses(maxUses?: number): number {
+  if (typeof maxUses === 'number' && Number.isFinite(maxUses) && maxUses >= 1) {
+    return Math.floor(maxUses);
+  }
+  return 1;
+}
+
+export function computeGiftExpiresAt(params: {
+  durationValue?: number;
+  durationUnit?: GiftDurationUnit;
+  startMs?: number;
+}): string | undefined {
+  const val = params.durationValue;
+  if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
+    return undefined;
+  }
+  const unitMs = params.durationUnit === 'hours' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const start = typeof params.startMs === 'number' && Number.isFinite(params.startMs) ? params.startMs : Date.now();
+  return new Date(start + val * unitMs).toISOString();
+}
+
+export function formatGiftRemainingTimeAr(remainingMs: number): string {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return 'منتهية الصلاحية';
+  }
+  const totalMinutes = Math.max(1, Math.ceil(remainingMs / (60 * 1000)));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+
+  if (days > 0) {
+    const dayLabel = days === 1 ? 'يوم واحد' : days === 2 ? 'يومان' : days <= 10 ? `${days} أيام` : `${days} يوماً`;
+    if (hours > 0) {
+      return `${dayLabel} و${hours} س`;
+    }
+    return dayLabel;
+  }
+  if (hours > 0) {
+    const hourLabel = hours === 1 ? 'ساعة واحدة' : hours === 2 ? 'ساعتان' : hours <= 10 ? `${hours} ساعات` : `${hours} ساعة`;
+    if (minutes > 0) {
+      return `${hourLabel} و${minutes} د`;
+    }
+    return hourLabel;
+  }
+  return minutes === 1 ? 'دقيقة واحدة' : minutes <= 10 ? `${minutes} دقائق` : `${minutes} دقيقة`;
+}
+
+export interface ClientGiftServiceStatus {
+  isGiftCatalog: boolean;
+  isTargeted: boolean;
+  isActive: boolean;
+  isExpired: boolean;
+  isUsageExhausted: boolean;
+  maxUses: number;
+  usedCount: number;
+  remainingUses: number;
+  expiresAtMs: number | null;
+  remainingMs: number | null;
+  inactiveReason?: 'not_targeted' | 'expired' | 'usage_limit_reached';
+}
+
+export function evaluateClientGiftServiceStatus(params: {
+  service?: DigitalService | null;
+  catalog?: Catalog | null;
+  clientPosId?: string;
+  clientTier: AccountTier;
+  clientCanViewGifts?: boolean;
+  usedGiftServiceIds?: string[];
+  orders?: Array<{ posId: string; serviceId: string; status: string }>;
+  nowMs?: number;
+}): ClientGiftServiceStatus {
+  const {
+    service,
+    catalog,
+    clientPosId,
+    clientTier,
+    clientCanViewGifts = false,
+    usedGiftServiceIds,
+    orders,
+    nowMs = Date.now(),
+  } = params;
+
+  const isGiftCatalog = isCatalogFreeGifts(catalog);
+  const maxUses = normalizeGiftMaxUses(service?.giftMaxUsesPerClient);
+
+  if (!isGiftCatalog || !service) {
+    return {
+      isGiftCatalog,
+      isTargeted: false,
+      isActive: false,
+      isExpired: false,
+      isUsageExhausted: false,
+      maxUses,
+      usedCount: 0,
+      remainingUses: 0,
+      expiresAtMs: null,
+      remainingMs: null,
+      inactiveReason: 'not_targeted',
+    };
+  }
+
+  const isTargeted = isClientEligibleForGiftService({
+    service,
+    catalog,
+    clientPosId,
+    clientTier,
+    clientCanViewGifts,
+  });
+
+  const matchingOrdersCount = Array.isArray(orders) && clientPosId
+    ? orders.filter(
+        (o) => o.posId === clientPosId && o.serviceId === service.id && o.status !== 'failed'
+      ).length
+    : 0;
+
+  const hasLegacyUsedFlag =
+    matchingOrdersCount === 0 &&
+    Array.isArray(usedGiftServiceIds) &&
+    usedGiftServiceIds.includes(service.id);
+
+  const usedCount = hasLegacyUsedFlag ? 1 : matchingOrdersCount;
+  const remainingUses = Math.max(0, maxUses - usedCount);
+  const isUsageExhausted = usedCount >= maxUses;
+
+  const parsedExpiresAt = service.giftExpiresAt ? Date.parse(service.giftExpiresAt) : NaN;
+  const hasValidExpiry = Number.isFinite(parsedExpiresAt);
+  const expiresAtMs = hasValidExpiry ? parsedExpiresAt : null;
+  const remainingMs = hasValidExpiry ? parsedExpiresAt - nowMs : null;
+  const isExpired = hasValidExpiry && nowMs >= parsedExpiresAt;
+
+  const isActive = isTargeted && !isExpired && !isUsageExhausted;
+
+  let inactiveReason: ClientGiftServiceStatus['inactiveReason'];
+  if (!isTargeted) {
+    inactiveReason = 'not_targeted';
+  } else if (isExpired) {
+    inactiveReason = 'expired';
+  } else if (isUsageExhausted) {
+    inactiveReason = 'usage_limit_reached';
+  }
+
+  return {
+    isGiftCatalog: true,
+    isTargeted,
+    isActive,
+    isExpired,
+    isUsageExhausted,
+    maxUses,
+    usedCount,
+    remainingUses,
+    expiresAtMs,
+    remainingMs,
+    inactiveReason,
+  };
+}
+

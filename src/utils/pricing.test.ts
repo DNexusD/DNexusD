@@ -4,16 +4,20 @@ import {
   appendUsedGiftServiceId,
   calculateBaseSupplierFee,
   calculateServicePurchasePricing,
+  computeGiftExpiresAt,
+  evaluateClientGiftServiceStatus,
+  formatGiftRemainingTimeAr,
   getEffectiveAppFeePercentage,
   getPackageTierPrice,
   hasClientUsedGiftService,
   isCatalogFreeGifts,
+  isClientEligibleForGiftService,
   resolveGiftClaimFeePayment,
   settlePendingGiftFeesOnRecharge,
   validateFreeGiftWalletBalance,
   ZERO_PRICE_CLIENT_FLOOR_SAR,
 } from './pricing';
-import { Catalog, ServicePackage, SuperAdmin, Supplier } from '../types';
+import { Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier } from '../types';
 
 const sampleSupplier: Partial<Supplier> = {
   feeType: 'percentage',
@@ -410,5 +414,254 @@ test('hasClientUsedGiftService hides gift services once completed and preserves 
   );
 });
 
+test('isClientEligibleForGiftService and calculateServicePurchasePricing enforce merchant gift targeting', () => {
+  const baseGiftService: DigitalService = {
+    id: 'srv-gift-target',
+    catalogId: 'cat-free-gifts',
+    supplierId: 'sup-1',
+    nameAr: 'هدية مخصصة',
+    descriptionAr: 'وصف',
+    icon: 'Gift',
+    isActive: true,
+    deliveryMethods: ['player_id'],
+    packages: [standardPkg],
+  };
 
+  // 1. specific_clients: targeted client sees & gets 0 price even when canViewGifts=false; untargeted does NOT even when canViewGifts=true
+  const clientTargetedSrv: DigitalService = {
+    ...baseGiftService,
+    giftTargetType: 'specific_clients',
+    giftTargetPosIds: ['pos-target'],
+  };
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: clientTargetedSrv,
+      catalog: freeGiftsCatalog,
+      clientPosId: 'pos-target',
+      clientTier: 'regular',
+      clientCanViewGifts: false,
+    }),
+    true
+  );
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: clientTargetedSrv,
+      catalog: freeGiftsCatalog,
+      clientPosId: 'pos-other',
+      clientTier: 'vip',
+      clientCanViewGifts: true,
+    }),
+    false
+  );
+  const targetedPricing = calculateServicePurchasePricing({
+    pkg: standardPkg,
+    clientTier: 'regular',
+    clientCanViewGifts: false,
+    clientPosId: 'pos-target',
+    service: clientTargetedSrv,
+    catalog: freeGiftsCatalog,
+    supplier: sampleSupplier,
+    superAdmin: sampleSuperAdmin,
+  });
+  assert.equal(targetedPricing.isFreeGiftApplied, true);
+  assert.equal(targetedPricing.unitPrice, 0);
 
+  // 2. specific_tiers: only selected tiers get the gift regardless of canViewGifts
+  const tierTargetedSrv: DigitalService = {
+    ...baseGiftService,
+    giftTargetType: 'specific_tiers',
+    giftTargetTiers: ['gold', 'vip'],
+  };
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: tierTargetedSrv,
+      catalog: freeGiftsCatalog,
+      clientPosId: 'pos-gold',
+      clientTier: 'gold',
+      clientCanViewGifts: false,
+    }),
+    true
+  );
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: tierTargetedSrv,
+      catalog: freeGiftsCatalog,
+      clientPosId: 'pos-bronze',
+      clientTier: 'bronze',
+      clientCanViewGifts: true,
+    }),
+    false
+  );
+
+  // 3. all_tiers: all clients see and receive the gift even without canViewGifts
+  const allTiersSrv: DigitalService = {
+    ...baseGiftService,
+    giftTargetType: 'all_tiers',
+  };
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: allTiersSrv,
+      catalog: freeGiftsCatalog,
+      clientPosId: 'pos-any',
+      clientTier: 'regular',
+      clientCanViewGifts: false,
+    }),
+    true
+  );
+
+  // 4. Non-gift catalog always returns false even if giftTargetType is present
+  assert.equal(
+    isClientEligibleForGiftService({
+      service: allTiersSrv,
+      catalog: standardCatalog,
+      clientPosId: 'pos-any',
+      clientTier: 'vip',
+      clientCanViewGifts: true,
+    }),
+    false
+  );
+});
+
+test('evaluateClientGiftServiceStatus enforces merchant usage limits per client (default 1 and custom N)', () => {
+  const baseGift: DigitalService = {
+    id: 'srv-gift-limit',
+    catalogId: 'cat-free-gifts',
+    supplierId: 'sup-1',
+    nameAr: 'هدية محدودة الاستخدام',
+    descriptionAr: 'وصف',
+    icon: 'Gift',
+    isActive: true,
+    deliveryMethods: ['player_id'],
+    packages: [standardPkg],
+    giftTargetType: 'all_tiers',
+  };
+
+  // Default max uses = 1
+  const initialDefault = evaluateClientGiftServiceStatus({
+    service: baseGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-1',
+    clientTier: 'regular',
+    orders: [],
+  });
+  assert.equal(initialDefault.isTargeted, true);
+  assert.equal(initialDefault.isActive, true);
+  assert.equal(initialDefault.maxUses, 1);
+  assert.equal(initialDefault.usedCount, 0);
+  assert.equal(initialDefault.remainingUses, 1);
+
+  // Even a pending_supplier gift order consumes 1 usage so client cannot claim multiple times while pending
+  const afterOnePending = evaluateClientGiftServiceStatus({
+    service: baseGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-1',
+    clientTier: 'regular',
+    orders: [{ posId: 'pos-1', serviceId: 'srv-gift-limit', status: 'pending_supplier' }],
+  });
+  assert.equal(afterOnePending.isActive, false);
+  assert.equal(afterOnePending.isUsageExhausted, true);
+  assert.equal(afterOnePending.inactiveReason, 'usage_limit_reached');
+  assert.equal(afterOnePending.remainingUses, 0);
+
+  // Failed orders do NOT consume usage
+  const afterFailedOrder = evaluateClientGiftServiceStatus({
+    service: baseGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-1',
+    clientTier: 'regular',
+    orders: [{ posId: 'pos-1', serviceId: 'srv-gift-limit', status: 'failed' }],
+  });
+  assert.equal(afterFailedOrder.isActive, true);
+  assert.equal(afterFailedOrder.usedCount, 0);
+
+  // Custom max uses = 3: active at 2 uses, deactivated at 3 uses; independent per client
+  const multiUseGift: DigitalService = {
+    ...baseGift,
+    giftMaxUsesPerClient: 3,
+  };
+  const clientAWith2Uses = evaluateClientGiftServiceStatus({
+    service: multiUseGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-A',
+    clientTier: 'gold',
+    orders: [
+      { posId: 'pos-A', serviceId: 'srv-gift-limit', status: 'completed' },
+      { posId: 'pos-A', serviceId: 'srv-gift-limit', status: 'completed' },
+      { posId: 'pos-B', serviceId: 'srv-gift-limit', status: 'completed' },
+    ],
+  });
+  assert.equal(clientAWith2Uses.isActive, true);
+  assert.equal(clientAWith2Uses.usedCount, 2);
+  assert.equal(clientAWith2Uses.remainingUses, 1);
+
+  const clientAWith3Uses = evaluateClientGiftServiceStatus({
+    service: multiUseGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-A',
+    clientTier: 'gold',
+    orders: [
+      { posId: 'pos-A', serviceId: 'srv-gift-limit', status: 'completed' },
+      { posId: 'pos-A', serviceId: 'srv-gift-limit', status: 'completed' },
+      { posId: 'pos-A', serviceId: 'srv-gift-limit', status: 'completed' },
+    ],
+  });
+  assert.equal(clientAWith3Uses.isActive, false);
+  assert.equal(clientAWith3Uses.isUsageExhausted, true);
+  assert.equal(clientAWith3Uses.inactiveReason, 'usage_limit_reached');
+});
+
+test('evaluateClientGiftServiceStatus deactivates gift after merchant visibility period expires even if unused', () => {
+  const startMs = Date.UTC(2026, 10, 1, 10, 0, 0);
+  const expiresAtIso = computeGiftExpiresAt({
+    durationValue: 24,
+    durationUnit: 'hours',
+    startMs,
+  });
+  assert.ok(expiresAtIso);
+
+  const timedGift: DigitalService = {
+    id: 'srv-gift-timed',
+    catalogId: 'cat-free-gifts',
+    supplierId: 'sup-1',
+    nameAr: 'هدية مؤقتة',
+    descriptionAr: 'وصف',
+    icon: 'Gift',
+    isActive: true,
+    deliveryMethods: ['voucher_code'],
+    packages: [standardPkg],
+    giftTargetType: 'all_tiers',
+    giftMaxUsesPerClient: 1,
+    giftDurationValue: 24,
+    giftDurationUnit: 'hours',
+    giftExpiresAt: expiresAtIso,
+  };
+
+  // Before expiry (12 hours after start): active
+  const beforeExpiry = evaluateClientGiftServiceStatus({
+    service: timedGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-1',
+    clientTier: 'regular',
+    orders: [],
+    nowMs: startMs + 12 * 60 * 60 * 1000,
+  });
+  assert.equal(beforeExpiry.isTargeted, true);
+  assert.equal(beforeExpiry.isExpired, false);
+  assert.equal(beforeExpiry.isActive, true);
+  assert.equal(formatGiftRemainingTimeAr(beforeExpiry.remainingMs || 0), '12 ساعة');
+
+  // At/after expiry (24 hours + 1 ms): deactivated even though usedCount is 0
+  const afterExpiry = evaluateClientGiftServiceStatus({
+    service: timedGift,
+    catalog: freeGiftsCatalog,
+    clientPosId: 'pos-1',
+    clientTier: 'regular',
+    orders: [],
+    nowMs: startMs + 24 * 60 * 60 * 1000 + 1,
+  });
+  assert.equal(afterExpiry.isTargeted, true);
+  assert.equal(afterExpiry.usedCount, 0);
+  assert.equal(afterExpiry.isExpired, true);
+  assert.equal(afterExpiry.isActive, false);
+  assert.equal(afterExpiry.inactiveReason, 'expired');
+});

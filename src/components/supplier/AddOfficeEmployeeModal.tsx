@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { UserCheck, Shield, Mail, Phone, X, Check, Lock, Gamepad2, HandCoins, Layers, Tag, Ticket, Users, UserPlus } from 'lucide-react';
+import {
+  EMPLOYEE_PERMISSION_PRESETS,
+  normalizeEmployeePermissions,
+} from '../../utils/employeePermissions';
+import { UserCheck, Shield, Mail, Phone, X, Check, Lock, Gamepad2, HandCoins, Layers, Users, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
 interface AddOfficeEmployeeModalProps {
   onClose: () => void;
@@ -12,8 +16,10 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [phone, setPhone] = useState('');
   const [roleTitle, setRoleTitle] = useState('مدير العمليات والشحن');
+  const [formError, setFormError] = useState<string | null>(null);
 
   // 1. الشحن ونوعه
   const [canManagePlayerIdOrders, setCanManagePlayerIdOrders] = useState(true);
@@ -35,21 +41,50 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
   // 5. تغذية الأكواد
   const [canManageVoucherStock, setCanManageVoucherStock] = useState(false);
 
-  // 6. الاطلاع على العملاء وترقيتهم
+  // 6. الاطلاع على العملاء والتقارير والترقية
   const [canViewClients, setCanViewClients] = useState(true);
   const [canUpgradeClientTiers, setCanUpgradeClientTiers] = useState(false);
+  const [canViewReports, setCanViewReports] = useState(false);
 
   // 7. إضافة الموظفين
   const [canManageEmployees, setCanManageEmployees] = useState(false);
 
+  const applyPreset = (presetPerms: Parameters<typeof normalizeEmployeePermissions>[0]) => {
+    const norm = normalizeEmployeePermissions(presetPerms);
+    setCanManagePlayerIdOrders(norm.canManagePlayerIdOrders);
+    setCanManageAccountOrders(norm.canManageAccountOrders);
+    setCanManageVoucherOrders(norm.canManageVoucherOrders);
+    setCanReviewCashDeposits(norm.canReviewCashDeposits);
+    setCanReviewLoanDeposits(norm.canReviewLoanDeposits);
+    setCanManageBankAccounts(norm.canManageBankAccounts);
+    setCanAddCatalogs(norm.canAddCatalogs);
+    setCanAddServices(norm.canAddServices);
+    setCanEditServicePrices(norm.canEditServicePrices);
+    setCanManageVoucherStock(norm.canManageVoucherStock);
+    setCanViewClients(norm.canViewClients);
+    setCanUpgradeClientTiers(norm.canUpgradeClientTiers);
+    setCanViewReports(norm.canViewReports);
+    setCanManageEmployees(norm.canManageEmployees);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) return;
+    setFormError(null);
 
-    addOfficeEmployee({
+    if (!name.trim() || !email.trim()) {
+      setFormError('يرجى إدخال اسم الموظف والبريد الإلكتروني.');
+      return;
+    }
+
+    if (password.trim().length < 4) {
+      setFormError('يرجى تعيين كلمة مرور خاصة بالموظف لا تقل عن 4 أحرف أو أرقام.');
+      return;
+    }
+
+    const res = addOfficeEmployee({
       name: name.trim(),
       email: email.trim(),
-      password: password.trim() || 'EmpPass2026!',
+      password: password.trim(),
       phone: phone.trim(),
       roleTitle: roleTitle.trim() || 'موظف مكتب',
       permissions: {
@@ -64,7 +99,7 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
         canReviewLoanDeposits,
         canManageBankAccounts,
 
-        canManageCatalogs: canAddCatalogs || canAddServices || canEditServicePrices || canManageVoucherStock,
+        canManageCatalogs: canAddCatalogs || canAddServices || canEditServicePrices,
         canAddCatalogs,
         canAddServices,
 
@@ -74,10 +109,16 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
         canManageClients: canViewClients || canUpgradeClientTiers,
         canViewClients,
         canUpgradeClientTiers,
+        canViewReports,
 
         canManageEmployees
       }
     });
+
+    if (!res.success) {
+      setFormError(res.error || 'تعذر إضافة الموظف. تحقق من البيانات والصلاحيات.');
+      return;
+    }
 
     onClose();
   };
@@ -147,18 +188,27 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
               </div>
             </div>
             <div>
-              <label className="block font-semibold text-slate-300 mb-1">كلمة المرور:</label>
+              <label className="block font-semibold text-slate-300 mb-1">كلمة المرور للدخول:</label>
               <div className="relative">
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
+                  minLength={4}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 text-white pl-9 focus:outline-none font-mono text-[11px]"
+                  placeholder="4 أحرف/أرقام فأكثر"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 text-white pl-16 focus:outline-none font-mono text-[11px]"
                   dir="ltr"
                 />
                 <Lock className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(prev => !prev)}
+                  className="absolute left-8 top-2 text-slate-500 hover:text-slate-300 p-0.5"
+                  title={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                >
+                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
               </div>
             </div>
             <div>
@@ -179,9 +229,24 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
 
           {/* Granular Permissions Matrix */}
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
-            <div className="flex items-center gap-2 font-bold text-amber-400 border-b border-slate-800/80 pb-2">
-              <Shield className="w-4 h-4 text-amber-400" />
-              <span>تحديد صلاحيات الموظف الدقيقة:</span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
+              <div className="flex items-center gap-2 font-bold text-amber-400">
+                <Shield className="w-4 h-4 text-amber-400" />
+                <span>تحديد صلاحيات الموظف الدقيقة:</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {EMPLOYEE_PERMISSION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyPreset(preset.permissions)}
+                    title={preset.descriptionAr}
+                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-300 border border-slate-800 text-[10.5px] font-medium transition-colors cursor-pointer"
+                  >
+                    {preset.labelAr}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* 1. إدارة الشحن وأنواعه */}
@@ -341,13 +406,13 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
               </div>
             </div>
 
-            {/* 6 & 7. العملاء وترقيتهم وإضافة موظفين */}
+            {/* 6 & 7. العملاء والتقارير والترقية وإضافة موظفين */}
             <div className="space-y-2 pt-1 border-t border-slate-800/60">
               <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-emerald-400" />
-                <span>4. إدارة العملاء وترقية الرتب وإضافة الموظفين:</span>
+                <span>4. إدارة العملاء والتقارير وإضافة الموظفين:</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
                   <input
                     type="checkbox"
@@ -370,7 +435,20 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
                   />
                   <div>
                     <span className="font-bold text-white block text-[11px]">ترقية رتب العملاء</span>
-                    <span className="text-[9.5px] text-slate-400">تغيير رتبة العميل فورياً</span>
+                    <span className="text-[9.5px] text-slate-400">تغيير رتبة العميل والميزات</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={canViewReports}
+                    onChange={e => setCanViewReports(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
+                  />
+                  <div>
+                    <span className="font-bold text-white block text-[11px]">عرض التقارير وكشف الحسابات</span>
+                    <span className="text-[9.5px] text-slate-400">عرض تقارير العمليات وتصدير PDF</span>
                   </div>
                 </label>
 
@@ -382,14 +460,21 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
                     className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
                   />
                   <div>
-                    <span className="font-bold text-white block text-[11px]">إضافة موظفين جديد</span>
-                    <span className="text-[9.5px] text-slate-400">إضافة وإدارة صلاحيات الموظفين</span>
+                    <span className="font-bold text-white block text-[11px]">إدارة الموظفين والصلاحيات</span>
+                    <span className="text-[9.5px] text-slate-400">إضافة وتعديل صلاحيات الموظفين</span>
                   </div>
                 </label>
               </div>
             </div>
 
           </div>
+
+          {formError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
 
           <div className="flex items-center justify-end gap-2 pt-2">
             <button

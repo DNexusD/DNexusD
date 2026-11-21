@@ -23,7 +23,11 @@ import {
   Package,
   FileDown
 } from 'lucide-react';
-import { calculateServicePurchasePricing } from '../../utils/pricing';
+import {
+  calculateServicePurchasePricing,
+  evaluateClientGiftServiceStatus,
+  formatGiftRemainingTimeAr,
+} from '../../utils/pricing';
 import {
   getPackageAvailableStock,
   isPackageOutOfStock,
@@ -35,6 +39,11 @@ import {
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getServiceOrCodeAvailability } from '../../utils/availabilityMessages';
+import {
+  GAME_LOGIN_ACCOUNT_TYPES,
+  resolveGameAccountTypeLabel,
+  validateAccountLoginCredentials,
+} from '../../utils/gameAccountTypes';
 
 interface PurchaseModalProps {
   service: DigitalService;
@@ -42,8 +51,13 @@ interface PurchaseModalProps {
 }
 
 export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }) => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, supplier, platformSettings, executePurchase, showToast } = useApp();
-  
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, voucherWarehouses, supplier, platformSettings, executePurchase, showToast } = useApp();
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const liveService = services.find(s => s.id === service.id) || service;
 
   // Selected Delivery Method
@@ -92,6 +106,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const [playerNickname, setPlayerNickname] = useState('');
 
   // Method 2: Account Login inputs (submitted directly via Confirm Payment button)
+  const [accountType, setAccountType] = useState('');
+  const [customAccountType, setCustomAccountType] = useState('');
   const [accountEmail, setAccountEmail] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
   const [accountError, setAccountError] = useState<string | null>(null);
@@ -122,7 +138,18 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   // Current tier pricing calculation (with 0.5 SAR zero-price floor & Free Gifts admin fee % rule)
   const currentTier = currentPos.tier;
   const currentTierInfo = TIERS_CONFIG[currentTier];
-  const serviceCatalog = catalogs.find(c => c.id === service.catalogId);
+  const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
+  const giftStatus = evaluateClientGiftServiceStatus({
+    service: liveService,
+    catalog: serviceCatalog,
+    clientPosId: currentPos.id,
+    clientTier: currentTier,
+    clientCanViewGifts: Boolean(currentPos.canViewGifts),
+    usedGiftServiceIds: currentPos.usedGiftServiceIds,
+    orders,
+    nowMs,
+  });
+  const isGiftBlocked = giftStatus.isGiftCatalog && !giftStatus.isActive;
   const activeSup = currentPosSupplier || supplier;
   const selectedPricing = calculateServicePurchasePricing({
     pkg: selectedPkg,
@@ -184,6 +211,19 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const handleConfirmPurchase = async () => {
     setAccountError(null);
 
+    if (isGiftBlocked) {
+      showToast({
+        type: 'error',
+        title: 'الهدية غير مفعلة حالياً',
+        description: giftStatus.isExpired
+          ? 'انتهت الفترة المحددة لهذه الهدية وأصبحت غير مفعلة لديك.'
+          : giftStatus.isUsageExhausted
+          ? `لقد استخدمت هذه الهدية الحد الأقصى المسموح (${giftStatus.usedCount}/${giftStatus.maxUses}) وأصبحت غير مفعلة لديك.`
+          : 'هذه الهدية غير متاحة لحسابك حالياً.',
+      });
+      return;
+    }
+
     // Validation before purchase
     if (selectedMethod === 'player_id' && !idVerified) {
       showToast({
@@ -195,9 +235,14 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     }
 
     if (selectedMethod === 'account_login') {
-      const cleanEmail = accountEmail.trim();
-      if (!cleanEmail || !accountPassword.trim()) {
-        const msg = 'يرجى إدخال البريد الإلكتروني وكلمة المرور للحساب قبل تأكيد الدفع.';
+      const accCheck = validateAccountLoginCredentials({
+        accountType,
+        customAccountType,
+        accountEmail,
+        accountPassword,
+      });
+      if (!accCheck.valid) {
+        const msg = accCheck.error || 'يرجى إكمال بيانات الحساب قبل تأكيد الدفع.';
         setAccountError(msg);
         showToast({
           type: 'error',
@@ -269,6 +314,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         deliveryDetails: {
           playerId: selectedMethod === 'player_id' ? playerId : undefined,
           playerNickname: selectedMethod === 'player_id' ? playerNickname : undefined,
+          accountType: selectedMethod === 'account_login' ? resolveGameAccountTypeLabel(accountType, customAccountType) : undefined,
           accountEmail: selectedMethod === 'account_login' ? accountEmail.trim() : undefined,
           accountPassword: selectedMethod === 'account_login' ? accountPassword : undefined
         },
@@ -390,15 +436,27 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         {/* Modal Top Bar */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden">
+            <div
+              className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${
+                selectedPricing.isFreeGiftApplied
+                  ? 'bg-purple-500/15 border-purple-500/40 text-purple-400'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+              }`}
+            >
               {service.imageUrl ? (
                 <img src={service.imageUrl} alt={service.nameAr} className="w-full h-full object-cover" />
+              ) : selectedPricing.isFreeGiftApplied ? (
+                <Gift className="w-5 h-5 text-purple-400" />
               ) : (
                 <Gamepad2 className="w-5 h-5" />
               )}
             </div>
             <div>
-              <h3 className="font-bold text-base sm:text-lg text-white leading-tight">
+              <h3
+                className={`font-bold text-base sm:text-lg leading-tight ${
+                  selectedPricing.isFreeGiftApplied ? 'text-purple-400' : 'text-white'
+                }`}
+              >
                 {service.nameAr}
               </h3>
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
@@ -624,7 +682,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               <div className="w-full p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-right space-y-2 text-xs">
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                   <span>الخدمة المطلوبة:</span>
-                  <span className="font-semibold text-white">{service.nameAr}</span>
+                  <span className={`font-semibold ${selectedPricing.isFreeGiftApplied ? 'text-purple-400' : 'text-white'}`}>
+                    {service.nameAr}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                   <span>الباقة / الفئة:</span>
@@ -649,20 +709,30 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
                 )}
                 {selectedMethod === 'account_login' && (
-                  <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
-                    <span>الحساب الموثق:</span>
-                    <span className="font-mono text-amber-400">{accountEmail}</span>
-                  </div>
+                  <>
+                    <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
+                      <span>نوع الحساب:</span>
+                      <span className="font-semibold text-cyan-300">
+                        {resolveGameAccountTypeLabel(accountType, customAccountType)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
+                      <span>الحساب الموثق:</span>
+                      <span className="font-mono text-amber-400">{accountEmail}</span>
+                    </div>
+                  </>
                 )}
                 <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                   <span>المتجر البائع:</span>
                   <span className="font-semibold text-white">{activeSup.storeName || activeSup.name}</span>
                 </div>
-                <div className="flex justify-between py-1.5 font-bold text-sm text-emerald-400">
+                <div className={`flex justify-between py-1.5 font-bold text-sm ${selectedPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-emerald-400'}`}>
                   <span>{selectedPricing.isFreeGiftApplied ? 'السعر:' : 'سعر الخدمة الإجمالي:'}</span>
                   <span className="font-mono tabular-nums">
                     {selectedPricing.isFreeGiftApplied ? (
-                      <span className="text-emerald-400 font-bold">مجاني</span>
+                      <span className="text-purple-300 font-bold">
+                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                      </span>
                     ) : (
                       `${clientDisplayedTotal.toFixed(2)} ر.س`
                     )}
@@ -879,8 +949,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               </>
                             )}
                             {displayPricing.isFreeGiftApplied ? (
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-purple-500/20 text-emerald-400 border border-purple-500/30 font-bold">
-                                🎁 هدية مجانية (مجاني)
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                                🎁 هدية مجانية · 0.00 ر.س
                               </span>
                             ) : displayPricing.isZeroPriceFloorApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -895,7 +965,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             <div className="text-[10px] text-purple-300/90 flex items-center gap-2 pt-0.5 flex-wrap">
                               <span>السعر الأصلي لرتبتك: {displayPricing.originalTierPrice.toFixed(2)} ر.س</span>
                               <span>·</span>
-                              <span>السعر: <strong className="text-emerald-400 font-bold">مجاني</strong></span>
+                              <span>السعر: <strong className="text-purple-200 font-bold font-mono">0.00 ر.س</strong> <strong className="text-emerald-400 font-bold">(مجاني)</strong></span>
                               {savings > 0 && (
                                 <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
                               )}
@@ -911,27 +981,27 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
                         <div className="text-left shrink-0 pl-2 space-y-0.5">
                           {(!isVoucherDelivery || pkgOpts.allowSingleCode) && (
-                            <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                               {singlePricing.isFreeGiftApplied ? (
-                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">{isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
+                                <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">{isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
                               ) : (
                                 <>{singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></>
                               )}
                             </div>
                           )}
                           {isVoucherDelivery && pkgOpts.allowPackage && packagePricing && (
-                            <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? (packagePricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-cyan-300') : 'text-base text-amber-400'}`}>
+                            <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? (packagePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-cyan-300') : 'text-base text-amber-400'}`}>
                               {packagePricing.isFreeGiftApplied ? (
-                                <span>مجاني <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
+                                <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
                               ) : (
                                 <>{packagePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span></>
                               )}
                             </div>
                           )}
                           {isVoucherDelivery && !pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
-                            <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                               {displayPricing.isFreeGiftApplied ? (
-                                <span>مجاني</span>
+                                <span>0.00 ر.س <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>
                               ) : (
                                 <>{pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span></>
                               )}
@@ -1002,9 +1072,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                                 : 'تسليم كود فوري'}
                             </div>
                           </div>
-                          <div className={`font-mono font-bold text-sm shrink-0 ${singleOptPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          <div className={`font-mono font-bold text-sm shrink-0 ${singleOptPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                             {singleOptPricing.isFreeGiftApplied ? (
-                              <span>مجاني</span>
+                              <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
                             ) : (
                               <>{singleOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
                             )}
@@ -1035,9 +1105,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                               )}
                             </div>
                           </div>
-                          <div className={`font-mono font-bold text-sm shrink-0 ${packageOptPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-cyan-300'}`}>
+                          <div className={`font-mono font-bold text-sm shrink-0 ${packageOptPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-cyan-300'}`}>
                             {packageOptPricing.isFreeGiftApplied ? (
-                              <span>مجاني</span>
+                              <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
                             ) : (
                               <>{packageOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
                             )}
@@ -1109,7 +1179,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <div className="space-y-3">
                     <span className="text-xs font-semibold text-white flex items-center gap-1.5">
                       <Lock className="w-4 h-4 text-amber-400" />
-                      التسليم عبر الحساب (سيتم إرسال الإيميل وكلمة المرور عند تأكيد الدفع):
+                      التسليم عبر الحساب (سيتم إرسال نوع الحساب والإيميل وكلمة المرور عند تأكيد الدفع):
                     </span>
 
                     {accountError && (
@@ -1121,16 +1191,56 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
                     <div className="space-y-3">
                       <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">نوع الحساب المرتبط باللعبة:</label>
+                        <select
+                          required
+                          value={accountType}
+                          onChange={e => {
+                            setAccountType(e.target.value);
+                            if (e.target.value !== 'other') {
+                              setCustomAccountType('');
+                            }
+                            if (accountError) setAccountError(null);
+                          }}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-500"
+                        >
+                          <option value="">-- اختر نوع الحساب (جوجل، فيسبوك، تويتر...) --</option>
+                          {GAME_LOGIN_ACCOUNT_TYPES.map(opt => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.labelAr}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {accountType === 'other' && (
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">اسم / نوع الحساب الآخر:</label>
+                          <input
+                            type="text"
+                            required
+                            value={customAccountType}
+                            onChange={e => {
+                              setCustomAccountType(e.target.value);
+                              if (accountError) setAccountError(null);
+                            }}
+                            placeholder="مثال: حساب تويتش أو منصة أخرى..."
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      )}
+
+                      <div>
                         <label className="block text-[11px] text-slate-400 mb-1">البريد الإلكتروني / الحساب:</label>
                         <input
-                          type="email"
+                          type="text"
                           required
                           value={accountEmail}
                           onChange={e => {
                             setAccountEmail(e.target.value);
                             if (accountError) setAccountError(null);
                           }}
-                          placeholder="user@example.com"
+                          placeholder="user@example.com أو اسم الحساب"
                           className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono text-left"
                           dir="ltr"
                         />
@@ -1195,7 +1305,40 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 )}
               </div>
 
-              {/* Step 4: Payment Method Selection */}
+              {/* Step 4: Payment Method Selection (or Free Gift Zero-Cost Banner) */}
+              {selectedPricing.isFreeGiftApplied ? (
+                <div className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${isGiftBlocked ? 'bg-rose-500/15 border-rose-500/40' : 'bg-purple-500/15 border-purple-500/40'}`}>
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-xl shrink-0 ${isGiftBlocked ? 'bg-rose-500/20 text-rose-300' : 'bg-purple-500/20 text-purple-300'}`}>
+                      <Gift className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className={`text-xs font-bold ${isGiftBlocked ? 'text-rose-200' : 'text-purple-200'}`}>
+                        {isGiftBlocked
+                          ? giftStatus.isExpired
+                            ? 'انتهت فترة الهدية وأصبحت غير مفعلة'
+                            : 'تم استنفاد مرات استخدام الهدية وأصبحت غير مفعلة'
+                          : 'هدية مجانية مخصصة لك من المتجر'}
+                      </div>
+                      <div className={`text-[10px] ${isGiftBlocked ? 'text-rose-200/90' : 'text-purple-300/85'}`}>
+                        {isGiftBlocked
+                          ? giftStatus.isExpired
+                            ? 'انتهت المدة المحددة لاستلام هذه الهدية ولم تعد مفعلة لحسابك.'
+                            : `تم استخدام ${giftStatus.usedCount} من أصل ${giftStatus.maxUses} ${giftStatus.maxUses === 1 ? 'مرة مسموحة' : 'مرات مسموحة'}.`
+                          : (
+                            <>
+                              يتم تنفيذ الشحن والتسليم مباشرة بسعر 0.00 ر.س · متاح لك {giftStatus.remainingUses} من {giftStatus.maxUses} {giftStatus.maxUses === 1 ? 'مرة' : 'مرات'}
+                              {giftStatus.remainingMs !== null ? ` · تنتهي خلال ${formatGiftRemainingTimeAr(giftStatus.remainingMs)}` : ''}
+                            </>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`font-mono font-bold text-sm shrink-0 ${isGiftBlocked ? 'text-rose-200' : 'text-purple-200'}`}>
+                    0.00 ر.س
+                  </span>
+                </div>
+              ) : (
               <div className="space-y-3 pt-2">
                 <label className="block text-xs font-semibold text-slate-300">
                   3. اختر طريقة الدفع:
@@ -1284,9 +1427,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </div>
                 )}
               </div>
+              )}
 
-              {/* Fee and Total Breakdown */}
-              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1.5">
+              {/* Price and Total Breakdown */}
+              <div className={`p-3.5 rounded-2xl border text-xs space-y-1.5 ${selectedPricing.isFreeGiftApplied ? 'bg-purple-950/20 border-purple-500/40' : 'bg-slate-950 border-slate-800'}`}>
                 {selectedPricing.isFreeGiftApplied && (
                   <>
                     <div className="flex justify-between text-purple-300">
@@ -1294,7 +1438,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         <Gift className="w-3.5 h-3.5" />
                         <span>السعر:</span>
                       </span>
-                      <span className="font-bold text-emerald-400">مجاني</span>
+                      <span className="font-bold font-mono text-purple-200">
+                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                      </span>
                     </div>
                     <div className="flex justify-between text-slate-400 text-[11px]">
                       <span>السعر الأصلي لرتبة ({currentTierInfo.nameAr}):</span>
@@ -1315,10 +1461,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   </>
                 )}
                 <div className="flex justify-between font-bold text-sm text-white pt-1 border-t border-slate-800/70">
-                  <span>{selectedPricing.isFreeGiftApplied ? 'السعر للدفع:' : 'سعر الخدمة الإجمالي للدفع:'}</span>
-                  <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  <span>{selectedPricing.isFreeGiftApplied ? 'السعر الإجمالي للدفع:' : 'سعر الخدمة الإجمالي للدفع:'}</span>
+                  <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                     {selectedPricing.isFreeGiftApplied ? (
-                      <span className="text-emerald-400 font-bold">مجاني</span>
+                      <span className="text-purple-300 font-bold">
+                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                      </span>
                     ) : (
                       `${clientDisplayedTotal.toFixed(2)} ر.س`
                     )}
@@ -1344,20 +1492,28 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
               {/* Confirm Purchase Button with clearly displayed price */}
               <button
                 type="button"
-                disabled={orderProcessing || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg}
+                disabled={orderProcessing || isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg}
                 onClick={handleConfirmPurchase}
                 className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
-                  selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg
+                  isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                     : !serviceAvailability.available
                     ? 'bg-rose-500/20 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
                     : selectedPricing.isFreeGiftApplied
-                    ? 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-400 hover:to-purple-500 text-white shadow-purple-500/20 active:scale-[0.98]'
+                    ? 'bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white shadow-purple-500/25 active:scale-[0.98]'
                     : 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 active:scale-[0.98]'
                 }`}
               >
+                {selectedPricing.isFreeGiftApplied &&
+                  !(isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg || !serviceAvailability.available) && (
+                    <Gift className="w-4 h-4" />
+                  )}
                 <span>
-                  {methodPackages.length === 0 || !selectedPkg
+                  {isGiftBlocked
+                    ? giftStatus.isExpired
+                      ? 'الهدية غير مفعلة · انتهت الفترة المحددة'
+                      : 'الهدية غير مفعلة · تم استنفاد مرات الاستخدام'
+                    : methodPackages.length === 0 || !selectedPkg
                     ? 'عدم توفر الخدمة المطلوبة'
                     : selectedPkgIsOutOfStock
                     ? selectedMethod === 'voucher_code'
@@ -1366,7 +1522,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                     : !serviceAvailability.available
                     ? 'عدم توفر الرصيد الكافي في المحفظة'
                     : selectedPricing.isFreeGiftApplied
-                    ? 'استلام الهدية المجانية (مجاني)'
+                    ? 'شحن وشراء فوري (0.00 ر.س - مجاني)'
                     : `تأكيد دفع ${clientDisplayedTotal.toFixed(2)} ر.س وشحن فوري`}
                 </span>
               </button>

@@ -28,6 +28,7 @@ import {
   isLoanDeposit,
   roundCurrency,
 } from '../../utils/loanRepayments';
+import { resolveEffectiveEmployeePermissions } from '../../utils/employeePermissions';
 
 interface LoansRegistryViewProps {
   filterSupplierId?: string;
@@ -44,7 +45,9 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
     rejectLoanRepaymentRequest,
     posClients,
     suppliers,
+    supplier,
     role,
+    currentUser,
     showToast,
   } = useApp();
 
@@ -161,7 +164,11 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
     (l) => getLoanRepaymentState(l) === 'repaid'
   ).length;
 
-  const canReviewActions = role === 'supplier' || role === 'employee' || role === 'super_admin';
+  const employeePerms = resolveEffectiveEmployeePermissions(currentUser, role, supplier);
+  const canReviewActions =
+    role === 'supplier' ||
+    role === 'super_admin' ||
+    (role === 'employee' && employeePerms.canReviewLoanDeposits);
 
   const handleExportLoansJson = () => {
     const payload = {
