@@ -49,6 +49,11 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
     role,
     currentUser,
     showToast,
+    activeCurrency,
+    currencyLabel,
+    formatCurrency,
+    convertFromSar,
+    convertToSar,
   } = useApp();
 
   const [viewSection, setViewSection] = useState<'repayments' | 'loans'>('loans');
@@ -237,8 +242,8 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
               المتبقي غير المسدد من السلف
             </span>
             <div className="text-2xl font-bold font-mono text-cyan-400 tabular-nums">
-              {totalOutstandingLoanAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs text-slate-400 font-sans">ر.س</span>
+              {formatCurrency(totalOutstandingLoanAmount, { includeSymbol: false, withGrouping: true })}{' '}
+              <span className="text-xs text-slate-400 font-sans">{currencyLabel}</span>
             </div>
             <div className="text-[10px] text-slate-400 pt-0.5">
               عبر {approvedUnpaidLoansCount} سلفة قائمة أو مسددة جزئياً
@@ -263,8 +268,8 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
               إجمالي المبالغ المحصّلة والمسددة
             </span>
             <div className="text-2xl font-bold font-mono text-emerald-400 tabular-nums">
-              {totalRepaidAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs text-slate-400 font-sans">ر.س</span>
+              {formatCurrency(totalRepaidAmount, { includeSymbol: false, withGrouping: true })}{' '}
+              <span className="text-xs text-slate-400 font-sans">{currencyLabel}</span>
             </div>
             <div className="text-[10px] text-slate-400 pt-0.5">
               منها {repaidLoansCount} سلفة مغلقة و{partialLoansCount} مسددة جزئياً
@@ -447,10 +452,17 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                 : req.loanPaidBefore;
 
               const customStr = customApproveAmounts[req.id];
-              const confirmedAmount =
-                customStr !== undefined && customStr !== ''
-                  ? roundCurrency(Number(customStr))
-                  : req.amount;
+              const confirmedAmount = (() => {
+                if (customStr === undefined) return req.amount;
+                if (customStr === '') return 0;
+                const val = Number(customStr) || 0;
+                if (activeCurrency === 'USD') {
+                  if (Math.abs(val - convertFromSar(req.amount)) < 0.005) return req.amount;
+                  if (Math.abs(val - convertFromSar(currentRemaining)) < 0.005) return currentRemaining;
+                  return roundCurrency(convertToSar(val));
+                }
+                return roundCurrency(val);
+              })();
               const effectiveDeduction = Math.min(
                 currentRemaining,
                 Math.max(0, confirmedAmount || 0)
@@ -488,7 +500,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                         )}
                         {req.status === 'approved' && (
                           <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                            تمت الموافقة وخصم {(req.approvedAmount ?? req.amount).toFixed(2)} ر.س
+                            تمت الموافقة وخصم {formatCurrency(req.approvedAmount ?? req.amount)}
                           </span>
                         )}
                         {req.status === 'rejected' && (
@@ -506,7 +518,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                     <div className="bg-slate-950 border border-slate-800 px-3.5 py-2 rounded-xl text-left">
                       <span className="text-[10px] text-slate-400 block">المبلغ المحول بالطلب</span>
                       <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">
-                        {req.amount.toFixed(2)} ر.س
+                        {formatCurrency(req.amount)}
                       </span>
                     </div>
                   </div>
@@ -525,7 +537,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                         <div>
                           <span className="text-slate-400 block">المبلغ المحول:</span>
                           <strong className="font-mono text-emerald-400 text-xs">
-                            {req.amount.toFixed(2)} ر.س
+                            {formatCurrency(req.amount)}
                           </strong>
                         </div>
                         <div>
@@ -560,13 +572,13 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                         <div>
                           <span className="text-slate-400 block">إجمالي السلفة / المسدد:</span>
                           <strong className="font-mono text-white">
-                            {req.loanTotalAmount.toFixed(2)} / {currentPaid.toFixed(2)} ر.س
+                            {formatCurrency(req.loanTotalAmount, { includeSymbol: false })} / {formatCurrency(currentPaid)}
                           </strong>
                         </div>
                         <div>
                           <span className="text-slate-400 block">المتبقي الحالي قبل الخصم:</span>
                           <strong className="font-mono text-amber-300">
-                            {currentRemaining.toFixed(2)} ر.س
+                            {formatCurrency(currentRemaining)}
                           </strong>
                         </div>
                       </div>
@@ -713,14 +725,14 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                            تأكيد المبلغ المراد خصمه من السلفة (ر.س):
+                            تأكيد المبلغ المراد خصمه من السلفة ({currencyLabel}):
                           </label>
                           <input
                             type="number"
                             min="0.01"
-                            max={currentRemaining}
+                            max={convertFromSar(currentRemaining)}
                             step="0.01"
-                            value={customStr !== undefined ? customStr : String(req.amount)}
+                            value={customStr !== undefined ? customStr : String(convertFromSar(req.amount))}
                             onChange={(e) =>
                               setCustomApproveAmounts((prev) => ({
                                 ...prev,
@@ -754,7 +766,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                         <div className="text-[11px] text-slate-300">
                           بعد الاعتماد: سيُخصم{' '}
                           <strong className="font-mono text-emerald-400">
-                            {effectiveDeduction.toFixed(2)} ر.س
+                            {formatCurrency(effectiveDeduction)}
                           </strong>{' '}
                           وتصبح السلفة{' '}
                           <strong
@@ -764,7 +776,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                           >
                             {remainingAfterApproval === 0
                               ? 'مسددة بالكامل'
-                              : `مسددة جزئياً (المتبقي ${remainingAfterApproval.toFixed(2)} ر.س)`}
+                              : `مسددة جزئياً (المتبقي ${formatCurrency(remainingAfterApproval)})`}
                           </strong>
                         </div>
 
@@ -790,7 +802,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                           >
                             <CheckCircle2 className="w-4 h-4" />
                             <span>
-                              موافقة وخصم {effectiveDeduction.toFixed(2)} ر.س من السلفة
+                              موافقة وخصم {formatCurrency(effectiveDeduction)} من السلفة
                             </span>
                           </button>
                         </div>
@@ -945,19 +957,19 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                       <div>
                         <span className="text-[10px] text-slate-400 block">إجمالي السلفة</span>
                         <div className="text-sm font-bold font-mono text-white tabular-nums">
-                          {loan.amount.toFixed(2)}
+                          {formatCurrency(loan.amount)}
                         </div>
                       </div>
                       <div>
                         <span className="text-[10px] text-emerald-400 block">المسدد</span>
                         <div className="text-sm font-bold font-mono text-emerald-400 tabular-nums">
-                          {paid.toFixed(2)}
+                          {formatCurrency(paid)}
                         </div>
                       </div>
                       <div>
                         <span className="text-[10px] text-amber-400 block">المتبقي</span>
                         <div className="text-sm font-bold font-mono text-amber-400 tabular-nums">
-                          {remaining.toFixed(2)}
+                          {formatCurrency(remaining)}
                         </div>
                       </div>
                     </div>
@@ -1007,7 +1019,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                             >
                               <div>
                                 <span className="font-mono font-bold text-emerald-400">
-                                  +{p.amount.toFixed(2)} ر.س
+                                  {formatCurrency(p.amount, { sign: 'credit' })}
                                 </span>{' '}
                                 <span className="text-slate-300">
                                   ({p.method === 'wallet'
@@ -1055,7 +1067,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
                         >
                           <CheckCircle2 className="w-4 h-4" />
                           <span>
-                            تسجيل سداد المتبقي بالكامل ({remaining.toFixed(2)} ر.س)
+                            تسجيل سداد المتبقي بالكامل ({formatCurrency(remaining)})
                           </span>
                         </button>
                       )}

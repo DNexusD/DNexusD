@@ -9,7 +9,7 @@ interface TransferModalProps {
 }
 
 export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
-  const { currentPos, posClients, supplier, executeBalanceTransfer, showToast, calculateFee } = useApp();
+  const { currentPos, posClients, supplier, executeBalanceTransfer, showToast, calculateFee, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency, convertToSar } = useApp();
 
   const [targetCode, setTargetCode] = useState('');
   const [amount, setAmount] = useState<number | ''>('');
@@ -21,20 +21,22 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
     p => p.posCode.trim().toUpperCase() === targetCode.trim().toUpperCase()
   );
 
-  const numAmount = Number(amount) || 0;
-  const feeAmount = calculateFee(numAmount, supplier);
-  const totalDeducted = numAmount + feeAmount;
+  const numAmountSar = convertToSar(Number(amount) || 0);
+  const feeAmountSar = calculateFee(numAmountSar, supplier);
+  const totalDeductedSar = numAmountSar + feeAmountSar;
 
   const balanceAvailability = getBalanceRequestAvailability({
     walletBalance: currentPos.walletBalance,
-    requiredAmount: numAmount > 0 ? totalDeducted : 0,
+    requiredAmount: numAmountSar > 0 ? totalDeductedSar : 0,
     walletLabel: 'محفظتك',
     requestLabel: 'تحويل الرصيد',
+    currency: activeCurrency,
+    exchangeRateSarPerUsd: activeExchangeRate,
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!numAmount || numAmount <= 0) {
+    if (!numAmountSar || numAmountSar <= 0) {
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال مبلغ تحويل صحيح' });
       return;
     }
@@ -56,7 +58,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
     setSubmitting(true);
     const res = await executeBalanceTransfer({
       targetPosCode: targetCode.trim(),
-      amount: numAmount
+      amount: numAmountSar
     });
     setSubmitting(false);
 
@@ -105,7 +107,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
           <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs">
             <span className="text-slate-400">رصيدك المتاح الحالي:</span>
             <span className="font-mono font-bold text-white text-sm">
-              {currentPos.walletBalance.toFixed(2)} ر.س
+              {formatCurrency(currentPos.walletBalance)}
             </span>
           </div>
 
@@ -170,16 +172,16 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
           {/* Transfer Amount */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">
-              المبلغ المراد تحويله (ر.س):
+              المبلغ المراد تحويله ({currencyLabel}):
             </label>
             <input
               type="number"
-              min="1"
-              step="1"
+              min="0.01"
+              step="any"
               required
               value={amount}
               onChange={e => setAmount(e.target.value ? Number(e.target.value) : '')}
-              placeholder="100"
+              placeholder={activeCurrency === 'USD' ? '50' : '100'}
               className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base font-bold font-mono text-white focus:outline-none focus:border-cyan-500"
             />
           </div>
@@ -188,11 +190,11 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
           <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1.5">
             <div className="flex justify-between text-slate-400">
               <span>المبلغ المحول للمستلم:</span>
-              <span className="font-mono tabular-nums text-white">{numAmount.toFixed(2)} ر.س</span>
+              <span className="font-mono tabular-nums text-white">{formatCurrency(numAmountSar)}</span>
             </div>
             <div className="pt-2 border-t border-slate-800 flex justify-between font-bold text-sm text-white">
               <span>إجمالي الخصم من محفظتك:</span>
-              <span className="text-cyan-400 font-mono tabular-nums">{totalDeducted.toFixed(2)} ر.س</span>
+              <span className="text-cyan-400 font-mono tabular-nums">{formatCurrency(totalDeductedSar)}</span>
             </div>
           </div>
 
@@ -217,7 +219,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
             <span>
               {!balanceAvailability.available
                 ? 'عدم توفر الرصيد المطلوب'
-                : `تأكيد تحويل ${totalDeducted.toFixed(2)} ر.س`}
+                : `تأكيد تحويل ${formatCurrency(totalDeductedSar)}`}
             </span>
             <ArrowRight className="w-4 h-4" />
           </button>

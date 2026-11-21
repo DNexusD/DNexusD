@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 
 export const StatementView: React.FC = () => {
-  const { currentPos, accountingEntries, orders, depositRequests, platformSettings, showToast } = useApp();
+  const { currentPos, accountingEntries, orders, depositRequests, platformSettings, showToast, activeCurrency, activeExchangeRate, formatCurrency } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<StatementFilter>('all');
   const [selectedTransactionType, setSelectedTransactionType] = useState<string>('all');
@@ -176,15 +176,15 @@ export const StatementView: React.FC = () => {
               subtext: subParts.join(' · ') || undefined,
             },
             debit: {
-              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit') : '-',
+              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit', activeCurrency, activeExchangeRate) : '-',
               tone: entry.debit > 0 ? 'debit' : 'neutral',
             },
             credit: {
-              text: entry.credit > 0 ? formatCurrencySar(entry.credit, 'credit') : '-',
+              text: entry.credit > 0 ? formatCurrencySar(entry.credit, 'credit', activeCurrency, activeExchangeRate) : '-',
               tone: entry.credit > 0 ? 'credit' : 'neutral',
             },
             balanceAfter: {
-              text: formatCurrencySar(entry.balanceAfter),
+              text: formatCurrencySar(entry.balanceAfter, 'neutral', activeCurrency, activeExchangeRate),
               tone: 'bold',
             },
           },
@@ -201,9 +201,9 @@ export const StatementView: React.FC = () => {
         filterSummary: getPosFilterLabel(),
         kpis: [
           { label: 'عدد القيود', value: `${filteredEntries.length} قيد`, tone: 'neutral' },
-          { label: 'إجمالي المدين (الخصومات)', value: formatCurrencySar(totalDebits, 'debit'), tone: 'debit' },
-          { label: 'إجمالي الدائن (الإيداعات)', value: formatCurrencySar(totalCredits, 'credit'), tone: 'credit' },
-          { label: 'الرصيد الحالي', value: formatCurrencySar(currentPos.walletBalance), tone: 'accent' },
+          { label: 'إجمالي المدين (الخصومات)', value: formatCurrencySar(totalDebits, 'debit', activeCurrency, activeExchangeRate), tone: 'debit' },
+          { label: 'إجمالي الدائن (الإيداعات)', value: formatCurrencySar(totalCredits, 'credit', activeCurrency, activeExchangeRate), tone: 'credit' },
+          { label: 'الرصيد الحالي', value: formatCurrencySar(currentPos.walletBalance, 'neutral', activeCurrency, activeExchangeRate), tone: 'accent' },
         ],
         columns: [
           { key: 'date', label: 'التاريخ والوقت', width: '15%', mono: true },
@@ -220,9 +220,9 @@ export const StatementView: React.FC = () => {
         },
         footerSummary: {
           rowCountLabel: `إجمالي القيود المعروضة: ${filteredEntries.length} قيد`,
-          totalDebit: formatCurrencySar(totalDebits, 'debit'),
-          totalCredit: formatCurrencySar(totalCredits, 'credit'),
-          finalBalance: formatCurrencySar(currentPos.walletBalance),
+          totalDebit: formatCurrencySar(totalDebits, 'debit', activeCurrency, activeExchangeRate),
+          totalCredit: formatCurrencySar(totalCredits, 'credit', activeCurrency, activeExchangeRate),
+          finalBalance: formatCurrencySar(currentPos.walletBalance, 'neutral', activeCurrency, activeExchangeRate),
         },
         filename: `كشف_حساب_${currentPos.tradeName}_${nowStr.slice(0, 10)}.pdf`,
       });
@@ -260,7 +260,7 @@ export const StatementView: React.FC = () => {
             <span>كشف حساب حركة المحفظة والعمليات</span>
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            نقطة البيع: {currentPos.tradeName} ({currentPos.posCode}) · الرصيد الحالي: {currentPos.walletBalance.toFixed(2)} ر.س
+            نقطة البيع: {currentPos.tradeName} ({currentPos.posCode}) · الرصيد الحالي: {formatCurrency(currentPos.walletBalance)}
           </p>
         </div>
 
@@ -399,15 +399,15 @@ export const StatementView: React.FC = () => {
         </div>
         <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
           <span className="text-slate-400 block text-[10px]">إجمالي المدين (الخصومات)</span>
-          <span className="text-lg font-bold font-mono text-rose-400 tabular-nums">{totalDebits.toFixed(2)} ر.س</span>
+          <span className="text-lg font-bold font-mono text-rose-400 tabular-nums">{formatCurrency(totalDebits)}</span>
         </div>
         <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
           <span className="text-slate-400 block text-[10px]">إجمالي الدائن (الإيداعات)</span>
-          <span className="text-lg font-bold font-mono text-emerald-400 tabular-nums">{totalCredits.toFixed(2)} ر.س</span>
+          <span className="text-lg font-bold font-mono text-emerald-400 tabular-nums">{formatCurrency(totalCredits)}</span>
         </div>
         <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
           <span className="text-slate-400 block text-[10px]">الرصيد النهائي الحالي</span>
-          <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">{currentPos.walletBalance.toFixed(2)} ر.س</span>
+          <span className="text-lg font-bold font-mono text-amber-400 tabular-nums">{formatCurrency(currentPos.walletBalance)}</span>
         </div>
       </div>
 
@@ -492,20 +492,20 @@ export const StatementView: React.FC = () => {
                       </td>
                       <td className="py-3 px-3 text-left font-mono tabular-nums whitespace-nowrap">
                         {entry.debit > 0 ? (
-                          <span className="text-rose-400 font-bold">-{entry.debit.toFixed(2)} ر.س</span>
+                          <span className="text-rose-400 font-bold">{formatCurrency(entry.debit, { sign: 'debit' })}</span>
                         ) : (
                           <span className="text-slate-600">-</span>
                         )}
                       </td>
                       <td className="py-3 px-3 text-left font-mono tabular-nums whitespace-nowrap">
                         {entry.credit > 0 ? (
-                          <span className="text-emerald-400 font-bold">+{entry.credit.toFixed(2)} ر.س</span>
+                          <span className="text-emerald-400 font-bold">{formatCurrency(entry.credit, { sign: 'credit' })}</span>
                         ) : (
                           <span className="text-slate-600">-</span>
                         )}
                       </td>
                       <td className="py-3 px-3 text-left font-mono tabular-nums text-white font-bold whitespace-nowrap">
-                        {entry.balanceAfter.toFixed(2)} ر.س
+                        {formatCurrency(entry.balanceAfter)}
                       </td>
                     </tr>
                   );

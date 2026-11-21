@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Building2, Search, QrCode, Hash, ChevronRight } from 'lucide-react';
+import { Building2, QrCode, Hash, ChevronRight } from 'lucide-react';
+import jsQR from 'jsqr';
 
 export const SupplierSelector: React.FC = () => {
   const { 
-    suppliers, 
     availableClientSuppliers, 
     setCurrentSupplierId, 
     setIsSupplierSelectionRequired, 
@@ -16,21 +16,21 @@ export const SupplierSelector: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'list' | 'code' | 'scan'>('list');
   const [supplierCode, setSupplierCode] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isListOpen, setIsListOpen] = useState(false);
 
-  // Target registered suppliers list for this client
-  const displaySuppliers = (availableClientSuppliers && availableClientSuppliers.length > 0)
-    ? availableClientSuppliers
-    : suppliers;
-
-  const filteredSuppliers = displaySuppliers.filter(s => 
-    s.name.includes(searchQuery) || 
-    s.storeName.includes(searchQuery) ||
-    s.id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Target registered suppliers list strictly belonging to this client (never fall back to all platform stores)
+  const displaySuppliers = availableClientSuppliers || [];
 
   const selectSupplier = (id: string) => {
+    const allowed = displaySuppliers.some(s => s.id === id);
+    if (!allowed) {
+      showToast({
+        type: 'error',
+        title: 'المتجر غير مسجل بحسابك',
+        description: 'لا يمكنك الانتقال إلى متجر غير مرتبط بحسابك.'
+      });
+      return;
+    }
+
     setCurrentSupplierId(id);
 
     // Sync POS Client account record matching this supplier
@@ -50,6 +50,55 @@ export const SupplierSelector: React.FC = () => {
     });
   };
 
+  const handleQrFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          showToast({ type: 'error', title: 'خطأ في معالجة الصورة', description: 'تعذر قراءة بيانات الصورة.' });
+          return;
+        }
+        ctx.drawImage(img, 0, 0, img.width, img.height);
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+        if (code && code.data) {
+          let decoded = code.data.trim();
+          if (decoded.includes(':')) {
+            const parts = decoded.split(':');
+            decoded = parts[parts.length - 1].trim();
+          }
+          const matched = displaySuppliers.find(s => s.id === decoded);
+          if (matched) {
+            selectSupplier(matched.id);
+          } else {
+            showToast({
+              type: 'error',
+              title: 'رمز QR غير مرتبط بحسابك',
+              description: 'المتجر الموجود في رمز الكيو آر غير مسجل ضمن متاجر هذا الحساب.'
+            });
+          }
+        } else {
+          showToast({
+            type: 'error',
+            title: 'تعذر قراءة رمز QR',
+            description: 'لم يتم العثور على رمز QR صالح في الصورة المرفوعة.'
+          });
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="space-y-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center space-y-1.5">
@@ -64,32 +113,38 @@ export const SupplierSelector: React.FC = () => {
 
       {/* Direct Cards of Registered Suppliers */}
       <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-        {displaySuppliers.map(s => (
-          <button 
-            key={s.id} 
-            onClick={() => selectSupplier(s.id)} 
-            className="w-full flex items-center justify-between p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-amber-500/60 hover:bg-slate-900 transition-all text-right group shadow-md"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden">
-                {s.logoUrl ? (
-                  <img src={s.logoUrl} alt={s.name} className="w-full h-full object-cover" />
-                ) : (
-                  <Building2 className="w-5 h-5" />
-                )}
-              </div>
-              <div>
-                <div className="font-bold text-xs text-white group-hover:text-amber-400 transition-colors">
-                  {s.storeName}
+        {displaySuppliers.length === 0 ? (
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-center text-xs text-slate-400">
+            لا توجد متاجر مرتبطة بهذا الحساب حالياً.
+          </div>
+        ) : (
+          displaySuppliers.map(s => (
+            <button 
+              key={s.id} 
+              onClick={() => selectSupplier(s.id)} 
+              className="w-full flex items-center justify-between p-3 rounded-2xl bg-slate-950 border border-slate-800 hover:border-amber-500/60 hover:bg-slate-900 transition-all text-right group shadow-md"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden">
+                  {s.logoUrl ? (
+                    <img src={s.logoUrl} alt={s.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <Building2 className="w-5 h-5" />
+                  )}
                 </div>
-                <div className="text-[10px] text-slate-400">
-                  {s.name} · معرف المتجر: <code className="font-mono text-amber-300">{s.id}</code>
+                <div>
+                  <div className="font-bold text-xs text-white group-hover:text-amber-400 transition-colors">
+                    {s.storeName}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {s.name} · معرف المتجر: <code className="font-mono text-amber-300">{s.id}</code>
+                  </div>
                 </div>
               </div>
-            </div>
-            <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-amber-400 transition-colors" />
-          </button>
-        ))}
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-amber-400 transition-colors" />
+            </button>
+          ))
+        )}
       </div>
 
       <div className="space-y-2 pt-2 border-t border-slate-800/80">
@@ -151,14 +206,7 @@ export const SupplierSelector: React.FC = () => {
               type="file"
               accept="image/*"
               className="hidden"
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  showToast({ type: 'info', title: 'جاري قراءة رمز الكيو أر...', description: 'سيتم توجيهك لالمتجر المسجل مباشرة.' });
-                  if (displaySuppliers.length > 0) {
-                    selectSupplier(displaySuppliers[0].id);
-                  }
-                }
-              }}
+              onChange={handleQrFileChange}
             />
           </label>
         </div>

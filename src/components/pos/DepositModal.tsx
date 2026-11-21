@@ -33,7 +33,7 @@ interface DepositModalProps {
 }
 
 export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
-  const { currentPosSupplier, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos, showToast } = useApp();
+  const { currentPosSupplier, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertToSar } = useApp();
 
   const approvedBankOptions = useMemo(
     () => getActiveDropdownOptions(platformSettings.approvedBankNames),
@@ -134,6 +134,8 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
     bankAccountsCount: activeBankAccounts.length,
     hasSupplier: Boolean(currentPosSupplier?.id),
     requestLabel: 'طلب شحن الرصيد',
+    currency: activeCurrency,
+    exchangeRateSarPerUsd: activeExchangeRate,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -171,8 +173,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
 
       if (hasError) return;
 
+      const amountSar = convertToSar(Number(amount));
       submitDepositRequest({
-        amount: Number(amount),
+        amount: amountSar,
         requestType: 'cash',
         transferNumber: transferNumber.trim(),
         transferSenderName: transferSenderName.trim(),
@@ -183,8 +186,9 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
       });
     } else {
       // Loan / Advance Credit Request
+      const amountSar = convertToSar(Number(amount));
       submitDepositRequest({
-        amount: Number(amount),
+        amount: amountSar,
         requestType: 'loan',
         loanReason: loanReason.trim() || 'طلب سلفة رصيد آجل عاجل',
       });
@@ -432,16 +436,16 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    مبلغ الإيداع المراد شحنه (ر.س):
+                    مبلغ الإيداع المراد شحنه ({currencyLabel}):
                   </label>
                   <input
                     type="number"
-                    min="10"
-                    step="1"
+                    min={activeCurrency === 'USD' ? '0.01' : '1'}
+                    step="any"
                     required
                     value={amount}
                     onChange={(e) => setAmount(e.target.value ? Number(e.target.value) : '')}
-                    placeholder="500"
+                    placeholder={activeCurrency === 'USD' ? '100' : '500'}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base font-bold font-mono text-white focus:outline-none focus:border-amber-500"
                   />
                   {currentPos.canGetBonus && (
@@ -672,16 +676,16 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    مبلغ السلفة المطلوبة (ر.س):
+                    مبلغ السلفة المطلوبة ({currencyLabel}):
                   </label>
                   <input
                     type="number"
-                    min="10"
-                    step="1"
+                    min={activeCurrency === 'USD' ? '0.01' : '1'}
+                    step="any"
                     required
                     value={amount}
                     onChange={(e) => setAmount(e.target.value ? Number(e.target.value) : '')}
-                    placeholder="1000"
+                    placeholder={activeCurrency === 'USD' ? '250' : '1000'}
                     className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-3.5 py-2.5 text-base font-bold font-mono text-cyan-300 focus:outline-none focus:border-cyan-400"
                   />
                   <span className="text-[10px] text-slate-400 mt-1 block">
@@ -733,7 +737,7 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
         imageUrl={transferReceiptImage}
         title="معاينة إيصال الحوالة المرفق"
         transferNumber={transferNumber}
-        amount={typeof amount === 'number' ? amount : undefined}
+        amount={typeof amount === 'number' ? convertToSar(amount) : undefined}
         senderName={transferSenderName}
         bankName={bankName}
         posName={currentPos.tradeName}

@@ -1,4 +1,5 @@
-import { DepositRequest, LoanPaymentRecord } from '../types';
+import { CurrencyCode, DepositRequest, LoanPaymentRecord } from '../types';
+import { formatCurrencyAmount } from './currency';
 import { validateReceiptImage } from './receiptImage';
 
 export type LoanRepaymentState = 'unpaid' | 'partial' | 'repaid';
@@ -116,7 +117,9 @@ export function filterClientLoans(
 export function validateWalletRepayment(
   loan: DepositRequest,
   rawAmount: number,
-  walletBalance: number
+  walletBalance: number,
+  currency: CurrencyCode = 'SAR',
+  exchangeRateSarPerUsd?: number
 ): {
   valid: boolean;
   amount: number;
@@ -157,7 +160,7 @@ export function validateWalletRepayment(
       valid: false,
       amount,
       code: 'exceeds_remaining',
-      error: `مبلغ السداد (${amount.toFixed(2)} ر.س) يتجاوز المبلغ المتبقي من السلفة (${remaining.toFixed(2)} ر.س).`,
+      error: `مبلغ السداد (${formatCurrencyAmount(amount, currency, exchangeRateSarPerUsd)}) يتجاوز المبلغ المتبقي من السلفة (${formatCurrencyAmount(remaining, currency, exchangeRateSarPerUsd)}).`,
     };
   }
 
@@ -167,7 +170,7 @@ export function validateWalletRepayment(
       valid: false,
       amount,
       code: 'insufficient_balance',
-      error: `الرصيد غير كافٍ في محفظتك! رصيدك الحالي (${cleanWallet.toFixed(2)} ر.س) أقل من مبلغ السداد المطلوب (${amount.toFixed(2)} ر.س). يرجى إعادة شحن المحفظة أو السداد عبر طلب حوالة بنكية.`,
+      error: `الرصيد غير كافٍ في محفظتك! رصيدك الحالي (${formatCurrencyAmount(cleanWallet, currency, exchangeRateSarPerUsd)}) أقل من مبلغ السداد المطلوب (${formatCurrencyAmount(amount, currency, exchangeRateSarPerUsd)}). يرجى إعادة شحن المحفظة أو السداد عبر طلب حوالة بنكية.`,
     };
   }
 
@@ -183,6 +186,8 @@ export function validateBankTransferRepayment(
     bankName: string;
     transferReceiptImage?: string | null;
     targetBankAccountId?: string;
+    currency?: CurrencyCode;
+    exchangeRateSarPerUsd?: number;
   }
 ): {
   valid: boolean;
@@ -219,7 +224,7 @@ export function validateBankTransferRepayment(
     return {
       valid: false,
       amount,
-      error: `المبلغ المحول (${amount.toFixed(2)} ر.س) يتجاوز المتبقي من السلفة (${remaining.toFixed(2)} ر.س).`,
+      error: `المبلغ المحول (${formatCurrencyAmount(amount, params.currency || 'SAR', params.exchangeRateSarPerUsd)}) يتجاوز المتبقي من السلفة (${formatCurrencyAmount(remaining, params.currency || 'SAR', params.exchangeRateSarPerUsd)}).`,
     };
   }
 

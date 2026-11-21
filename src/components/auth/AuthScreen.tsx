@@ -257,8 +257,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     }
   };
 
-  // Verify 6-digit code and sign in
-  const performOtpVerifyAndLogin = async (otpCodeToVerify: string) => {
+  // Verify credentials (direct Email+Password, or Email+Password+OTP if OTP was requested/entered)
+  const performLogin = async (otpCodeToVerify: string, requireOtp: boolean) => {
     setAuthError(null);
 
     if (!isValidLoginEmail(loginEmail)) {
@@ -272,7 +272,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
       return;
     }
 
-    if (!isValidSixDigitCode(otpCodeToVerify)) {
+    if (!loginPassword.trim()) {
+      const msg = 'يرجى إدخال كلمة المرور';
+      setAuthError(msg);
+      showToast({
+        type: 'error',
+        title: 'كلمة المرور مطلوبة',
+        description: msg
+      });
+      return;
+    }
+
+    const cleanOtp = otpCodeToVerify.trim();
+    if ((requireOtp || cleanOtp.length > 0) && !isValidSixDigitCode(cleanOtp)) {
       const msg = 'يرجى إدخال رمز التحقق المكون من 6 أرقام';
       setAuthError(msg);
       showToast({
@@ -285,12 +297,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
 
     setIsLoggingIn(true);
     try {
-      const res = await verifyLoginOtpAndLogin(loginEmail, loginPassword, otpCodeToVerify);
+      const res = await verifyLoginOtpAndLogin(loginEmail, loginPassword, cleanOtp);
       if (!res.success && res.error) {
         setAuthError(res.error);
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'الرمز غير صحيح أو منتهي الصلاحية';
+      const msg = err instanceof Error ? err.message : 'تعذر إتمام تسجيل الدخول';
       setAuthError(msg);
     } finally {
       setIsLoggingIn(false);
@@ -300,7 +312,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
   // Handle Login Submit
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await performOtpVerifyAndLogin(loginOtp);
+    const shouldRequireOtp = otpSent && otpSentToEmail === loginEmail.trim().toLowerCase();
+    await performLogin(loginOtp, shouldRequireOtp);
   };
 
   // Handle Google Account Login
@@ -392,7 +405,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
         setRegSupplierId('');
         setAuthError(null);
         
-        setRegistrationBanner(`تم إنشاء الحساب (${createdEmail}) وتوثيقه بنجاح في قاعدة البيانات! يرجى إدخال كلمة المرور وطلب رمز OTP للتحقق والدخول إلى المنصة.`);
+        setRegistrationBanner(`تم إنشاء الحساب (${createdEmail}) وتوثيقه بنجاح في قاعدة البيانات! يمكنك الآن إدخال كلمة المرور والدخول مباشرة إلى حسابك.`);
         setMode('login');
       } else if (res.error) {
         setAuthError(res.error);
@@ -493,7 +506,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                         <span>تسجيل الدخول ومتابعة العمليات</span>
                       </h2>
                       <p className="text-[11px] sm:text-xs text-slate-400">
-                        اختر تسجيل الدخول السريع عبر حساب جوجل، أو المتابعة باستخدام البريد الإلكتروني ورمز التحقق.
+                        اختر تسجيل الدخول السريع عبر حساب جوجل، أو الدخول مباشرة بالبريد الإلكتروني وكلمة المرور.
                       </p>
                     </div>
 
@@ -592,6 +605,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       <div className="relative">
                         <input
                           type={showLoginPassword ? 'text' : 'password'}
+                          required
                           value={loginPassword}
                           onChange={e => setLoginPassword(e.target.value)}
                           placeholder="••••••••••••"
@@ -613,7 +627,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       <div className="flex items-center justify-between text-xs gap-1.5 flex-wrap">
                         <label className="font-semibold text-slate-200 flex items-center gap-1.5 text-xs">
                           <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                          <span>رمز التحقق لمرة واحدة (OTP):</span>
+                          <span>رمز التحقق لمرة واحدة (OTP - اختياري):</span>
                         </label>
 
                         {remainingSeconds > 0 ? (
@@ -623,11 +637,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           </span>
                         ) : otpSent ? (
                           <span className="text-[10px] sm:text-[11px] font-semibold text-rose-400">
-                            انتهت الصلاحية (10 دقائق)
+                            انتهت الصلاحية (دقيقتان)
                           </span>
                         ) : (
                           <span className="text-[10px] sm:text-[11px] text-slate-500">
-                            صلاحية الرمز: 10 دقائق
+                            اختياري للتحقق الإضافي
                           </span>
                         )}
                       </div>
@@ -648,13 +662,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                               digits.length === 6 &&
                               !isLoggingIn &&
                               isValidLoginEmail(loginEmail) &&
+                              loginPassword.trim().length > 0 &&
                               lastAutoSubmittedOtpRef.current !== digits
                             ) {
                               lastAutoSubmittedOtpRef.current = digits;
-                              void performOtpVerifyAndLogin(digits);
+                              void performLogin(digits, true);
                             }
                           }}
-                          placeholder="رمز التحقق (6 أرقام)"
+                          placeholder="رمز التحقق (اختياري)"
                           className="flex-1 min-w-0 bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-xl px-2 sm:px-3 py-2 text-center font-mono text-sm sm:text-base font-bold tracking-wider sm:tracking-widest text-white focus:outline-none transition-colors placeholder:text-[11px] placeholder:font-normal placeholder:tracking-normal placeholder:font-sans placeholder:text-slate-500"
                           dir="ltr"
                         />

@@ -1,5 +1,7 @@
 export type UserRole = 'pos_client' | 'supplier' | 'super_admin' | 'employee';
 
+export type CurrencyCode = 'SAR' | 'USD';
+
 export interface EmployeePermissions {
   // 1. الشحن مع تحديد النوع
   canManageOrders?: boolean;
@@ -242,6 +244,7 @@ export interface POSClient {
   canViewGifts?: boolean; // هل يمتلك ميزة ظهور الهدايا والعروض المجانية
   pendingGiftFees?: number; // رسوم تطبيق مؤجلة من هدايا مجانية لحين شحن المحفظة (لا تظهر للعميل كمديونية)
   usedGiftServiceIds?: string[]; // معرفات خدمات الهدايا المجانية المستخدمة والمكتملة لإخفائها من واجهة العميل
+  preferredCurrency?: CurrencyCode; // العملة المفضلة للعرض والتعامل (SAR / USD)
 }
 
 export interface FeeConfig {
@@ -289,6 +292,7 @@ export interface Supplier {
   storeName: string;
   phone: string;
   email: string;
+  password?: string;
   feePercentage: number; // Backward compatibility / primary %
   fixedFeeAmount: number; // Primary fixed fee
   feeType: 'percentage' | 'fixed' | 'both';
@@ -306,6 +310,8 @@ export interface Supplier {
   createdAt: string;
   qrCodeValue?: string;
   employees?: OfficeEmployee[];
+  preferredCurrency?: CurrencyCode; // العملة النشطة المفضلة للتاجر (SAR / USD)
+  exchangeRateSarPerUsd?: number; // سعر الصرف المحدد من التاجر: 1 دولار أمريكي = X ريال سعودي
 }
 
 export interface SuperAdmin {

@@ -65,6 +65,12 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
     platformSettings,
     payLoanFromWallet,
     submitLoanRepaymentRequest,
+    activeCurrency,
+    activeExchangeRate,
+    currencyLabel,
+    formatCurrency,
+    convertFromSar,
+    convertToSar,
   } = useApp();
 
   const approvedBankOptions = useMemo(
@@ -167,7 +173,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
     const accounts = getActiveBankAccountsForDeposit(supplierBankAccounts, loanSup);
     setSelectedLoanId(loan.id);
     setSelectedBankAccountId(accounts[0]?.id || '');
-    setRepayAmountInput(remaining > 0 ? String(remaining) : '');
+    setRepayAmountInput(remaining > 0 ? String(convertFromSar(remaining)) : '');
     setRepayMethod(currentPos.walletBalance >= remaining && remaining > 0 ? 'wallet' : 'wallet');
     setTransferNumber('');
     setTransferNumberError(null);
@@ -179,6 +185,12 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
     setReceiptFileSizeKb(0);
     setReceiptImageError(null);
   };
+
+  useEffect(() => {
+    if (!selectedLoan) return;
+    const remaining = getLoanRemainingAmount(selectedLoan);
+    setRepayAmountInput(remaining > 0 ? String(convertFromSar(remaining)) : '');
+  }, [activeCurrency, activeExchangeRate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const closeLoanDetails = () => {
     setSelectedLoanId(null);
@@ -248,7 +260,13 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
     if (!selectedLoan || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const amount = Number(repayAmountInput);
+      const remaining = getLoanRemainingAmount(selectedLoan);
+      const rawDisplayAmount = Number(repayAmountInput) || 0;
+      const isFullRemaining =
+        activeCurrency === 'USD' &&
+        remaining > 0 &&
+        Math.abs(rawDisplayAmount - convertFromSar(remaining)) < 0.005;
+      const amount = isFullRemaining ? remaining : convertToSar(rawDisplayAmount);
       const res = await payLoanFromWallet(selectedLoan.id, amount);
       if (res.success && res.receipt) {
         setBankTransferReceipt(null);
@@ -298,7 +316,13 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
 
     setIsSubmitting(true);
     try {
-      const amount = Number(repayAmountInput);
+      const remaining = getLoanRemainingAmount(selectedLoan);
+      const rawDisplayAmount = Number(repayAmountInput) || 0;
+      const isFullRemaining =
+        activeCurrency === 'USD' &&
+        remaining > 0 &&
+        Math.abs(rawDisplayAmount - convertFromSar(remaining)) < 0.005;
+      const amount = isFullRemaining ? remaining : convertToSar(rawDisplayAmount);
       const res = await submitLoanRepaymentRequest({
         loanId: selectedLoan.id,
         amount,
@@ -400,7 +424,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                   <p className="text-xs text-slate-300 leading-relaxed">
                     تم إرسال طلب سداد مبلغ{' '}
                     <strong className="font-mono tabular-nums text-amber-300">
-                      {bankTransferReceipt.amount.toFixed(2)} ر.س
+                      {formatCurrency(bankTransferReceipt.amount)}
                     </strong>{' '}
                     عن السلفة{' '}
                     <strong className="font-mono text-white">#{bankTransferReceipt.loanId}</strong>{' '}
@@ -470,9 +494,9 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">الإجمالي · المتبقي الحالي:</span>
                   <span className="font-mono tabular-nums text-slate-200">
-                    {bankTransferReceipt.loanTotalAmount.toFixed(2)} ·{' '}
+                    {formatCurrency(bankTransferReceipt.loanTotalAmount, { includeSymbol: false })} ·{' '}
                     <strong className="text-amber-300">
-                      {bankTransferReceipt.loanRemainingBefore.toFixed(2)} ر.س
+                      {formatCurrency(bankTransferReceipt.loanRemainingBefore)}
                     </strong>
                   </span>
                 </div>
@@ -490,7 +514,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">المبلغ المحوّل:</span>
                   <span className="font-mono tabular-nums font-bold text-amber-300">
-                    {bankTransferReceipt.amount.toFixed(2)} ر.س
+                    {formatCurrency(bankTransferReceipt.amount)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-2">
@@ -517,7 +541,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">المتبقي المتوقع بعد الاعتماد:</span>
                   <span className="font-mono tabular-nums font-bold text-slate-200">
-                    {expectedRemainingAfter.toFixed(2)} ر.س
+                    {formatCurrency(expectedRemainingAfter)}
                   </span>
                 </div>
               </div>
@@ -591,7 +615,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                 <p className="text-xs text-slate-300 leading-relaxed">
                   تم سداد مبلغ{' '}
                   <strong className="font-mono tabular-nums text-emerald-300">
-                    {walletRepayReceipt.amountPaid.toFixed(2)} ر.س
+                    {formatCurrency(walletRepayReceipt.amountPaid)}
                   </strong>{' '}
                   بنجاح، وتم خصم المبلغ المحدد من محفظة العميل ({walletRepayReceipt.clientName}) وإضافته فوراً إلى محفظة المتجر ({walletRepayReceipt.supplierName}).
                 </p>
@@ -659,14 +683,14 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">المبلغ المخصوم:</span>
                 <span className="font-mono tabular-nums font-bold text-rose-400">
-                  <bdi dir="ltr">-{walletRepayReceipt.amountPaid.toFixed(2)}</bdi> ر.س
+                  {formatCurrency(walletRepayReceipt.amountPaid, { sign: 'debit' })}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">رصيد المحفظة:</span>
                 <span className="font-mono tabular-nums text-slate-200">
-                  {walletRepayReceipt.clientBalanceBefore.toFixed(2)} ←{' '}
-                  <strong className="text-white">{walletRepayReceipt.clientBalanceAfter.toFixed(2)} ر.س</strong>
+                  {formatCurrency(walletRepayReceipt.clientBalanceBefore, { includeSymbol: false })} ←{' '}
+                  <strong className="text-white">{formatCurrency(walletRepayReceipt.clientBalanceAfter)}</strong>
                 </span>
               </div>
             </div>
@@ -681,14 +705,14 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">المبلغ المضاف:</span>
                 <span className="font-mono tabular-nums font-bold text-emerald-400">
-                  <bdi dir="ltr">+{walletRepayReceipt.amountPaid.toFixed(2)}</bdi> ر.س
+                  {formatCurrency(walletRepayReceipt.amountPaid, { sign: 'credit' })}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">محفظة المتجر:</span>
                 <span className="font-mono tabular-nums text-slate-200">
-                  {walletRepayReceipt.supplierBalanceBefore.toFixed(2)} ←{' '}
-                  <strong className="text-emerald-300">{walletRepayReceipt.supplierBalanceAfter.toFixed(2)} ر.س</strong>
+                  {formatCurrency(walletRepayReceipt.supplierBalanceBefore, { includeSymbol: false })} ←{' '}
+                  <strong className="text-emerald-300">{formatCurrency(walletRepayReceipt.supplierBalanceAfter)}</strong>
                 </span>
               </div>
             </div>
@@ -699,14 +723,14 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">إجمالي السلفة · المسدد:</span>
                 <span className="font-mono tabular-nums text-slate-200">
-                  {walletRepayReceipt.totalLoanAmount.toFixed(2)} ·{' '}
-                  <strong className="text-emerald-400">{walletRepayReceipt.paidAfter.toFixed(2)} ر.س</strong>
+                  {formatCurrency(walletRepayReceipt.totalLoanAmount, { includeSymbol: false })} ·{' '}
+                  <strong className="text-emerald-400">{formatCurrency(walletRepayReceipt.paidAfter)}</strong>
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">المتبقي غير المسدد:</span>
                 <span className="font-mono tabular-nums font-bold text-amber-300">
-                  {walletRepayReceipt.remainingAfter.toFixed(2)} ر.س
+                  {formatCurrency(walletRepayReceipt.remainingAfter)}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -756,24 +780,24 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
           <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
             <span className="text-[11px] text-slate-400 block">إجمالي السلف المعتمدة</span>
             <div className="text-xl font-bold font-mono text-white tabular-nums mt-1">
-              {stats.totalApproved.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs font-sans text-slate-400">ر.س</span>
+              {formatCurrency(stats.totalApproved, { includeSymbol: false, withGrouping: true })}{' '}
+              <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
             </div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/25">
             <span className="text-[11px] text-emerald-300 block">إجمالي المبالغ المسددة</span>
             <div className="text-xl font-bold font-mono text-emerald-400 tabular-nums mt-1">
-              {stats.totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs font-sans text-slate-400">ر.س</span>
+              {formatCurrency(stats.totalPaid, { includeSymbol: false, withGrouping: true })}{' '}
+              <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
             </div>
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-950 border border-amber-500/25">
             <span className="text-[11px] text-amber-300 block">المتبقي غير المسدد</span>
             <div className="text-xl font-bold font-mono text-amber-400 tabular-nums mt-1">
-              {stats.totalRemaining.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-              <span className="text-xs font-sans text-slate-400">ر.س</span>
+              {formatCurrency(stats.totalRemaining, { includeSymbol: false, withGrouping: true })}{' '}
+              <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
             </div>
           </div>
 
@@ -934,19 +958,19 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       <div>
                         <span className="text-[10px] text-slate-400 block">إجمالي السلفة</span>
                         <span className="font-mono text-sm font-bold text-white tabular-nums">
-                          {loan.amount.toFixed(2)}
+                          {formatCurrency(loan.amount)}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] text-emerald-400 block">المسدد</span>
                         <span className="font-mono text-sm font-bold text-emerald-400 tabular-nums">
-                          {paid.toFixed(2)}
+                          {formatCurrency(paid)}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] text-amber-400 block">المتبقي</span>
                         <span className="font-mono text-sm font-bold text-amber-400 tabular-nums">
-                          {remaining.toFixed(2)}
+                          {formatCurrency(remaining)}
                         </span>
                       </div>
                     </div>
@@ -1002,10 +1026,16 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
         const payments = getLoanRepaymentsList(selectedLoan);
         const loanRequests = getLoanPendingRepaymentRequests(selectedLoan.id);
         const canRepay = selectedLoan.status === 'approved' && remaining > 0;
-        const parsedAmount = Number(repayAmountInput) || 0;
+        const rawDisplayAmount = Number(repayAmountInput) || 0;
+        const remainingInDisplay = convertFromSar(remaining);
+        const isFullRemaining =
+          activeCurrency === 'USD' &&
+          remaining > 0 &&
+          Math.abs(rawDisplayAmount - remainingInDisplay) < 0.005;
+        const parsedAmount = isFullRemaining ? remaining : convertToSar(rawDisplayAmount);
         const walletInsufficient =
           repayMethod === 'wallet' && parsedAmount > 0 && currentPos.walletBalance < parsedAmount;
-        const exceedsRemaining = parsedAmount > remaining;
+        const exceedsRemaining = !isFullRemaining && parsedAmount > remaining;
         const remainingAfterPreview = Math.max(0, roundCurrency(remaining - parsedAmount));
 
         return (
@@ -1079,19 +1109,19 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                     <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
                       <span className="text-[10px] text-slate-400 block">إجمالي مبلغ السلفة</span>
                       <div className="text-base font-bold font-mono text-white tabular-nums mt-0.5">
-                        {selectedLoan.amount.toFixed(2)} ر.س
+                        {formatCurrency(selectedLoan.amount)}
                       </div>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-900 border border-emerald-500/25">
                       <span className="text-[10px] text-emerald-400 block">المبلغ المسدد</span>
                       <div className="text-base font-bold font-mono text-emerald-400 tabular-nums mt-0.5">
-                        {paid.toFixed(2)} ر.س
+                        {formatCurrency(paid)}
                       </div>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-900 border border-amber-500/25">
                       <span className="text-[10px] text-amber-400 block">المتبقي لم يُسدد</span>
                       <div className="text-base font-bold font-mono text-amber-400 tabular-nums mt-0.5">
-                        {remaining.toFixed(2)} ر.س
+                        {formatCurrency(remaining)}
                       </div>
                     </div>
                   </div>
@@ -1118,7 +1148,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       <span>الدفعات المسددة ({payments.length})</span>
                     </h4>
                     <span className="text-[11px] font-mono text-emerald-400">
-                      إجمالي المسدد: {paid.toFixed(2)} ر.س
+                      إجمالي المسدد: {formatCurrency(paid)}
                     </span>
                   </div>
 
@@ -1136,7 +1166,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                           <div className="space-y-0.5">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono text-emerald-400 font-bold">
-                                +{pay.amount.toFixed(2)} ر.س
+                                {formatCurrency(pay.amount, { sign: 'credit' })}
                               </span>
                               <span className="text-slate-300 font-semibold">
                                 {pay.method === 'wallet'
@@ -1177,7 +1207,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                                 حوالة: {req.transferNumber}
                               </span>
                               <span className="font-mono text-white font-bold">
-                                {req.amount.toFixed(2)} ر.س
+                                {formatCurrency(req.amount)}
                               </span>
                               {req.status === 'pending' && (
                                 <span className="text-[11px] font-bold text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded">
@@ -1186,7 +1216,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                               )}
                               {req.status === 'approved' && (
                                 <span className="text-[11px] font-bold text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded">
-                                  تمت الموافقة وخصم {(req.approvedAmount ?? req.amount).toFixed(2)} ر.س
+                                  تمت الموافقة وخصم {formatCurrency(req.approvedAmount ?? req.amount)}
                                 </span>
                               )}
                               {req.status === 'rejected' && (
@@ -1262,7 +1292,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                         </p>
                       </div>
                       <div className="text-xs font-mono text-amber-300 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
-                        المتبقي للسداد: <strong>{remaining.toFixed(2)} ر.س</strong>
+                        المتبقي للسداد: <strong>{formatCurrency(remaining)}</strong>
                       </div>
                     </div>
 
@@ -1270,16 +1300,16 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
                       <div className="sm:col-span-6 space-y-1.5">
                         <label className="block text-xs font-semibold text-slate-300">
-                          المبلغ المراد سداده (ر.س):
+                          المبلغ المراد سداده ({currencyLabel}):
                         </label>
                         <input
                           type="number"
                           min="0.01"
-                          max={remaining}
+                          max={remainingInDisplay}
                           step="0.01"
                           value={repayAmountInput}
                           onChange={(e) => setRepayAmountInput(e.target.value)}
-                          placeholder={remaining.toFixed(2)}
+                          placeholder={remainingInDisplay.toFixed(2)}
                           className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm font-bold font-mono text-white focus:outline-none focus:border-cyan-500"
                         />
                       </div>
@@ -1287,15 +1317,15 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       <div className="sm:col-span-6 flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => setRepayAmountInput(String(remaining))}
+                          onClick={() => setRepayAmountInput(String(remainingInDisplay))}
                           className="flex-1 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-bold text-emerald-300 transition-colors whitespace-nowrap"
                         >
-                          سداد كامل المتبقي ({remaining.toFixed(2)})
+                          سداد كامل المتبقي ({formatCurrency(remaining)})
                         </button>
                         <button
                           type="button"
                           onClick={() =>
-                            setRepayAmountInput(String(roundCurrency(Math.max(1, remaining / 2))))
+                            setRepayAmountInput(String(roundCurrency(Math.max(0.01, remainingInDisplay / 2))))
                           }
                           className="flex-1 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-bold text-amber-300 transition-colors whitespace-nowrap"
                         >
@@ -1313,7 +1343,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                           </strong>
                         </span>
                         <span className="font-mono">
-                          المتبقي بعد السداد: <strong>{remainingAfterPreview.toFixed(2)} ر.س</strong>
+                          المتبقي بعد السداد: <strong>{formatCurrency(remainingAfterPreview)}</strong>
                         </span>
                       </div>
                     )}
@@ -1322,7 +1352,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                       <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0" />
                         <span>
-                          المبلغ المدخل ({parsedAmount.toFixed(2)} ر.س) يتجاوز المتبقي من السلفة ({remaining.toFixed(2)} ر.س).
+                          المبلغ المدخل ({formatCurrency(parsedAmount)}) يتجاوز المتبقي من السلفة ({formatCurrency(remaining)}).
                         </span>
                       </div>
                     )}
@@ -1367,7 +1397,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                                 walletInsufficient ? 'text-rose-400' : 'text-emerald-400'
                               }`}
                             >
-                              {currentPos.walletBalance.toFixed(2)} ر.س
+                              {formatCurrency(currentPos.walletBalance)}
                             </strong>
                           </div>
                           <div className="text-[11px] text-slate-300">
@@ -1383,7 +1413,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                               <span>الرصيد غير كافٍ في المحفظة لإتمام هذا السداد!</span>
                             </div>
                             <p className="text-[11px] text-rose-200/90">
-                              رصيدك الحالي ({currentPos.walletBalance.toFixed(2)} ر.س) أقل من المبلغ المطلوب ({parsedAmount.toFixed(2)} ر.س). يمكنك سداد مبلغ أقل يتوافق مع رصيدك أو إعادة شحن المحفظة أو إرسال طلب سداد عبر حوالة بنكية.
+                              رصيدك الحالي ({formatCurrency(currentPos.walletBalance)}) أقل من المبلغ المطلوب ({formatCurrency(parsedAmount)}). يمكنك سداد مبلغ أقل يتوافق مع رصيدك أو إعادة شحن المحفظة أو إرسال طلب سداد عبر حوالة بنكية.
                             </p>
                             <div className="flex flex-wrap items-center gap-2 pt-1">
                               {onOpenRechargeWallet && (
@@ -1421,7 +1451,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                         >
                           <Wallet className="w-4 h-4" />
                           <span>
-                            تأكيد الخصم المباشر من المحفظة ({parsedAmount > 0 ? parsedAmount.toFixed(2) : '0.00'} ر.س)
+                            تأكيد الخصم المباشر من المحفظة ({parsedAmount > 0 ? formatCurrency(parsedAmount) : formatCurrency(0)})
                           </span>
                         </button>
                       </form>
@@ -1585,8 +1615,8 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                               <span>رقم السلفة: <strong className="font-mono text-white">{selectedLoan.id}</strong></span>
                               <span>التاريخ: <strong className="font-mono text-white">{selectedLoan.date}</strong></span>
-                              <span>الإجمالي: <strong className="font-mono text-white">{selectedLoan.amount.toFixed(2)} ر.س</strong></span>
-                              <span>المتبقي: <strong className="font-mono text-amber-300">{remaining.toFixed(2)} ر.س</strong></span>
+                              <span>الإجمالي: <strong className="font-mono text-white">{formatCurrency(selectedLoan.amount)}</strong></span>
+                              <span>المتبقي: <strong className="font-mono text-amber-300">{formatCurrency(remaining)}</strong></span>
                             </div>
                           </div>
 
@@ -1765,12 +1795,12 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                             <div>
                               <label className="block font-semibold text-slate-300 mb-1">
-                                المبلغ المحول (ر.س):
+                                المبلغ المحول ({currencyLabel}):
                               </label>
                               <input
                                 type="number"
                                 min="0.01"
-                                max={remaining}
+                                max={remainingInDisplay}
                                 step="0.01"
                                 required
                                 value={repayAmountInput}
@@ -1836,7 +1866,7 @@ export const ClientLoansView: React.FC<ClientLoansViewProps> = ({
                             className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
                           >
                             <span>
-                              إرسال طلب سداد السلفة مع صورة الإيصال ({parsedAmount > 0 ? parsedAmount.toFixed(2) : '0.00'} ر.س)
+                              إرسال طلب سداد السلفة مع صورة الإيصال ({parsedAmount > 0 ? formatCurrency(parsedAmount) : formatCurrency(0)})
                             </span>
                             <ArrowRight className="w-4 h-4" />
                           </button>

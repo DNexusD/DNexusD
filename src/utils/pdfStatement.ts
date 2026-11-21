@@ -1,5 +1,7 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { CurrencyCode } from '../types';
+import { formatCurrencyAmount } from './currency';
 
 export type PdfBadgeTone = 'emerald' | 'rose' | 'amber' | 'purple' | 'cyan' | 'slate';
 export type PdfCellTone = 'credit' | 'debit' | 'neutral' | 'bold';
@@ -91,15 +93,27 @@ export function sanitizePdfFilename(rawName: string): string {
   return base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
 }
 
-export function formatCurrencySar(amount: number, sign?: 'credit' | 'debit'): string {
-  const numeric = Number.isFinite(amount) ? amount : 0;
-  const formatted = Math.abs(numeric).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+export function formatCurrencySar(
+  amount: number,
+  sign?: 'credit' | 'debit' | 'neutral',
+  currency: CurrencyCode = 'SAR',
+  exchangeRateSarPerUsd?: number
+): string {
+  return formatCurrencyAmount(amount, currency, exchangeRateSarPerUsd, {
+    decimals: 2,
+    includeSymbol: true,
+    withGrouping: true,
+    sign: sign === 'credit' || sign === 'debit' ? sign : undefined,
   });
-  if (sign === 'credit' && numeric > 0) return `+${formatted} ر.س`;
-  if (sign === 'debit' && numeric > 0) return `-${formatted} ر.س`;
-  return `${numeric < 0 ? '-' : ''}${formatted} ر.س`;
+}
+
+export function formatPdfCurrency(
+  amount: number,
+  currency: CurrencyCode = 'SAR',
+  exchangeRateSarPerUsd?: number,
+  sign?: 'credit' | 'debit' | 'neutral'
+): string {
+  return formatCurrencySar(amount, sign, currency, exchangeRateSarPerUsd);
 }
 
 export function computeLedgerTotals(
@@ -163,7 +177,7 @@ function getCellTextColor(tone?: PdfCellTone): string {
 }
 
 export function renderBidiTextHtml(rawText: string, forceLtr = false): string {
-  const sarMatch = rawText.match(/^([+-]?[\d,]+\.\d{2})\s+(ر\.س)$/);
+  const sarMatch = rawText.match(/^([+-]?[\d,]+\.\d{2})\s+(ر\.س|\$)$/);
   if (sarMatch) {
     return `<span dir="ltr" style="display:inline-block;unicode-bidi:isolate;">${escapeHtml(sarMatch[1])}</span> <span>${escapeHtml(sarMatch[2])}</span>`;
   }

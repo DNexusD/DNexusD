@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { VoucherWarehouse } from '../../types';
 import { getCatalogsForSupplierView } from '../../utils/platformSettings';
@@ -47,7 +47,13 @@ export const VoucherWarehousesView: React.FC = () => {
     publishWarehouseAsService,
     unpublishWarehouseFromService,
     deleteVoucherWarehouse,
-    showToast
+    showToast,
+    activeCurrency,
+    activeExchangeRate,
+    currencyLabel,
+    convertFromSar,
+    convertToSar,
+    formatCurrency
   } = useApp();
 
   const supplierCatalogs = useMemo(
@@ -154,6 +160,36 @@ export const VoucherWarehousesView: React.FC = () => {
     gold: 0,
     vip: 0
   });
+  const [dirtyEditPriceTiers, setDirtyEditPriceTiers] = useState<Record<string, boolean>>({});
+  const [dirtyEditPkgPriceTiers, setDirtyEditPkgPriceTiers] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!editingWarehouse) return;
+    setEditPrices({
+      regular: Number(convertFromSar(editingWarehouse.tierPrices.regular).toFixed(2)),
+      bronze: Number(convertFromSar(editingWarehouse.tierPrices.bronze).toFixed(2)),
+      silver: Number(convertFromSar(editingWarehouse.tierPrices.silver).toFixed(2)),
+      gold: Number(convertFromSar(editingWarehouse.tierPrices.gold).toFixed(2)),
+      vip: Number(convertFromSar(editingWarehouse.tierPrices.vip).toFixed(2))
+    });
+    const pkgCount = editingWarehouse.packageCodesCount || 5;
+    const basePkg = editingWarehouse.packageTierPrices || {
+      regular: editingWarehouse.tierPrices.regular * pkgCount,
+      bronze: editingWarehouse.tierPrices.bronze * pkgCount,
+      silver: editingWarehouse.tierPrices.silver * pkgCount,
+      gold: editingWarehouse.tierPrices.gold * pkgCount,
+      vip: editingWarehouse.tierPrices.vip * pkgCount
+    };
+    setEditPackagePrices({
+      regular: Number(convertFromSar(basePkg.regular).toFixed(2)),
+      bronze: Number(convertFromSar(basePkg.bronze).toFixed(2)),
+      silver: Number(convertFromSar(basePkg.silver).toFixed(2)),
+      gold: Number(convertFromSar(basePkg.gold).toFixed(2)),
+      vip: Number(convertFromSar(basePkg.vip).toFixed(2))
+    });
+    setDirtyEditPriceTiers({});
+    setDirtyEditPkgPriceTiers({});
+  }, [activeCurrency, activeExchangeRate, editingWarehouse]);
 
   // Inline and category threshold states
   const [inlineThresholds, setInlineThresholds] = useState<Record<string, number>>({});
@@ -241,19 +277,19 @@ export const VoucherWarehousesView: React.FC = () => {
       packageCodesCount: allowPackage ? Math.max(1, Math.floor(newPackageCodesCount || 5)) : undefined,
       packageNameAr: allowPackage ? newPackageNameAr.trim() || undefined : undefined,
       tierPrices: {
-        regular: priceRegular,
-        bronze: priceBronze,
-        silver: priceSilver,
-        gold: priceGold,
-        vip: priceVip
+        regular: convertToSar(priceRegular),
+        bronze: convertToSar(priceBronze),
+        silver: convertToSar(priceSilver),
+        gold: convertToSar(priceGold),
+        vip: convertToSar(priceVip)
       },
       packageTierPrices: allowPackage
         ? {
-            regular: pkgPriceRegular,
-            bronze: pkgPriceBronze,
-            silver: pkgPriceSilver,
-            gold: pkgPriceGold,
-            vip: pkgPriceVip
+            regular: convertToSar(pkgPriceRegular),
+            bronze: convertToSar(pkgPriceBronze),
+            silver: convertToSar(pkgPriceSilver),
+            gold: convertToSar(pkgPriceGold),
+            vip: convertToSar(pkgPriceVip)
           }
         : undefined,
       publishImmediately,
@@ -271,6 +307,16 @@ export const VoucherWarehousesView: React.FC = () => {
     setNewCategory('');
     setNewDescription('');
     setNewRawCodes('');
+    setPriceRegular(0);
+    setPriceBronze(0);
+    setPriceSilver(0);
+    setPriceGold(0);
+    setPriceVip(0);
+    setPkgPriceRegular(0);
+    setPkgPriceBronze(0);
+    setPkgPriceSilver(0);
+    setPkgPriceGold(0);
+    setPkgPriceVip(0);
     setNewPackageNameAr('');
     setNewLowStockThreshold(DEFAULT_LOW_STOCK_THRESHOLD);
     setPublishNewServiceName('');
@@ -315,20 +361,32 @@ export const VoucherWarehousesView: React.FC = () => {
     const singleOn = wh.allowSingleCodePurchase === false && pkgOn ? false : wh.allowSingleCodePurchase !== false;
     setEditAllowSingle(singleOn);
     setEditAllowPackage(pkgOn);
-    setEditPackageCodesCount(wh.packageCodesCount || 5);
+    const pkgCount = wh.packageCodesCount || 5;
+    setEditPackageCodesCount(pkgCount);
     setEditPackageNameAr(wh.packageNameAr || '');
-    setEditPrices({ ...wh.tierPrices });
-    setEditPackagePrices(
-      wh.packageTierPrices
-        ? { ...wh.packageTierPrices }
-        : {
-            regular: wh.tierPrices.regular * (wh.packageCodesCount || 5),
-            bronze: wh.tierPrices.bronze * (wh.packageCodesCount || 5),
-            silver: wh.tierPrices.silver * (wh.packageCodesCount || 5),
-            gold: wh.tierPrices.gold * (wh.packageCodesCount || 5),
-            vip: wh.tierPrices.vip * (wh.packageCodesCount || 5)
-          }
-    );
+    setEditPrices({
+      regular: Number(convertFromSar(wh.tierPrices.regular).toFixed(2)),
+      bronze: Number(convertFromSar(wh.tierPrices.bronze).toFixed(2)),
+      silver: Number(convertFromSar(wh.tierPrices.silver).toFixed(2)),
+      gold: Number(convertFromSar(wh.tierPrices.gold).toFixed(2)),
+      vip: Number(convertFromSar(wh.tierPrices.vip).toFixed(2))
+    });
+    const basePkg = wh.packageTierPrices || {
+      regular: wh.tierPrices.regular * pkgCount,
+      bronze: wh.tierPrices.bronze * pkgCount,
+      silver: wh.tierPrices.silver * pkgCount,
+      gold: wh.tierPrices.gold * pkgCount,
+      vip: wh.tierPrices.vip * pkgCount
+    };
+    setEditPackagePrices({
+      regular: Number(convertFromSar(basePkg.regular).toFixed(2)),
+      bronze: Number(convertFromSar(basePkg.bronze).toFixed(2)),
+      silver: Number(convertFromSar(basePkg.silver).toFixed(2)),
+      gold: Number(convertFromSar(basePkg.gold).toFixed(2)),
+      vip: Number(convertFromSar(basePkg.vip).toFixed(2))
+    });
+    setDirtyEditPriceTiers({});
+    setDirtyEditPkgPriceTiers({});
   };
 
   const handleSaveEdit = (e: React.FormEvent) => {
@@ -342,6 +400,32 @@ export const VoucherWarehousesView: React.FC = () => {
       });
       return;
     }
+    const orig = editingWarehouse;
+    const resolvedTierPrices = {
+      regular: dirtyEditPriceTiers.regular ? convertToSar(editPrices.regular) : orig.tierPrices.regular,
+      bronze: dirtyEditPriceTiers.bronze ? convertToSar(editPrices.bronze) : orig.tierPrices.bronze,
+      silver: dirtyEditPriceTiers.silver ? convertToSar(editPrices.silver) : orig.tierPrices.silver,
+      gold: dirtyEditPriceTiers.gold ? convertToSar(editPrices.gold) : orig.tierPrices.gold,
+      vip: dirtyEditPriceTiers.vip ? convertToSar(editPrices.vip) : orig.tierPrices.vip,
+    };
+    const origPkgCount = orig.packageCodesCount || 5;
+    const origPkgPrices = orig.packageTierPrices || {
+      regular: orig.tierPrices.regular * origPkgCount,
+      bronze: orig.tierPrices.bronze * origPkgCount,
+      silver: orig.tierPrices.silver * origPkgCount,
+      gold: orig.tierPrices.gold * origPkgCount,
+      vip: orig.tierPrices.vip * origPkgCount,
+    };
+    const resolvedPkgPrices = editAllowPackage
+      ? {
+          regular: dirtyEditPkgPriceTiers.regular ? convertToSar(editPackagePrices.regular) : origPkgPrices.regular,
+          bronze: dirtyEditPkgPriceTiers.bronze ? convertToSar(editPackagePrices.bronze) : origPkgPrices.bronze,
+          silver: dirtyEditPkgPriceTiers.silver ? convertToSar(editPackagePrices.silver) : origPkgPrices.silver,
+          gold: dirtyEditPkgPriceTiers.gold ? convertToSar(editPackagePrices.gold) : origPkgPrices.gold,
+          vip: dirtyEditPkgPriceTiers.vip ? convertToSar(editPackagePrices.vip) : origPkgPrices.vip,
+        }
+      : undefined;
+
     updateVoucherWarehouse(editingWarehouse.id, {
       nameAr: editName.trim(),
       categoryName: editCategory.trim(),
@@ -350,8 +434,8 @@ export const VoucherWarehousesView: React.FC = () => {
       allowPackagePurchase: editAllowPackage,
       packageCodesCount: editAllowPackage ? Math.max(1, Math.floor(editPackageCodesCount || 5)) : undefined,
       packageNameAr: editAllowPackage ? (editPackageNameAr.trim() || undefined) : undefined,
-      tierPrices: editPrices,
-      packageTierPrices: editAllowPackage ? editPackagePrices : undefined
+      tierPrices: resolvedTierPrices,
+      packageTierPrices: resolvedPkgPrices
     });
     setEditingWarehouse(null);
   };
@@ -623,7 +707,7 @@ export const VoucherWarehousesView: React.FC = () => {
             {allowSingleCode && (
               <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 space-y-2">
                 <span className="block text-[11px] font-bold text-amber-300">
-                  أسعار الكود الواحد حسب رتب العملاء (ر.س):
+                  أسعار الكود الواحد حسب رتب العملاء ({currencyLabel}):
                 </span>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
                   <div>
@@ -715,7 +799,7 @@ export const VoucherWarehousesView: React.FC = () => {
                 </div>
 
                 <span className="block text-[11px] font-bold text-cyan-300">
-                  أسعار الباقة ({newPackageCodesCount} أكواد) حسب رتب العملاء (ر.س):
+                  أسعار الباقة ({newPackageCodesCount} أكواد) حسب رتب العملاء ({currencyLabel}):
                 </span>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
                   <div>
@@ -1322,27 +1406,27 @@ export const VoucherWarehousesView: React.FC = () => {
                 <div className="space-y-2">
                   {(wh.allowSingleCodePurchase !== false || !wh.allowPackagePurchase) && (
                     <div className="p-2 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1">
-                      <div className="text-[10px] font-bold text-amber-400">أسعار الكود الواحد (ر.س):</div>
+                      <div className="text-[10px] font-bold text-amber-400">أسعار الكود الواحد ({currencyLabel}):</div>
                       <div className="grid grid-cols-5 gap-1.5 text-center text-[10px]">
                         <div>
                           <span className="text-slate-500 block">عادي</span>
-                          <span className="font-mono font-bold text-white">{wh.tierPrices.regular}</span>
+                          <span className="font-mono font-bold text-white">{formatCurrency(wh.tierPrices.regular, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-amber-500 block">نحاسي</span>
-                          <span className="font-mono font-bold text-amber-400">{wh.tierPrices.bronze}</span>
+                          <span className="font-mono font-bold text-amber-400">{formatCurrency(wh.tierPrices.bronze, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-slate-300 block">فضي</span>
-                          <span className="font-mono font-bold text-slate-200">{wh.tierPrices.silver}</span>
+                          <span className="font-mono font-bold text-slate-200">{formatCurrency(wh.tierPrices.silver, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-yellow-400 block">ذهبي</span>
-                          <span className="font-mono font-bold text-yellow-300">{wh.tierPrices.gold}</span>
+                          <span className="font-mono font-bold text-yellow-300">{formatCurrency(wh.tierPrices.gold, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-purple-400 block">VIP</span>
-                          <span className="font-mono font-bold text-purple-300">{wh.tierPrices.vip}</span>
+                          <span className="font-mono font-bold text-purple-300">{formatCurrency(wh.tierPrices.vip, { includeSymbol: false })}</span>
                         </div>
                       </div>
                     </div>
@@ -1351,28 +1435,28 @@ export const VoucherWarehousesView: React.FC = () => {
                   {wh.allowPackagePurchase && wh.packageTierPrices && (
                     <div className="p-2 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-1">
                       <div className="text-[10px] font-bold text-cyan-300">
-                        أسعار {wh.packageNameAr?.trim() || `الباقة (${wh.packageCodesCount || 5} أكواد)`} (ر.س):
+                        أسعار {wh.packageNameAr?.trim() || `الباقة (${wh.packageCodesCount || 5} أكواد)`} ({currencyLabel}):
                       </div>
                       <div className="grid grid-cols-5 gap-1.5 text-center text-[10px]">
                         <div>
                           <span className="text-slate-500 block">عادي</span>
-                          <span className="font-mono font-bold text-white">{wh.packageTierPrices.regular}</span>
+                          <span className="font-mono font-bold text-white">{formatCurrency(wh.packageTierPrices.regular, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-amber-500 block">نحاسي</span>
-                          <span className="font-mono font-bold text-amber-400">{wh.packageTierPrices.bronze}</span>
+                          <span className="font-mono font-bold text-amber-400">{formatCurrency(wh.packageTierPrices.bronze, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-slate-300 block">فضي</span>
-                          <span className="font-mono font-bold text-slate-200">{wh.packageTierPrices.silver}</span>
+                          <span className="font-mono font-bold text-slate-200">{formatCurrency(wh.packageTierPrices.silver, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-yellow-400 block">ذهبي</span>
-                          <span className="font-mono font-bold text-yellow-300">{wh.packageTierPrices.gold}</span>
+                          <span className="font-mono font-bold text-yellow-300">{formatCurrency(wh.packageTierPrices.gold, { includeSymbol: false })}</span>
                         </div>
                         <div>
                           <span className="text-purple-400 block">VIP</span>
-                          <span className="font-mono font-bold text-purple-300">{wh.packageTierPrices.vip}</span>
+                          <span className="font-mono font-bold text-purple-300">{formatCurrency(wh.packageTierPrices.vip, { includeSymbol: false })}</span>
                         </div>
                       </div>
                     </div>
@@ -1721,7 +1805,7 @@ export const VoucherWarehousesView: React.FC = () => {
               {editAllowSingle && (
                 <div className="space-y-1.5">
                   <span className="block text-[11px] font-bold text-amber-300">
-                    أسعار الكود الواحد (ر.س):
+                    أسعار الكود الواحد ({currencyLabel}):
                   </span>
                   <div className="grid grid-cols-5 gap-2 text-center">
                     {(['regular', 'bronze', 'silver', 'gold', 'vip'] as const).map((tierKey) => (
@@ -1742,12 +1826,13 @@ export const VoucherWarehousesView: React.FC = () => {
                           min={0}
                           step="any"
                           value={editPrices[tierKey]}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            setDirtyEditPriceTiers((prev) => ({ ...prev, [tierKey]: true }));
                             setEditPrices((prev) => ({
                               ...prev,
                               [tierKey]: Math.max(0, Number(e.target.value))
-                            }))
-                          }
+                            }));
+                          }}
                           className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-white text-xs"
                         />
                       </div>
@@ -1786,7 +1871,7 @@ export const VoucherWarehousesView: React.FC = () => {
                   </div>
 
                   <span className="block text-[11px] font-bold text-cyan-300">
-                    أسعار الباقة ({editPackageCodesCount} أكواد) (ر.س):
+                    أسعار الباقة ({editPackageCodesCount} أكواد) ({currencyLabel}):
                   </span>
                   <div className="grid grid-cols-5 gap-2 text-center">
                     {(['regular', 'bronze', 'silver', 'gold', 'vip'] as const).map((tierKey) => (
@@ -1807,12 +1892,13 @@ export const VoucherWarehousesView: React.FC = () => {
                           min={0}
                           step="any"
                           value={editPackagePrices[tierKey]}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            setDirtyEditPkgPriceTiers((prev) => ({ ...prev, [tierKey]: true }));
                             setEditPackagePrices((prev) => ({
                               ...prev,
                               [tierKey]: Math.max(0, Number(e.target.value))
-                            }))
-                          }
+                            }));
+                          }}
                           className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1.5 text-center font-mono font-bold text-cyan-300 text-xs"
                         />
                       </div>

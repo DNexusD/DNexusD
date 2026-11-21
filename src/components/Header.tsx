@@ -23,7 +23,8 @@ import {
   Trash2,
   Clock,
   HandCoins,
-  CreditCard
+  CreditCard,
+  Coins
 } from 'lucide-react';
 import { TIERS_CONFIG } from '../types';
 import { resolveEffectiveAdminPermissions } from '../utils/adminAccounts';
@@ -57,7 +58,11 @@ export const Header: React.FC = () => {
     markAllNotificationsAsRead,
     clearAllNotifications,
     markAllSupplierNotificationsAsRead,
-    clearSupplierNotifications
+    clearSupplierNotifications,
+    activeCurrency,
+    activeExchangeRate,
+    setActiveCurrency,
+    formatCurrency
   } = useApp();
 
   const [showNotificationsPopover, setShowNotificationsPopover] = useState(false);
@@ -400,7 +405,7 @@ export const Header: React.FC = () => {
               {role === 'supplier' && (
                 <>
                   <span className="text-slate-400 hidden sm:inline">·</span>
-                  <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</strong></span>
+                  <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{formatCurrency(supplier.walletBalance, { withGrouping: true })}</strong></span>
                 </>
               )}
             </div>
@@ -422,7 +427,7 @@ export const Header: React.FC = () => {
                     <span>
                       محفظة رسوم المنصة:{' '}
                       <strong className="text-emerald-400 font-mono tabular-nums">
-                        {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                        {formatCurrency(superAdmin.walletBalance, { withGrouping: true })}
                       </strong>
                     </span>
                   </>
@@ -436,7 +441,44 @@ export const Header: React.FC = () => {
             );
           })()}
 
-          <div className="flex items-center gap-2 mr-auto text-slate-400">
+          <div className="flex flex-wrap items-center gap-2 mr-auto text-slate-300">
+            <div className="flex items-center gap-1.5 bg-slate-950/90 border border-slate-700/80 rounded-xl p-1">
+              <span className="text-[11px] text-slate-400 flex items-center gap-1 px-1.5">
+                <Coins className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">العملة:</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setActiveCurrency('SAR')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeCurrency === 'SAR'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/70'
+                }`}
+              >
+                ر.س سعودي
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCurrency('USD')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeCurrency === 'USD'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/70'
+                }`}
+              >
+                $ دولار
+              </button>
+            </div>
+            {activeCurrency === 'USD' && (
+              <span
+                className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-[11px] font-mono"
+                dir="ltr"
+                title="سعر الصرف المعتمد من التاجر"
+              >
+                1$ = {activeExchangeRate} ر.س
+              </span>
+            )}
           </div>
         </div>
       </div>

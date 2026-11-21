@@ -1,4 +1,5 @@
-import { DeliveryMethod, WarehousePurchaseUnit } from '../types';
+import { CurrencyCode, DeliveryMethod, WarehousePurchaseUnit } from '../types';
+import { formatCurrencyAmount } from './currency';
 
 export interface AvailabilityCheckResult {
   available: boolean;
@@ -22,6 +23,8 @@ export function getBalanceRequestAvailability(params: {
   requireBankAccount?: boolean;
   bankAccountsCount?: number;
   hasSupplier?: boolean;
+  currency?: CurrencyCode;
+  exchangeRateSarPerUsd?: number;
 }): AvailabilityCheckResult {
   const {
     walletBalance,
@@ -31,6 +34,8 @@ export function getBalanceRequestAvailability(params: {
     requireBankAccount = false,
     bankAccountsCount = 0,
     hasSupplier = true,
+    currency = 'SAR',
+    exchangeRateSarPerUsd,
   } = params;
 
   if (!hasSupplier) {
@@ -59,7 +64,7 @@ export function getBalanceRequestAvailability(params: {
       available: false,
       reason: 'empty_balance',
       title: 'عدم توفر الرصيد المطلوب',
-      message: `لا يتوفر رصيد في ${walletLabel} حالياً (0.00 ر.س). تعذر تنفيذ ${requestLabel}، يرجى شحن الرصيد أولاً.`,
+      message: `لا يتوفر رصيد في ${walletLabel} حالياً (${formatCurrencyAmount(0, currency, exchangeRateSarPerUsd)}). تعذر تنفيذ ${requestLabel}، يرجى شحن الرصيد أولاً.`,
     };
   }
 
@@ -68,7 +73,7 @@ export function getBalanceRequestAvailability(params: {
       available: false,
       reason: 'insufficient_balance',
       title: 'عدم توفر الرصيد المطلوب',
-      message: `لا يتوفر الرصيد الكافي في ${walletLabel} لتنفيذ ${requestLabel}! المطلوب ${safeRequired.toFixed(2)} ر.س، والمتاح حالياً ${safeBalance.toFixed(2)} ر.س.`,
+      message: `لا يتوفر الرصيد الكافي في ${walletLabel} لتنفيذ ${requestLabel}! المطلوب ${formatCurrencyAmount(safeRequired, currency, exchangeRateSarPerUsd)}، والمتاح حالياً ${formatCurrencyAmount(safeBalance, currency, exchangeRateSarPerUsd)}.`,
     };
   }
 
@@ -90,6 +95,8 @@ export function getServiceOrCodeAvailability(params: {
   walletBalance: number;
   totalAmount: number;
   isFreeGiftApplied?: boolean;
+  currency?: CurrencyCode;
+  exchangeRateSarPerUsd?: number;
 }): AvailabilityCheckResult {
   const {
     hasPackages,
@@ -102,6 +109,8 @@ export function getServiceOrCodeAvailability(params: {
     walletBalance,
     totalAmount,
     isFreeGiftApplied = false,
+    currency = 'SAR',
+    exchangeRateSarPerUsd,
   } = params;
 
   if (!hasPackages) {
@@ -152,7 +161,7 @@ export function getServiceOrCodeAvailability(params: {
         available: false,
         reason: 'empty_balance',
         title: 'عدم توفر الرصيد المطلوب',
-        message: `لا يتوفر رصيد في محفظتك حالياً (0.00 ر.س) لطلب ${requestedItemLabel} بقيمة ${safeTotal.toFixed(2)} ر.س. يرجى شحن المحفظة أو اختيار الدفع بالبطاقة.`,
+        message: `لا يتوفر رصيد في محفظتك حالياً (${formatCurrencyAmount(0, currency, exchangeRateSarPerUsd)}) لطلب ${requestedItemLabel} بقيمة ${formatCurrencyAmount(safeTotal, currency, exchangeRateSarPerUsd)}. يرجى شحن المحفظة أو اختيار الدفع بالبطاقة.`,
       };
     }
 
@@ -160,7 +169,7 @@ export function getServiceOrCodeAvailability(params: {
       available: false,
       reason: 'insufficient_balance',
       title: 'عدم توفر الرصيد المطلوب',
-      message: `لا يتوفر الرصيد الكافي في محفظتك لطلب ${requestedItemLabel}! المطلوب ${safeTotal.toFixed(2)} ر.س، والمتاح حالياً ${safeBalance.toFixed(2)} ر.س. يرجى شحن المحفظة أو الدفع بالبطاقة.`,
+      message: `لا يتوفر الرصيد الكافي في محفظتك لطلب ${requestedItemLabel}! المطلوب ${formatCurrencyAmount(safeTotal, currency, exchangeRateSarPerUsd)}، والمتاح حالياً ${formatCurrencyAmount(safeBalance, currency, exchangeRateSarPerUsd)}. يرجى شحن المحفظة أو الدفع بالبطاقة.`,
     };
   }
 

@@ -24,6 +24,7 @@ import {
   FileDown
 } from 'lucide-react';
 import {
+  ZERO_PRICE_CLIENT_FLOOR_SAR,
   calculateServicePurchasePricing,
   evaluateClientGiftServiceStatus,
   formatGiftRemainingTimeAr,
@@ -51,7 +52,7 @@ interface PurchaseModalProps {
 }
 
 export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }) => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, voucherWarehouses, supplier, platformSettings, executePurchase, showToast } = useApp();
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, voucherWarehouses, supplier, platformSettings, executePurchase, showToast, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency, convertToSar } = useApp();
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 15000);
@@ -184,6 +185,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     walletBalance: currentPos.walletBalance,
     totalAmount,
     isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+    currency: activeCurrency,
+    exchangeRateSarPerUsd: activeExchangeRate,
   });
 
   // Handle Verify Player ID
@@ -265,6 +268,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         walletBalance: currentPos.walletBalance,
         totalAmount,
         isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+        currency: activeCurrency,
+        exchangeRateSarPerUsd: activeExchangeRate,
       });
       showToast({
         type: 'error',
@@ -286,6 +291,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         walletBalance: currentPos.walletBalance,
         totalAmount,
         isFreeGiftApplied: selectedPricing.isFreeGiftApplied,
+        currency: activeCurrency,
+        exchangeRateSarPerUsd: activeExchangeRate,
       });
       showToast({
         type: 'error',
@@ -321,7 +328,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         paymentMethod,
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
-        resalePrice: resalePrice ? Number(resalePrice) : undefined
+        resalePrice: resalePrice ? convertToSar(Number(resalePrice)) : undefined
       });
 
       setOrderProcessing(false);
@@ -381,6 +388,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         feeAmount: 0,
         totalAmount: clientDisplayedTotal,
         paymentMethod,
+        currency: activeCurrency,
+        exchangeRateSarPerUsd: activeExchangeRate,
         customerName: customerName.trim() || undefined,
         customerPhone: customerPhone.trim() || undefined,
         supplier: {
@@ -731,10 +740,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <span className="font-mono tabular-nums">
                     {selectedPricing.isFreeGiftApplied ? (
                       <span className="text-purple-300 font-bold">
-                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                        {formatCurrency(0)} <span className="text-emerald-400 font-sans">(مجاني)</span>
                       </span>
                     ) : (
-                      `${clientDisplayedTotal.toFixed(2)} ر.س`
+                      formatCurrency(clientDisplayedTotal)
                     )}
                   </span>
                 </div>
@@ -885,7 +894,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       !isVoucherDelivery || pkgOpts.allowSingleCode || !packagePricing
                         ? singlePricing
                         : packagePricing;
-                    const pkgTotalWithFee = (displayPricing.isFreeGiftApplied ? 0 : displayPricing.totalAmount).toFixed(2);
+                    const pkgTotalWithFee = formatCurrency(displayPricing.isFreeGiftApplied ? 0 : displayPricing.totalAmount, { includeSymbol: false });
                     const savings = Math.max(0, displayPricing.originalTierPrice - displayPricing.unitPrice);
 
                     return (
@@ -950,11 +959,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             )}
                             {displayPricing.isFreeGiftApplied ? (
                               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                                🎁 هدية مجانية · 0.00 ر.س
+                                🎁 هدية مجانية · {formatCurrency(0)}
                               </span>
                             ) : displayPricing.isZeroPriceFloorApplied ? (
                               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                قيمة دنيا 0.50 ر.س
+                                قيمة دنيا {formatCurrency(ZERO_PRICE_CLIENT_FLOOR_SAR)}
                               </span>
                             ) : null}
                           </div>
@@ -963,11 +972,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           )}
                           {displayPricing.isFreeGiftApplied ? (
                             <div className="text-[10px] text-purple-300/90 flex items-center gap-2 pt-0.5 flex-wrap">
-                              <span>السعر الأصلي لرتبتك: {displayPricing.originalTierPrice.toFixed(2)} ر.س</span>
+                              <span>السعر الأصلي لرتبتك: {formatCurrency(displayPricing.originalTierPrice)}</span>
                               <span>·</span>
-                              <span>السعر: <strong className="text-purple-200 font-bold font-mono">0.00 ر.س</strong> <strong className="text-emerald-400 font-bold">(مجاني)</strong></span>
+                              <span>السعر: <strong className="text-purple-200 font-bold font-mono">{formatCurrency(0)}</strong> <strong className="text-emerald-400 font-bold">(مجاني)</strong></span>
                               {savings > 0 && (
-                                <span className="text-emerald-400 font-semibold">(توفير {savings.toFixed(2)} ر.س)</span>
+                                <span className="text-emerald-400 font-semibold">(توفير {formatCurrency(savings)})</span>
                               )}
                             </div>
                           ) : (
@@ -983,27 +992,27 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           {(!isVoucherDelivery || pkgOpts.allowSingleCode) && (
                             <div className={`text-sm font-bold font-mono ${singlePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                               {singlePricing.isFreeGiftApplied ? (
-                                <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">{isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
+                                <span>{formatCurrency(0)} <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">{isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></span>
                               ) : (
-                                <>{singlePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س {isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></>
+                                <>{formatCurrency(singlePricing.totalAmount, { includeSymbol: false })} <span className="text-[10px] font-normal">{currencyLabel} {isVoucherDelivery && pkgOpts.allowPackage ? '/ كود' : ''}</span></>
                               )}
                             </div>
                           )}
                           {isVoucherDelivery && pkgOpts.allowPackage && packagePricing && (
                             <div className={`text-xs font-bold font-mono ${pkgOpts.allowSingleCode ? (packagePricing.isFreeGiftApplied ? 'text-purple-300' : 'text-cyan-300') : 'text-base text-amber-400'}`}>
                               {packagePricing.isFreeGiftApplied ? (
-                                <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
+                                <span>{formatCurrency(0)} <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span> <span className="text-[10px] font-normal text-slate-400">/ باقة ({pkgOpts.packageCodesCount})</span></span>
                               ) : (
-                                <>{packagePricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س / باقة ({pkgOpts.packageCodesCount})</span></>
+                                <>{formatCurrency(packagePricing.totalAmount, { includeSymbol: false })} <span className="text-[10px] font-normal">{currencyLabel} / باقة ({pkgOpts.packageCodesCount})</span></>
                               )}
                             </div>
                           )}
                           {isVoucherDelivery && !pkgOpts.allowSingleCode && !pkgOpts.allowPackage && (
                             <div className={`text-base font-bold font-mono ${displayPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                               {displayPricing.isFreeGiftApplied ? (
-                                <span>0.00 ر.س <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>
+                                <span>{formatCurrency(0)} <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>
                               ) : (
-                                <>{pkgTotalWithFee} <span className="text-xs font-normal">ر.س</span></>
+                                <>{pkgTotalWithFee} <span className="text-xs font-normal">{currencyLabel}</span></>
                               )}
                             </div>
                           )}
@@ -1074,9 +1083,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           </div>
                           <div className={`font-mono font-bold text-sm shrink-0 ${singleOptPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                             {singleOptPricing.isFreeGiftApplied ? (
-                              <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
+                              <span>{formatCurrency(0)} <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
                             ) : (
-                              <>{singleOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
+                              <>{formatCurrency(singleOptPricing.totalAmount, { includeSymbol: false })} <span className="text-[10px] font-normal">{currencyLabel}</span></>
                             )}
                           </div>
                         </button>
@@ -1107,9 +1116,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                           </div>
                           <div className={`font-mono font-bold text-sm shrink-0 ${packageOptPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-cyan-300'}`}>
                             {packageOptPricing.isFreeGiftApplied ? (
-                              <span>0.00 ر.س <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
+                              <span>{formatCurrency(0)} <span className="text-[10px] font-sans text-emerald-400">(مجاني)</span></span>
                             ) : (
-                              <>{packageOptPricing.totalAmount.toFixed(2)} <span className="text-[10px] font-normal">ر.س</span></>
+                              <>{formatCurrency(packageOptPricing.totalAmount, { includeSymbol: false })} <span className="text-[10px] font-normal">{currencyLabel}</span></>
                             )}
                           </div>
                       </button>
@@ -1293,12 +1302,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
                 {platformSettings.showResaleMarginInPosPurchase && (
                   <div>
-                    <label className="block text-[11px] text-slate-400 mb-1">سعر البيع للزبون (لحساب ربحك):</label>
+                    <label className="block text-[11px] text-slate-400 mb-1">سعر البيع للزبون ({currencyLabel}) (لحساب ربحك):</label>
                     <input
                       type="number"
+                      step="any"
                       value={resalePrice}
                       onChange={e => setResalePrice(e.target.value ? Number(e.target.value) : '')}
-                      placeholder={`مثال: ${Math.max(1, clientDisplayedTotal * 1.2).toFixed(0)} ر.س`}
+                      placeholder={`مثال: ${formatCurrency(Math.max(1, clientDisplayedTotal * 1.2))}`}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-500"
                     />
                   </div>
@@ -1327,7 +1337,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                             : `تم استخدام ${giftStatus.usedCount} من أصل ${giftStatus.maxUses} ${giftStatus.maxUses === 1 ? 'مرة مسموحة' : 'مرات مسموحة'}.`
                           : (
                             <>
-                              يتم تنفيذ الشحن والتسليم مباشرة بسعر 0.00 ر.س · متاح لك {giftStatus.remainingUses} من {giftStatus.maxUses} {giftStatus.maxUses === 1 ? 'مرة' : 'مرات'}
+                              يتم تنفيذ الشحن والتسليم مباشرة بسعر {formatCurrency(0)} · متاح لك {giftStatus.remainingUses} من {giftStatus.maxUses} {giftStatus.maxUses === 1 ? 'مرة' : 'مرات'}
                               {giftStatus.remainingMs !== null ? ` · تنتهي خلال ${formatGiftRemainingTimeAr(giftStatus.remainingMs)}` : ''}
                             </>
                           )}
@@ -1335,7 +1345,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                     </div>
                   </div>
                   <span className={`font-mono font-bold text-sm shrink-0 ${isGiftBlocked ? 'text-rose-200' : 'text-purple-200'}`}>
-                    0.00 ر.س
+                    {formatCurrency(0)}
                   </span>
                 </div>
               ) : (
@@ -1360,7 +1370,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       <div>
                         <div className="text-xs font-bold text-white">عبر محفظتي</div>
                         <div className="text-[10px] text-slate-400 font-mono">
-                          المتاح: {currentPos.walletBalance.toFixed(2)} ر.س
+                          المتاح: {formatCurrency(currentPos.walletBalance)}
                         </div>
                       </div>
                     </div>
@@ -1439,12 +1449,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                         <span>السعر:</span>
                       </span>
                       <span className="font-bold font-mono text-purple-200">
-                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                        {formatCurrency(0)} <span className="text-emerald-400 font-sans">(مجاني)</span>
                       </span>
                     </div>
                     <div className="flex justify-between text-slate-400 text-[11px]">
                       <span>السعر الأصلي لرتبة ({currentTierInfo.nameAr}):</span>
-                      <span className="font-mono line-through">{selectedPricing.originalTierPrice.toFixed(2)} ر.س</span>
+                      <span className="font-mono line-through">{formatCurrency(selectedPricing.originalTierPrice)}</span>
                     </div>
                   </>
                 )}
@@ -1452,11 +1462,11 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <>
                     <div className="flex justify-between text-slate-400 text-[11px]">
                       <span>قيمة العملية المسجلة من المتجر:</span>
-                      <span className="font-mono">0.00 ر.س</span>
+                      <span className="font-mono">{formatCurrency(0)}</span>
                     </div>
                     <div className="flex justify-between text-amber-300 text-[11px]">
                       <span>القيمة المعتمدة للعميل (حد أدنى للعمليات الصفرية):</span>
-                      <span className="font-mono font-bold">0.50 ر.س</span>
+                      <span className="font-mono font-bold">{formatCurrency(ZERO_PRICE_CLIENT_FLOOR_SAR)}</span>
                     </div>
                   </>
                 )}
@@ -1465,10 +1475,10 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                   <span className={`font-mono tabular-nums ${selectedPricing.isFreeGiftApplied ? 'text-purple-300' : 'text-amber-400'}`}>
                     {selectedPricing.isFreeGiftApplied ? (
                       <span className="text-purple-300 font-bold">
-                        0.00 ر.س <span className="text-emerald-400 font-sans">(مجاني)</span>
+                        {formatCurrency(0)} <span className="text-emerald-400 font-sans">(مجاني)</span>
                       </span>
                     ) : (
-                      `${clientDisplayedTotal.toFixed(2)} ر.س`
+                      formatCurrency(clientDisplayedTotal)
                     )}
                   </span>
                 </div>
@@ -1522,8 +1532,8 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                     : !serviceAvailability.available
                     ? 'عدم توفر الرصيد الكافي في المحفظة'
                     : selectedPricing.isFreeGiftApplied
-                    ? 'شحن وشراء فوري (0.00 ر.س - مجاني)'
-                    : `تأكيد دفع ${clientDisplayedTotal.toFixed(2)} ر.س وشحن فوري`}
+                    ? `شحن وشراء فوري (${formatCurrency(0)} - مجاني)`
+                    : `تأكيد دفع ${formatCurrency(clientDisplayedTotal)} وشحن فوري`}
                 </span>
               </button>
             </>

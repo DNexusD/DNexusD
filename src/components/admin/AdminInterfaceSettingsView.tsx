@@ -53,6 +53,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
     updateDropdownOption,
     deleteDropdownOption,
     showToast,
+    formatCurrency,
   } = useApp();
 
   // Fixed Catalog Create Form
@@ -257,7 +258,7 @@ export const AdminInterfaceSettingsView: React.FC = () => {
                 className="rounded border-slate-600 bg-slate-900 text-purple-500 focus:ring-purple-500"
               />
               <Gift className="w-3.5 h-3.5 text-purple-400" />
-              <span>تعيين ككتالوج هدايا مجانية ثابت (سعر 0 ر.س + نسبة رسوم الإدارة)</span>
+              <span>تعيين ككتالوج هدايا مجانية ثابت (سعر {formatCurrency(0)} + نسبة رسوم الإدارة)</span>
             </label>
 
             <button

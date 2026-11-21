@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { DigitalService, DeliveryMethod, ServicePackage, AccountTier, TIERS_CONFIG } from '../../types';
 import { isCatalogFreeGifts, computeGiftExpiresAt, GiftDurationUnit, formatGiftRemainingTimeAr } from '../../utils/pricing';
@@ -36,7 +36,7 @@ interface EditServiceModalProps {
 }
 
 export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onClose }) => {
-  const { role, currentUser, catalogs, supplier, posClients, voucherWarehouses, updateService, deleteService, showToast } = useApp();
+  const { role, currentUser, catalogs, supplier, posClients, voucherWarehouses, updateService, deleteService, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertFromSar, convertToSar, formatCurrency } = useApp();
   const perms = resolveEffectiveEmployeePermissions(currentUser, role, supplier);
   const canEditDetails = role !== 'employee' || perms.canAddServices;
   const canEditPrices = role !== 'employee' || perms.canEditServicePrices;
@@ -111,15 +111,20 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const activeMethodIsVoucher = activePackageMethod === 'voucher_code';
   const allActivePackages = deliveryMethods.flatMap(m => packagesByMethod[m] || []);
 
-  // New package inline addition state
+  // New package inline addition state (values entered in activeCurrency)
   const [showAddPackageForm, setShowAddPackageForm] = useState(false);
   const [newPkgName, setNewPkgName] = useState('');
-  const [newPriceRegular, setNewPriceRegular] = useState<number>(0);
-  const [newPriceBronze, setNewPriceBronze] = useState<number>(0);
-  const [newPriceSilver, setNewPriceSilver] = useState<number>(0);
-  const [newPriceGold, setNewPriceGold] = useState<number>(0);
-  const [newPriceVip, setNewPriceVip] = useState<number>(0);
+  const [newPriceRegular, setNewPriceRegular] = useState<string>('0');
+  const [newPriceBronze, setNewPriceBronze] = useState<string>('0');
+  const [newPriceSilver, setNewPriceSilver] = useState<string>('0');
+  const [newPriceGold, setNewPriceGold] = useState<string>('0');
+  const [newPriceVip, setNewPriceVip] = useState<string>('0');
   const [newVouchersInput, setNewVouchersInput] = useState('');
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setPriceDrafts({});
+  }, [activeCurrency, activeExchangeRate, service.id]);
 
   // Delete service confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -277,8 +282,10 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال اسم الباقة الجديدة' });
       return;
     }
-    const parsePrice = (val: number, fallback: number) =>
-      typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
+    const parsePriceSar = (raw: string) => {
+      const val = Number(raw);
+      return Number.isFinite(val) && val >= 0 ? convertToSar(val) : 0;
+    };
 
     const vouchers = activeMethodIsVoucher
       ? newVouchersInput
@@ -293,11 +300,11 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       description: '',
       deliveryMethod: activePackageMethod,
       tierPrices: {
-        regular: parsePrice(newPriceRegular, 0),
-        bronze: parsePrice(newPriceBronze, 0),
-        silver: parsePrice(newPriceSilver, 0),
-        gold: parsePrice(newPriceGold, 0),
-        vip: parsePrice(newPriceVip, 0),
+        regular: parsePriceSar(newPriceRegular),
+        bronze: parsePriceSar(newPriceBronze),
+        silver: parsePriceSar(newPriceSilver),
+        gold: parsePriceSar(newPriceGold),
+        vip: parsePriceSar(newPriceVip),
       },
       ...(activeMethodIsVoucher
         ? {
@@ -311,11 +318,11 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
       [activePackageMethod]: [...(prev[activePackageMethod] || []), newPkg],
     }));
     setNewPkgName('');
-    setNewPriceRegular(0);
-    setNewPriceBronze(0);
-    setNewPriceSilver(0);
-    setNewPriceGold(0);
-    setNewPriceVip(0);
+    setNewPriceRegular('0');
+    setNewPriceBronze('0');
+    setNewPriceSilver('0');
+    setNewPriceGold('0');
+    setNewPriceVip('0');
     setNewVouchersInput('');
     setShowAddPackageForm(false);
     showToast({
@@ -760,62 +767,62 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
 
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <div>
-                    <span className="block text-[10px] text-slate-400 mb-0.5">عادي (الأساسي)</span>
+                    <span className="block text-[10px] text-slate-400 mb-0.5">عادي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       disabled={!canEditPrices}
                       value={newPriceRegular}
-                      onChange={e => setNewPriceRegular(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceRegular(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-1 text-xs text-center text-white disabled:opacity-50"
                     />
                   </div>
                   <div>
-                    <span className="block text-[10px] text-amber-400 mb-0.5">نحاسي</span>
+                    <span className="block text-[10px] text-amber-400 mb-0.5">نحاسي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       disabled={!canEditPrices}
                       value={newPriceBronze}
-                      onChange={e => setNewPriceBronze(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceBronze(e.target.value)}
                       className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-2 py-1 text-xs text-center text-amber-300 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
-                    <span className="block text-[10px] text-slate-200 mb-0.5">فضي</span>
+                    <span className="block text-[10px] text-slate-200 mb-0.5">فضي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       disabled={!canEditPrices}
                       value={newPriceSilver}
-                      onChange={e => setNewPriceSilver(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceSilver(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-400/40 rounded-xl px-2 py-1 text-xs text-center text-slate-200 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
-                    <span className="block text-[10px] text-yellow-400 mb-0.5">ذهبي</span>
+                    <span className="block text-[10px] text-yellow-400 mb-0.5">ذهبي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       disabled={!canEditPrices}
                       value={newPriceGold}
-                      onChange={e => setNewPriceGold(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceGold(e.target.value)}
                       className="w-full bg-slate-950 border border-yellow-500/40 rounded-xl px-2 py-1 text-xs text-center text-yellow-300 font-bold disabled:opacity-50"
                     />
                   </div>
                   <div>
-                    <span className="block text-[10px] text-purple-400 mb-0.5 font-bold">مميز VIP</span>
+                    <span className="block text-[10px] text-purple-400 mb-0.5 font-bold">مميز VIP ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       disabled={!canEditPrices}
                       value={newPriceVip}
-                      onChange={e => setNewPriceVip(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceVip(e.target.value)}
                       className="w-full bg-slate-950 border border-purple-500/40 rounded-xl px-2 py-1 text-xs text-center text-purple-300 font-bold disabled:opacity-50"
                     />
                   </div>
@@ -890,80 +897,49 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
 
                   {/* 5-tier price inputs */}
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
-                    <div>
-                      <span className="block text-[10px] text-slate-400 mb-0.5">عادي (الأساسي)</span>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          disabled={!canEditPrices}
-                          value={pkg.tierPrices?.regular ?? 0}
-                          onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2 py-1 text-center font-mono text-white text-xs disabled:opacity-50"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="block text-[10px] text-amber-400 mb-0.5">نحاسي</span>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          disabled={!canEditPrices}
-                          value={pkg.tierPrices?.bronze ?? 0}
-                          onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-2 py-1 text-center font-mono text-amber-300 font-bold text-xs disabled:opacity-50"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="block text-[10px] text-slate-200 mb-0.5">فضي</span>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          disabled={!canEditPrices}
-                          value={pkg.tierPrices?.silver ?? 0}
-                          onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-slate-400/40 rounded-xl px-2 py-1 text-center font-mono text-slate-200 font-bold text-xs disabled:opacity-50"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="block text-[10px] text-yellow-400 mb-0.5">ذهبي</span>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          disabled={!canEditPrices}
-                          value={pkg.tierPrices?.gold ?? 0}
-                          onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
-                          className="w-full bg-slate-900 border border-yellow-500/40 rounded-xl px-2 py-1 text-center font-mono text-yellow-300 font-bold text-xs disabled:opacity-50"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="block text-[10px] text-purple-400 mb-0.5 font-bold">مميز VIP</span>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          disabled={!canEditPrices}
-                          value={pkg.tierPrices?.vip ?? 0}
-                          onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
-                          className="w-full bg-purple-950/40 border border-purple-500/50 rounded-xl px-2 py-1 text-center font-mono text-purple-300 font-bold text-xs disabled:opacity-50"
-                        />
-                      </div>
-                    </div>
+                    {([
+                      { tier: 'regular' as const, label: `عادي (${currencyLabel})`, lblCls: 'text-slate-400', inputCls: 'bg-slate-900 border-slate-700 text-white' },
+                      { tier: 'bronze' as const, label: `نحاسي (${currencyLabel})`, lblCls: 'text-amber-400', inputCls: 'bg-slate-900 border-amber-500/40 text-amber-300 font-bold' },
+                      { tier: 'silver' as const, label: `فضي (${currencyLabel})`, lblCls: 'text-slate-200', inputCls: 'bg-slate-900 border-slate-400/40 text-slate-200 font-bold' },
+                      { tier: 'gold' as const, label: `ذهبي (${currencyLabel})`, lblCls: 'text-yellow-400', inputCls: 'bg-slate-900 border-yellow-500/40 text-yellow-300 font-bold' },
+                      { tier: 'vip' as const, label: `مميز VIP (${currencyLabel})`, lblCls: 'text-purple-400 font-bold', inputCls: 'bg-purple-950/40 border-purple-500/50 text-purple-300 font-bold' },
+                    ]).map(({ tier, label, lblCls, inputCls }) => {
+                      const draftKey = `${pkg.id}:${tier}`;
+                      const displayVal = draftKey in priceDrafts
+                        ? priceDrafts[draftKey]
+                        : String(Number(convertFromSar(pkg.tierPrices?.[tier] ?? 0).toFixed(2)));
+                      return (
+                        <div key={tier}>
+                          <span className={`block text-[10px] mb-0.5 ${lblCls}`}>{label}</span>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              disabled={!canEditPrices}
+                              value={displayVal}
+                              onChange={e => {
+                                const raw = e.target.value;
+                                setPriceDrafts(prev => ({ ...prev, [draftKey]: raw }));
+                                const parsed = Number(raw);
+                                if (raw !== '' && Number.isFinite(parsed) && parsed >= 0) {
+                                  handleUpdatePackagePrice(pkg.id, tier, convertToSar(parsed));
+                                }
+                              }}
+                              onBlur={() => {
+                                setPriceDrafts(prev => {
+                                  if (!(draftKey in prev)) return prev;
+                                  const next = { ...prev };
+                                  delete next[draftKey];
+                                  return next;
+                                });
+                              }}
+                              className={`w-full border rounded-xl px-2 py-1 text-center font-mono text-xs disabled:opacity-50 ${inputCls}`}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {/* Warehouse Link & Stock Control (Voucher services only) */}
@@ -1047,7 +1023,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
                   <div>
                     <span className="font-bold text-purple-300 block text-xs">إعدادات استهداف الهدايا المجانية:</span>
                     <p className="text-[11px] text-purple-200 mt-0.5">
-                      هذه الخدمة مجانية (السعر: 0.00 ر.س). يحدد المتجر من يستهدف بالهدية:
+                      هذه الخدمة مجانية (السعر: {formatCurrency(0)}). يحدد المتجر من يستهدف بالهدية:
                     </p>
                   </div>
                 </div>
@@ -1340,7 +1316,7 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
               </div>
             ) : allActivePackages.some(p => Object.values(p.tierPrices || {}).some(v => Number(v) === 0)) ? (
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300">
-                ملاحظة: أي باقة أو رتبة سعرها <strong>0 ر.س</strong> ستظهر للعميل وتُحتسب بقيمة <strong>0.50 ر.س</strong>.
+                ملاحظة: أي باقة أو رتبة سعرها <strong>{formatCurrency(0)}</strong> ستظهر للعميل وتُحتسب بقيمة <strong>{formatCurrency(0.5)}</strong>.
               </div>
             ) : null}
           </div>

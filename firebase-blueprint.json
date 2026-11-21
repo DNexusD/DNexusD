@@ -48,7 +48,8 @@
         "canGetBonus": { "type": "boolean" },
         "canViewGifts": { "type": "boolean" },
         "pendingGiftFees": { "type": "number" },
-        "usedGiftServiceIds": { "type": "array" }
+        "usedGiftServiceIds": { "type": "array" },
+        "preferredCurrency": { "type": "string", "enum": ["SAR", "USD"] }
       },
       "required": ["id", "posCode", "tradeName", "ownerName", "phone", "supplierId", "tier", "walletBalance"]
     },
@@ -71,7 +72,9 @@
         "country": { "type": "string" },
         "city": { "type": "string" },
         "socialLinks": { "type": "object" },
-        "employees": { "type": "array" }
+        "employees": { "type": "array" },
+        "preferredCurrency": { "type": "string", "enum": ["SAR", "USD"] },
+        "exchangeRateSarPerUsd": { "type": "number" }
       },
       "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
     },

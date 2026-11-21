@@ -39,7 +39,7 @@ const AVAILABLE_ICONS = [
 ];
 
 export const EditCatalogModal: React.FC<EditCatalogModalProps> = ({ catalog, onClose }) => {
-  const { updateCatalog, deleteCatalog, services, showToast } = useApp();
+  const { updateCatalog, deleteCatalog, services, showToast, formatCurrency } = useApp();
 
   const [nameAr, setNameAr] = useState(catalog.nameAr);
   const [descriptionAr, setDescriptionAr] = useState(catalog.descriptionAr);
@@ -179,7 +179,7 @@ export const EditCatalogModal: React.FC<EditCatalogModalProps> = ({ catalog, onC
                 <span>تعيين ككتالوج الهدايا المجانية</span>
               </div>
               <p className="text-[10px] text-slate-400 leading-relaxed">
-                الخدمات داخل هذا الكاتالوج تُنفذ للعملاء أصحاب ميزة الهدايا المجانية بسعر 0.00 ر.س.
+                الخدمات داخل هذا الكاتالوج تُنفذ للعملاء أصحاب ميزة الهدايا المجانية بسعر {formatCurrency(0)}.
               </p>
             </div>
           </label>

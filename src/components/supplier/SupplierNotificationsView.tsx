@@ -61,6 +61,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
     markNotificationAsRead,
     markAllSupplierNotificationsAsRead,
     clearSupplierNotifications,
+    formatCurrency,
   } = useApp();
 
   const perms = useMemo(
@@ -461,7 +462,7 @@ export const SupplierNotificationsView: React.FC<SupplierNotificationsViewProps>
                     <div className="text-right sm:text-left shrink-0">
                       <span className="text-[10px] text-slate-400 block">المبلغ</span>
                       <span className="text-base sm:text-lg font-bold font-mono text-emerald-400 tabular-nums">
-                        {notif.amount.toFixed(2)} ر.س
+                        {formatCurrency(notif.amount)}
                       </span>
                     </div>
                   )}

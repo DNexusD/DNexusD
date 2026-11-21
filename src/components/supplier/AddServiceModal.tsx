@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { DeliveryMethod, AccountTier, ServicePackage, TIERS_CONFIG } from '../../types';
 import { isCatalogFreeGifts, computeGiftExpiresAt, GiftDurationUnit } from '../../utils/pricing';
@@ -15,7 +15,7 @@ interface AddServiceModalProps {
 }
 
 export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => {
-  const { catalogs, supplier, posClients, voucherWarehouses, addService, showToast } = useApp();
+  const { catalogs, supplier, posClients, voucherWarehouses, addService, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertFromSar, convertToSar, formatCurrency } = useApp();
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
   const supplierClients = posClients.filter(c => !c.supplierId || c.supplierId === supplier.id);
@@ -51,15 +51,20 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const activePackages = packagesByMethod[activePackageMethod] || [];
   const activeMethodIsVoucher = activePackageMethod === 'voucher_code';
 
-  // New package inline addition state
+  // New package inline addition state (values entered in activeCurrency)
   const [showAddPackageForm, setShowAddPackageForm] = useState(false);
   const [newPkgName, setNewPkgName] = useState('');
-  const [newPriceRegular, setNewPriceRegular] = useState<number>(0);
-  const [newPriceBronze, setNewPriceBronze] = useState<number>(0);
-  const [newPriceSilver, setNewPriceSilver] = useState<number>(0);
-  const [newPriceGold, setNewPriceGold] = useState<number>(0);
-  const [newPriceVip, setNewPriceVip] = useState<number>(0);
+  const [newPriceRegular, setNewPriceRegular] = useState<string>('0');
+  const [newPriceBronze, setNewPriceBronze] = useState<string>('0');
+  const [newPriceSilver, setNewPriceSilver] = useState<string>('0');
+  const [newPriceGold, setNewPriceGold] = useState<string>('0');
+  const [newPriceVip, setNewPriceVip] = useState<string>('0');
   const [newVouchersInput, setNewVouchersInput] = useState('');
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setPriceDrafts({});
+  }, [activeCurrency, activeExchangeRate]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -180,6 +185,13 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
     }
     const wh = supplierWarehouses.find(w => w.id === warehouseId);
     if (!wh) return;
+    setPriceDrafts(prev => {
+      const next = { ...prev };
+      for (const t of ['regular', 'bronze', 'silver', 'gold', 'vip'] as const) {
+        delete next[`${pkgId}:${t}`];
+      }
+      return next;
+    });
     setPackagesByMethod(prev => ({
       ...prev,
       [activePackageMethod]: prev[activePackageMethod].map(p =>
@@ -202,8 +214,10 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال اسم الباقة الجديدة' });
       return;
     }
-    const parsePrice = (val: number, fallback: number) =>
-      typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : fallback;
+    const parsePriceSar = (raw: string) => {
+      const val = Number(raw);
+      return Number.isFinite(val) && val >= 0 ? convertToSar(val) : 0;
+    };
 
     const vouchers = activeMethodIsVoucher
       ? newVouchersInput
@@ -218,11 +232,11 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       description: '',
       deliveryMethod: activePackageMethod,
       tierPrices: {
-        regular: parsePrice(newPriceRegular, 0),
-        bronze: parsePrice(newPriceBronze, 0),
-        silver: parsePrice(newPriceSilver, 0),
-        gold: parsePrice(newPriceGold, 0),
-        vip: parsePrice(newPriceVip, 0),
+        regular: parsePriceSar(newPriceRegular),
+        bronze: parsePriceSar(newPriceBronze),
+        silver: parsePriceSar(newPriceSilver),
+        gold: parsePriceSar(newPriceGold),
+        vip: parsePriceSar(newPriceVip),
       },
       ...(activeMethodIsVoucher
         ? {
@@ -237,11 +251,11 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
       [activePackageMethod]: [...(prev[activePackageMethod] || []), newPkg],
     }));
     setNewPkgName('');
-    setNewPriceRegular(0);
-    setNewPriceBronze(0);
-    setNewPriceSilver(0);
-    setNewPriceGold(0);
-    setNewPriceVip(0);
+    setNewPriceRegular('0');
+    setNewPriceBronze('0');
+    setNewPriceSilver('0');
+    setNewPriceGold('0');
+    setNewPriceVip('0');
     setNewVouchersInput('');
     setShowAddPackageForm(false);
     showToast({
@@ -525,11 +539,11 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                 <div className="flex items-center gap-2">
                   <Package className="w-4 h-4 text-amber-400" />
                   <span className="text-xs font-bold text-white">
-                    باقات الخدمة وتسعيرات الرتب (مستقلة لكل طريقة تسليم):
+                    باقات الخدمة وتسعيرات الرتب ({currencyLabel}) — مستقلة لكل طريقة تسليم:
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  اختر طريقة التسليم أدناه لإضافة وتعديل باقاتها الخاصة بشكل مستقل عن الطرق الأخرى.
+                  اختر طريقة التسليم أدناه لإضافة وتعديل باقاتها الخاصة بعملة العرض الحالية ({currencyLabel}).
                 </p>
               </div>
               <button
@@ -608,61 +622,61 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
 
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="block text-[10px] text-slate-400 mb-1">رتبة عادي</span>
+                    <span className="block text-[10px] text-slate-400 mb-1">رتبة عادي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       value={newPriceRegular}
-                      onChange={e => setNewPriceRegular(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceRegular(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
                     />
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-amber-900/30">
-                    <span className="block text-[10px] text-amber-500 mb-1">رتبة نحاسي</span>
+                    <span className="block text-[10px] text-amber-500 mb-1">رتبة نحاسي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       value={newPriceBronze}
-                      onChange={e => setNewPriceBronze(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceBronze(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
                     />
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-700">
-                    <span className="block text-[10px] text-slate-300 mb-1">رتبة فضي</span>
+                    <span className="block text-[10px] text-slate-300 mb-1">رتبة فضي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       value={newPriceSilver}
-                      onChange={e => setNewPriceSilver(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceSilver(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
                     />
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-yellow-500/30">
-                    <span className="block text-[10px] text-yellow-400 mb-1">رتبة ذهبي</span>
+                    <span className="block text-[10px] text-yellow-400 mb-1">رتبة ذهبي ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       value={newPriceGold}
-                      onChange={e => setNewPriceGold(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceGold(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
                     />
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-900 border border-purple-500/40 col-span-2 sm:col-span-1">
-                    <span className="block text-[10px] text-purple-400 mb-1 font-bold">رتبة مميز VIP</span>
+                    <span className="block text-[10px] text-purple-400 mb-1 font-bold">رتبة مميز VIP ({currencyLabel})</span>
                     <input
                       type="number"
                       min={0}
                       step="any"
                       value={newPriceVip}
-                      onChange={e => setNewPriceVip(Math.max(0, Number(e.target.value)))}
+                      onChange={e => setNewPriceVip(e.target.value)}
                       className="w-full bg-slate-950 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
                     />
                   </div>
@@ -737,65 +751,46 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
 
                   {/* Pricing per 5 tiers */}
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
-                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
-                      <span className="block text-[10px] text-slate-400 mb-1">عادي</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={pkg.tierPrices?.regular ?? 0}
-                        onChange={e => handleUpdatePackagePrice(pkg.id, 'regular', Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-white text-xs"
-                      />
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-slate-950 border border-amber-900/30">
-                      <span className="block text-[10px] text-amber-500 mb-1">نحاسي</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={pkg.tierPrices?.bronze ?? 0}
-                        onChange={e => handleUpdatePackagePrice(pkg.id, 'bronze', Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-amber-400 text-xs"
-                      />
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-700">
-                      <span className="block text-[10px] text-slate-300 mb-1">فضي</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={pkg.tierPrices?.silver ?? 0}
-                        onChange={e => handleUpdatePackagePrice(pkg.id, 'silver', Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-slate-200 text-xs"
-                      />
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-slate-950 border border-yellow-500/30">
-                      <span className="block text-[10px] text-yellow-400 mb-1">ذهبي</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={pkg.tierPrices?.gold ?? 0}
-                        onChange={e => handleUpdatePackagePrice(pkg.id, 'gold', Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1 px-1 text-center font-mono font-bold text-yellow-300 text-xs"
-                      />
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-slate-950 border border-purple-500/40 col-span-2 sm:col-span-1">
-                      <span className="block text-[10px] text-purple-400 mb-1 font-bold">مميز VIP</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        value={pkg.tierPrices?.vip ?? 0}
-                        onChange={e => handleUpdatePackagePrice(pkg.id, 'vip', Number(e.target.value))}
-                        className="w-full bg-slate-900 border border-purple-500/60 rounded-lg py-1 px-1 text-center font-mono font-bold text-purple-300 text-xs"
-                      />
-                    </div>
+                    {([
+                      { tier: 'regular' as const, label: `عادي (${currencyLabel})`, cardCls: 'bg-slate-950 border-slate-800', lblCls: 'text-slate-400', inputCls: 'bg-slate-900 border-slate-700 text-white' },
+                      { tier: 'bronze' as const, label: `نحاسي (${currencyLabel})`, cardCls: 'bg-slate-950 border-amber-900/30', lblCls: 'text-amber-500', inputCls: 'bg-slate-900 border-slate-700 text-amber-400' },
+                      { tier: 'silver' as const, label: `فضي (${currencyLabel})`, cardCls: 'bg-slate-950 border-slate-700', lblCls: 'text-slate-300', inputCls: 'bg-slate-900 border-slate-700 text-slate-200' },
+                      { tier: 'gold' as const, label: `ذهبي (${currencyLabel})`, cardCls: 'bg-slate-950 border-yellow-500/30', lblCls: 'text-yellow-400', inputCls: 'bg-slate-900 border-slate-700 text-yellow-300' },
+                      { tier: 'vip' as const, label: `مميز VIP (${currencyLabel})`, cardCls: 'bg-slate-950 border-purple-500/40 col-span-2 sm:col-span-1', lblCls: 'text-purple-400 font-bold', inputCls: 'bg-slate-900 border-purple-500/60 text-purple-300' },
+                    ]).map(({ tier, label, cardCls, lblCls, inputCls }) => {
+                      const draftKey = `${pkg.id}:${tier}`;
+                      const displayVal = draftKey in priceDrafts
+                        ? priceDrafts[draftKey]
+                        : String(Number(convertFromSar(pkg.tierPrices?.[tier] ?? 0).toFixed(2)));
+                      return (
+                        <div key={tier} className={`p-2 rounded-xl border ${cardCls}`}>
+                          <span className={`block text-[10px] mb-1 ${lblCls}`}>{label}</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={displayVal}
+                            onChange={e => {
+                              const raw = e.target.value;
+                              setPriceDrafts(prev => ({ ...prev, [draftKey]: raw }));
+                              const parsed = Number(raw);
+                              if (raw !== '' && Number.isFinite(parsed) && parsed >= 0) {
+                                handleUpdatePackagePrice(pkg.id, tier, convertToSar(parsed));
+                              }
+                            }}
+                            onBlur={() => {
+                              setPriceDrafts(prev => {
+                                if (!(draftKey in prev)) return prev;
+                                const next = { ...prev };
+                                delete next[draftKey];
+                                return next;
+                              });
+                            }}
+                            className={`w-full border rounded-lg py-1 px-1 text-center font-mono font-bold text-xs ${inputCls}`}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {/* Stock / Warehouse Linking / Always-Available Status per package */}
@@ -869,7 +864,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                   <div>
                     <span className="font-bold text-purple-300 block text-xs">إعدادات استهداف الهدايا المجانية:</span>
                     <p className="text-[11px] text-purple-200 mt-0.5">
-                      هذه الخدمة مجانية (السعر: 0.00 ر.س). يحدد المتجر من يستهدف بالهدية:
+                      هذه الخدمة مجانية (السعر: {formatCurrency(0)}). يحدد المتجر من يستهدف بالهدية:
                     </p>
                   </div>
                 </div>

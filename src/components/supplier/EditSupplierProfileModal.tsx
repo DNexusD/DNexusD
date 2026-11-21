@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { SupplierCustomSocialLink, SupplierSocialLinks } from '../../types';
+import { CurrencyCode, SupplierCustomSocialLink, SupplierSocialLinks } from '../../types';
 import {
   X,
   Building2,
@@ -14,7 +14,14 @@ import {
   Share2,
   Plus,
   AlertCircle,
+  Coins,
 } from 'lucide-react';
+import {
+  convertSarToCurrency,
+  DEFAULT_SAR_PER_USD,
+  normalizeCurrencyCode,
+  normalizeExchangeRateSarPerUsd,
+} from '../../utils/currency';
 import { ALL_WORLD_COUNTRIES } from '../../constants/countries';
 import {
   normalizeSocialUrl,
@@ -67,6 +74,13 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
     supplier.socialLinks?.customLinks || []
   );
   const [socialValidationError, setSocialValidationError] = useState('');
+  const [preferredCurrency, setPreferredCurrency] = useState<CurrencyCode>(
+    normalizeCurrencyCode(supplier.preferredCurrency)
+  );
+  const [exchangeRateInput, setExchangeRateInput] = useState<string>(
+    String(normalizeExchangeRateSarPerUsd(supplier.exchangeRateSarPerUsd))
+  );
+  const [currencyError, setCurrencyError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -154,6 +168,13 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
       }
     }
 
+    const parsedRate = Number(exchangeRateInput);
+    if (!Number.isFinite(parsedRate) || parsedRate <= 0) {
+      setCurrencyError('يرجى إدخال سعر صرف صحيح أكبر من الصفر (مثال: 3.75).');
+      return;
+    }
+
+    setCurrencyError('');
     setSocialValidationError('');
     setIsSubmitting(true);
     updateSupplierProfile(supplier.id, {
@@ -164,6 +185,8 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
       country: country.trim(),
       city: city.trim(),
       logoUrl: logoUrl.trim(),
+      preferredCurrency,
+      exchangeRateSarPerUsd: normalizeExchangeRateSarPerUsd(parsedRate),
       socialLinks: sanitizeSupplierSocialLinks(draftSocialLinks),
       bankAccountDetails: {
         bankName: bankName.trim(),
@@ -395,6 +418,93 @@ export const EditSupplierProfileModal: React.FC<EditSupplierProfileModalProps> =
                   />
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Currency & Exchange Rate Configuration */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/30 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+              <div>
+                <h3 className="text-xs sm:text-sm font-bold text-emerald-400 flex items-center gap-2">
+                  <Coins className="w-4 h-4" />
+                  <span>عملة المتجر وسعر الصرف (السعودي ⇄ الدولار)</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  حدّد سعر الصرف الذي يُحتسب به الدولار مقابل الريال السعودي في متجرك ولجميع عملائك.
+                </p>
+              </div>
+              <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 self-start" dir="ltr">
+                1$ = {normalizeExchangeRateSarPerUsd(Number(exchangeRateInput) || DEFAULT_SAR_PER_USD)} SAR
+              </span>
+            </div>
+
+            {currencyError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{currencyError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-300 mb-1.5">
+                  العملة الافتراضية لواجهة المتجر:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPreferredCurrency('SAR')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      preferredCurrency === 'SAR'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    ريال سعودي (ر.س)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreferredCurrency('USD')}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      preferredCurrency === 'USD'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    دولار أمريكي ($)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-slate-300 mb-1.5">
+                  سعر الصرف (قيمة 1 دولار بالريال السعودي):
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-slate-400 shrink-0" dir="ltr">1 $ =</span>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0.01"
+                    value={exchangeRateInput}
+                    onChange={(e) => {
+                      setExchangeRateInput(e.target.value);
+                      if (currencyError) setCurrencyError('');
+                    }}
+                    placeholder="3.75"
+                    dir="ltr"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                  <span className="text-xs font-bold text-amber-400 shrink-0">ر.س</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300 flex flex-wrap items-center justify-between gap-2">
+              <span>معاينة التحويل الفوري:</span>
+              <span className="font-mono text-emerald-300 font-bold" dir="ltr">
+                100.00 ر.س = {convertSarToCurrency(100, 'USD', Number(exchangeRateInput) || DEFAULT_SAR_PER_USD).toFixed(2)} $
+              </span>
             </div>
           </div>
 

@@ -7,7 +7,7 @@ import {
   sanitizePdfFilename,
   triggerPdfFileDownload,
 } from './pdfStatement';
-import { WarehousePurchaseUnit } from '../types';
+import { CurrencyCode, WarehousePurchaseUnit } from '../types';
 
 export interface VoucherPdfSupplierInfo {
   storeName: string;
@@ -48,6 +48,8 @@ export interface VoucherPackagePdfInput {
   customerPhone?: string;
   supplier: VoucherPdfSupplierInfo;
   client: VoucherPdfClientInfo;
+  currency?: CurrencyCode;
+  exchangeRateSarPerUsd?: number;
 }
 
 export interface GeneratedVoucherPdfResult {
@@ -268,7 +270,7 @@ export function buildVoucherPackagePdfPageHtml(params: {
             </tr>
             <tr>
               <td style="padding:4px 6px;color:#475569;">الإجمالي المدفوع:</td>
-              <td style="padding:4px 6px;color:#047857;font-weight:800;font-size:12px;font-family:'Cairo','JetBrains Mono',sans-serif;">${escapeHtml(formatCurrencySar(data.totalAmount))}</td>
+              <td style="padding:4px 6px;color:#047857;font-weight:800;font-size:12px;font-family:'Cairo','JetBrains Mono',sans-serif;">${escapeHtml(formatCurrencySar(data.totalAmount, undefined, data.currency || 'SAR', data.exchangeRateSarPerUsd))}</td>
               <td style="padding:4px 6px;color:#475569;">${data.customerName || data.customerPhone ? 'بيانات الزبون:' : 'الحالة:'}</td>
               <td style="padding:4px 6px;color:#0f172a;font-weight:600;">
                 ${

@@ -53,7 +53,9 @@ import {
   Gift,
   Bell,
   AlertTriangle,
-  Archive
+  Archive,
+  Coins,
+  ArrowRightLeft
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { AddServiceModal } from './AddServiceModal';
@@ -125,13 +127,32 @@ export const SupplierDashboard: React.FC = () => {
     activeNavTab,
     setActiveNavTab,
     unreadSupplierNotificationsCount,
-    showToast
+    showToast,
+    activeCurrency,
+    activeExchangeRate,
+    setActiveCurrency,
+    updateSupplierExchangeRate,
+    formatCurrency
   } = useApp();
 
   const supplierCatalogs = useMemo(
     () => getCatalogsForSupplierView(catalogs, supplier.id),
     [catalogs, supplier.id]
   );
+
+  const storeClients = useMemo(
+    () => posClients.filter(c => c.supplierId === supplier.id),
+    [posClients, supplier.id]
+  );
+
+  const storeAccountingEntries = useMemo(() => {
+    const storeClientIds = new Set(storeClients.map(c => c.id));
+    return accountingEntries.filter(
+      e =>
+        e.supplierId === supplier.id ||
+        (!e.supplierId && Boolean(e.posId) && storeClientIds.has(e.posId))
+    );
+  }, [accountingEntries, supplier.id, storeClients]);
 
   const statementTypeOptions = useMemo(
     () => getActiveDropdownOptions(platformSettings.statementTransactionTypes),
@@ -156,6 +177,10 @@ export const SupplierDashboard: React.FC = () => {
     [currentUser, role, supplier]
   );
   const isStoreOwner = role === 'supplier' || role === 'super_admin';
+  const [exchangeRateDraft, setExchangeRateDraft] = useState<string>(() => String(activeExchangeRate));
+  useEffect(() => {
+    setExchangeRateDraft(String(activeExchangeRate));
+  }, [activeExchangeRate]);
 
   // Selected subtab inside supplier portal
   const [subTab, setSubTab] = useState<SupplierDashboardTab>(() =>
@@ -190,7 +215,7 @@ export const SupplierDashboard: React.FC = () => {
 
   const supplierFilteredEntries = useMemo(() => {
     const matchedOpt = statementTypeOptions.find((o) => o.value === selectedTypeForStatement);
-    return accountingEntries.filter(e => {
+    return storeAccountingEntries.filter(e => {
       const dateOnly = (e.date || '').substring(0, 10);
       if (selectedPosForStatement !== 'all' && e.posId !== selectedPosForStatement) return false;
       if (selectedServiceForStatement !== 'all' && e.serviceName !== selectedServiceForStatement) return false;
@@ -205,7 +230,7 @@ export const SupplierDashboard: React.FC = () => {
       return true;
     });
   }, [
-    accountingEntries,
+    storeAccountingEntries,
     depositRequests,
     statementTypeOptions,
     selectedPosForStatement,
@@ -475,7 +500,7 @@ export const SupplierDashboard: React.FC = () => {
   const getSupplierFilterSummary = () => {
     const parts: string[] = [];
     if (selectedPosForStatement !== 'all') {
-      const cli = posClients.find(c => c.id === selectedPosForStatement);
+      const cli = storeClients.find(c => c.id === selectedPosForStatement);
       parts.push(`العميل: ${cli ? cli.tradeName : selectedPosForStatement}`);
     } else {
       parts.push('جميع العملاء');
@@ -513,7 +538,7 @@ export const SupplierDashboard: React.FC = () => {
     try {
       const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
       const rows: PdfStatementRow[] = supplierFilteredEntries.map((entry) => {
-        const client = posClients.find(p => p.id === entry.posId);
+        const client = storeClients.find(p => p.id === entry.posId);
         let badge = 'حركة';
         let badgeTone: PdfBadgeTone = 'slate';
         if (entry.type === 'deposit') {
@@ -551,15 +576,15 @@ export const SupplierDashboard: React.FC = () => {
               subtext: subParts.join(' · ') || undefined,
             },
             debit: {
-              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit') : '-',
+              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit', activeCurrency, activeExchangeRate) : '-',
               tone: entry.debit > 0 ? 'debit' : 'neutral',
             },
             credit: {
-              text: entry.credit > 0 ? formatCurrencySar(entry.credit, 'credit') : '-',
+              text: entry.credit > 0 ? formatCurrencySar(entry.credit, 'credit', activeCurrency, activeExchangeRate) : '-',
               tone: entry.credit > 0 ? 'credit' : 'neutral',
             },
             balanceAfter: {
-              text: formatCurrencySar(entry.balanceAfter),
+              text: formatCurrencySar(entry.balanceAfter, 'neutral', activeCurrency, activeExchangeRate),
               tone: 'bold',
             },
           },
@@ -576,11 +601,11 @@ export const SupplierDashboard: React.FC = () => {
         filterSummary: getSupplierFilterSummary(),
         kpis: [
           { label: 'عدد القيود', value: `${supplierStatementTotals.count} قيد`, tone: 'neutral' },
-          { label: 'إجمالي المدين', value: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit'), tone: 'debit' },
-          { label: 'إجمالي الدائن', value: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'), tone: 'credit' },
+          { label: 'إجمالي المدين', value: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit', activeCurrency, activeExchangeRate), tone: 'debit' },
+          { label: 'إجمالي الدائن', value: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit', activeCurrency, activeExchangeRate), tone: 'credit' },
           isStoreOwner
-            ? { label: 'رصيد المتجر الحالي', value: formatCurrencySar(supplier.walletBalance), tone: 'accent' }
-            : { label: 'صافي حركة التقرير', value: formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit), tone: 'accent' },
+            ? { label: 'رصيد المتجر الحالي', value: formatCurrencySar(supplier.walletBalance, 'neutral', activeCurrency, activeExchangeRate), tone: 'accent' }
+            : { label: 'صافي حركة التقرير', value: formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit, 'neutral', activeCurrency, activeExchangeRate), tone: 'accent' },
         ],
         columns: [
           { key: 'date', label: 'التاريخ', width: '14%', mono: true },
@@ -598,11 +623,11 @@ export const SupplierDashboard: React.FC = () => {
         },
         footerSummary: {
           rowCountLabel: `إجمالي القيود المعروضة: ${supplierStatementTotals.count} قيد`,
-          totalDebit: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit'),
-          totalCredit: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit'),
+          totalDebit: formatCurrencySar(supplierStatementTotals.totalDebit, 'debit', activeCurrency, activeExchangeRate),
+          totalCredit: formatCurrencySar(supplierStatementTotals.totalCredit, 'credit', activeCurrency, activeExchangeRate),
           finalBalance: isStoreOwner
-            ? formatCurrencySar(supplier.walletBalance)
-            : formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit),
+            ? formatCurrencySar(supplier.walletBalance, 'neutral', activeCurrency, activeExchangeRate)
+            : formatCurrencySar(supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit, 'neutral', activeCurrency, activeExchangeRate),
         },
         filename: `كشف_حساب_المتجر_${supplier.storeName}_${nowStr.slice(0, 10)}.pdf`,
       });
@@ -935,7 +960,7 @@ export const SupplierDashboard: React.FC = () => {
               <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
                 <span className="text-[10px] text-slate-400 block">رصيد مبيعات المتجر الإجمالي</span>
                 <span className="text-lg font-bold font-mono text-white tabular-nums">
-                  {supplier.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                  {formatCurrency(supplier.walletBalance, { withGrouping: true })}
                 </span>
               </div>
             )}
@@ -944,12 +969,89 @@ export const SupplierDashboard: React.FC = () => {
               <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
                 <span className="text-[10px] text-slate-400 block">نقاط البيع والوكلاء</span>
                 <span className="text-lg font-bold font-mono text-purple-400 tabular-nums">
-                  {posClients.length} عميل
+                  {storeClients.length} عميل
                 </span>
               </div>
             )}
           </div>
         )}
+
+        {/* Store Currency Switcher & Exchange Rate Config Bar */}
+        <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-1.5 text-amber-300 font-bold">
+              <Coins className="w-4 h-4 text-amber-400" />
+              <span>عملة العرض:</span>
+            </div>
+            <div className="inline-flex items-center p-1 rounded-xl bg-slate-950 border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setActiveCurrency('SAR')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  activeCurrency === 'SAR'
+                    ? 'bg-amber-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                ريال سعودي (ر.س)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveCurrency('USD')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  activeCurrency === 'USD'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                دولار أمريكي ($)
+              </button>
+            </div>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 font-mono" dir="ltr">
+              <ArrowRightLeft className="w-3 h-3 text-cyan-400" />
+              <span>1 $ = {activeExchangeRate} ر.س</span>
+            </span>
+          </div>
+
+          {isStoreOwner && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const parsed = parseFloat(exchangeRateDraft);
+                if (!Number.isFinite(parsed) || parsed <= 0) {
+                  showToast({ type: 'error', title: 'قيمة غير صالحة', description: 'يرجى إدخال سعر صرف صحيح أكبر من صفر.' });
+                  return;
+                }
+                updateSupplierExchangeRate(parsed);
+              }}
+              className="flex flex-wrap items-center gap-2 bg-slate-950/90 border border-slate-800 rounded-2xl px-3 py-2"
+            >
+              <label htmlFor="supplier-exchange-rate-input" className="text-[11px] text-slate-300 font-semibold whitespace-nowrap">
+                سعر صرف المتجر (1 دولار =
+              </label>
+              <input
+                id="supplier-exchange-rate-input"
+                type="number"
+                step="any"
+                min="0.01"
+                value={exchangeRateDraft}
+                onChange={(e) => setExchangeRateDraft(e.target.value)}
+                className="w-24 bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-2.5 py-1 text-center font-mono font-bold text-amber-300 text-xs outline-none"
+                dir="ltr"
+              />
+              <span className="text-[11px] text-slate-400 font-semibold">ر.س)</span>
+              <span className="text-[10px] text-slate-500 font-mono hidden sm:inline" dir="ltr">
+                (100 ر.س = {(100 / (parseFloat(exchangeRateDraft) > 0 ? parseFloat(exchangeRateDraft) : activeExchangeRate)).toFixed(2)} $)
+              </span>
+              <button
+                type="submit"
+                className="px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition-colors cursor-pointer"
+              >
+                اعتماد السعر
+              </button>
+            </form>
+          )}
+        </div>
       </div>
 
       {/* Low-stock warning alert banner */}
@@ -1232,7 +1334,7 @@ export const SupplierDashboard: React.FC = () => {
             <div>
               <h2 className="text-base font-bold text-white">الكاتالوجات والخدمات والتسعير الطبقي</h2>
               <p className="text-xs text-slate-400">
-                تسعير الخدمات لكل رتبة: مميز ٦٠ ر.س · ذهبي ٧٠ ر.س · فضي ٨٠ ر.س · نحاسي ٩٠ ر.س · عادي ١٠٠ ر.س
+                مثال تسعير الخدمات لكل رتبة: مميز {formatCurrency(60)} · ذهبي {formatCurrency(70)} · فضي {formatCurrency(80)} · نحاسي {formatCurrency(90)} · عادي {formatCurrency(100)}
               </p>
             </div>
             {(isStoreOwner || perms.canAddServices) && (
@@ -1277,7 +1379,7 @@ export const SupplierDashboard: React.FC = () => {
                   {isGiftCat && (
                     <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-[10px] text-purple-300 font-semibold">
                       <Gift className="w-3 h-3" />
-                      <span>هدايا مجانية (0.00 ر.س)</span>
+                      <span>هدايا مجانية ({formatCurrency(0)})</span>
                     </div>
                   )}
                   <div className="text-[11px] text-slate-400 line-clamp-1">{cat.descriptionAr}</div>
@@ -1349,7 +1451,7 @@ export const SupplierDashboard: React.FC = () => {
                           {isGiftCat && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-semibold">
                               <Gift className="w-3 h-3" />
-                              <span>هدية مجانية (0.00 ر.س) · {giftTargetSummary}</span>
+                              <span>هدية مجانية ({formatCurrency(0)}) · {giftTargetSummary}</span>
                             </span>
                           )}
                           {isGiftCat && (() => {
@@ -1461,19 +1563,19 @@ export const SupplierDashboard: React.FC = () => {
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-300">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.regular} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(displayedPrices.regular)}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-amber-400 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.bronze} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(displayedPrices.bronze)}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-slate-200 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.silver} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(displayedPrices.silver)}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-yellow-400 font-semibold">
-                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${displayedPrices.gold} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(displayedPrices.gold)}
                                 </td>
                                 <td className="py-2.5 px-3 text-center text-purple-300 font-bold bg-purple-950/20">
-                                  {isCatalogFreeGifts(cat) ? '0.00 ر.س' : `${displayedPrices.vip} ر.س`}
+                                  {isCatalogFreeGifts(cat) ? formatCurrency(0) : formatCurrency(displayedPrices.vip)}
                                 </td>
                                 <td className="py-2.5 px-3 text-left font-sans text-[11px]">
                                   {(() => {
@@ -1512,19 +1614,19 @@ export const SupplierDashboard: React.FC = () => {
                                     ↳ {opts.packageNameAr} ({opts.packageCodesCount} أكواد)
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.regular} ر.س`}
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(opts.packageTierPrices.regular)}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.bronze} ر.س`}
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(opts.packageTierPrices.bronze)}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.silver} ر.س`}
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(opts.packageTierPrices.silver)}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200">
-                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.gold} ر.س`}
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(opts.packageTierPrices.gold)}
                                   </td>
                                   <td className="py-2 px-3 text-center text-cyan-200 font-bold">
-                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">0.00 ر.س</span> : `${opts.packageTierPrices.vip} ر.س`}
+                                    {isCatalogFreeGifts(cat) ? <span className="text-purple-300 font-bold">{formatCurrency(0)}</span> : formatCurrency(opts.packageTierPrices.vip)}
                                   </td>
                                   <td className="py-2 px-3 text-left font-sans text-[10px] text-cyan-300">
                                     {opts.availablePackagesCount ?? 0} باقة متاحة
@@ -1665,7 +1767,7 @@ export const SupplierDashboard: React.FC = () => {
                       <div className="flex items-center gap-3 text-slate-400 text-[11px]">
                         <span>تاريخ الطلب: <strong className="text-slate-200 font-mono">{order.date}</strong></span>
                         <span>·</span>
-                        <span>السعر: <strong className="text-white font-mono text-sm">{order.totalDeducted.toFixed(2)} ر.س</strong></span>
+                        <span>السعر: <strong className="text-white font-mono text-sm">{formatCurrency(order.totalDeducted)}</strong></span>
                       </div>
                     </div>
 
@@ -2020,7 +2122,7 @@ export const SupplierDashboard: React.FC = () => {
                       <div className="flex items-center gap-3 text-slate-400 text-[11px]">
                         <span>تاريخ الطلب: <strong className="text-slate-200 font-mono">{order.date}</strong></span>
                         <span>·</span>
-                        <span>السعر: <strong className="text-white font-mono text-sm">{order.totalDeducted.toFixed(2)} ر.س</strong></span>
+                        <span>السعر: <strong className="text-white font-mono text-sm">{formatCurrency(order.totalDeducted)}</strong></span>
                       </div>
                     </div>
 
@@ -2570,7 +2672,7 @@ export const SupplierDashboard: React.FC = () => {
                       <div className="text-right lg:text-left">
                         <span className="text-[10px] text-slate-400 block">المبلغ المطلوب:</span>
                         <span className="text-xl font-bold font-mono text-emerald-400 tabular-nums">
-                          {dep.amount.toFixed(2)} ر.س
+                          {formatCurrency(dep.amount)}
                         </span>
                       </div>
 
@@ -2641,7 +2743,12 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {posClients.map(client => {
+            {storeClients.length === 0 ? (
+              <div className="md:col-span-2 p-8 rounded-3xl bg-slate-900 border border-slate-800 text-center text-xs text-slate-400">
+                لا توجد نقاط بيع أو عملاء مسجلون لدى هذا المتجر حالياً.
+              </div>
+            ) : (
+              storeClients.map(client => {
               const currentTier = TIERS_CONFIG[client.tier];
 
               return (
@@ -2668,13 +2775,13 @@ export const SupplierDashboard: React.FC = () => {
                     <div>
                       <span className="text-[10px] text-slate-400 block">رصيد محفظة العميل</span>
                       <strong className="text-white font-mono tabular-nums text-sm">
-                        {client.walletBalance.toFixed(2)} ر.س
+                        {formatCurrency(client.walletBalance)}
                       </strong>
                     </div>
                     <div>
                       <span className="text-[10px] text-slate-400 block">إجمالي مشتريات العميل</span>
                       <strong className="text-amber-400 font-mono tabular-nums text-sm">
-                        {client.totalSpent.toFixed(2)} ر.س
+                        {formatCurrency(client.totalSpent)}
                       </strong>
                     </div>
                   </div>
@@ -2837,7 +2944,8 @@ export const SupplierDashboard: React.FC = () => {
                   )}
                 </div>
               );
-            })}
+            })
+            )}
           </div>
         </div>
       )}
@@ -2863,7 +2971,7 @@ export const SupplierDashboard: React.FC = () => {
                 className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
               >
                 <option value="all">كل العملاء</option>
-                {posClients.map(c => <option key={c.id} value={c.id}>{c.tradeName}</option>)}
+                {storeClients.map(c => <option key={c.id} value={c.id}>{c.tradeName}</option>)}
               </select>
 
               <select
@@ -2872,7 +2980,7 @@ export const SupplierDashboard: React.FC = () => {
                 className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
               >
                 <option value="all">كل الخدمات</option>
-                {Array.from(new Set(accountingEntries.map(e => e.serviceName).filter(Boolean))).map(s => <option key={s} value={s}>{s}</option>)}
+                {Array.from(new Set(storeAccountingEntries.map(e => e.serviceName).filter(Boolean))).map(s => <option key={s} value={s}>{s}</option>)}
               </select>
 
               <select
@@ -2918,22 +3026,22 @@ export const SupplierDashboard: React.FC = () => {
             </div>
             <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-slate-400 block text-[10px]">إجمالي المدين</span>
-              <span className="text-base font-bold font-mono text-rose-400 tabular-nums">-{supplierStatementTotals.totalDebit.toFixed(2)} ر.س</span>
+              <span className="text-base font-bold font-mono text-rose-400 tabular-nums">{formatCurrency(supplierStatementTotals.totalDebit, { sign: 'debit' })}</span>
             </div>
             <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-slate-400 block text-[10px]">إجمالي الدائن</span>
-              <span className="text-base font-bold font-mono text-emerald-400 tabular-nums">+{supplierStatementTotals.totalCredit.toFixed(2)} ر.س</span>
+              <span className="text-base font-bold font-mono text-emerald-400 tabular-nums">{formatCurrency(supplierStatementTotals.totalCredit, { sign: 'credit' })}</span>
             </div>
             <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-slate-400 block text-[10px]">
                 {isStoreOwner ? 'رصيد المتجر' : 'صافي حركة التقرير'}
               </span>
               <span className="text-base font-bold font-mono text-amber-400 tabular-nums">
-                {(isStoreOwner
-                  ? supplier.walletBalance
-                  : supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit
-                ).toFixed(2)}{' '}
-                ر.س
+                {formatCurrency(
+                  isStoreOwner
+                    ? supplier.walletBalance
+                    : supplierStatementTotals.totalCredit - supplierStatementTotals.totalDebit
+                )}
               </span>
             </div>
           </div>
@@ -2960,15 +3068,15 @@ export const SupplierDashboard: React.FC = () => {
                     </tr>
                   ) : (
                     supplierFilteredEntries.map(entry => {
-                      const client = posClients.find(p => p.id === entry.posId);
+                      const client = storeClients.find(p => p.id === entry.posId);
                       return (
                         <tr key={entry.id} className="hover:bg-slate-950/40">
                           <td className="py-2.5 px-3 text-slate-400">{entry.date}</td>
                           <td className="py-2.5 px-3 text-amber-400 font-sans">{client?.tradeName || 'عميل'}</td>
                           <td className="py-2.5 px-3 text-white font-sans">{entry.description}</td>
-                          <td className="py-2.5 px-3 text-left text-rose-400">{entry.debit > 0 ? `-${entry.debit.toFixed(2)}` : '-'}</td>
-                          <td className="py-2.5 px-3 text-left text-emerald-400">{entry.credit > 0 ? `+${entry.credit.toFixed(2)}` : '-'}</td>
-                          <td className="py-2.5 px-3 text-left text-white font-bold">{entry.balanceAfter.toFixed(2)}</td>
+                          <td className="py-2.5 px-3 text-left text-rose-400">{entry.debit > 0 ? formatCurrency(entry.debit, { sign: 'debit' }) : '-'}</td>
+                          <td className="py-2.5 px-3 text-left text-emerald-400">{entry.credit > 0 ? formatCurrency(entry.credit, { sign: 'credit' }) : '-'}</td>
+                          <td className="py-2.5 px-3 text-left text-white font-bold">{formatCurrency(entry.balanceAfter)}</td>
                         </tr>
                       );
                     })
@@ -3041,7 +3149,7 @@ export const SupplierDashboard: React.FC = () => {
                     <span>تعيين ككتالوج الهدايا المجانية</span>
                   </div>
                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                    الخدمات داخل هذا الكاتالوج تصبح بسعر 0.00 ر.س للعملاء أصحاب ميزة الهدايا المجانية.
+                    الخدمات داخل هذا الكاتالوج تصبح بسعر {formatCurrency(0)} للعملاء أصحاب ميزة الهدايا المجانية.
                   </p>
                 </div>
               </label>

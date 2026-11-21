@@ -40,7 +40,11 @@ export const AdminStatementView: React.FC = () => {
     services, 
     adminAccountingEntries, 
     platformSettings,
-    showToast
+    showToast,
+    activeCurrency,
+    activeExchangeRate,
+    currencyLabel,
+    formatCurrency
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<AdminStatementFilter>('all');
@@ -224,7 +228,7 @@ export const AdminStatementView: React.FC = () => {
 
         const descSubParts: string[] = [];
         if (entry.notes) descSubParts.push(entry.notes);
-        if (entry.grossAmount) descSubParts.push(`قيمة العملية: ${entry.grossAmount.toFixed(2)} ر.س`);
+        if (entry.grossAmount) descSubParts.push(`قيمة العملية: ${formatCurrency(entry.grossAmount)}`);
 
         return {
           id: entry.id,
@@ -241,19 +245,19 @@ export const AdminStatementView: React.FC = () => {
               subtext: descSubParts.join(' · ') || undefined,
             },
             debit: {
-              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit') : '-',
+              text: entry.debit > 0 ? formatCurrencySar(entry.debit, 'debit', activeCurrency, activeExchangeRate) : '-',
               tone: entry.debit > 0 ? 'debit' : 'neutral',
             },
             credit: {
               text: entry.credit > 0
-                ? formatCurrencySar(entry.credit, 'credit')
+                ? formatCurrencySar(entry.credit, 'credit', activeCurrency, activeExchangeRate)
                 : entry.type === 'deposit_received'
                 ? 'إيداع معتمد'
                 : '-',
               tone: entry.credit > 0 ? 'credit' : 'neutral',
             },
             balanceAfter: {
-              text: formatCurrencySar(entry.balanceAfter),
+              text: formatCurrencySar(entry.balanceAfter, 'neutral', activeCurrency, activeExchangeRate),
               tone: 'bold',
             },
           },
@@ -269,10 +273,10 @@ export const AdminStatementView: React.FC = () => {
         generatedAt: nowStr,
         filterSummary: getFilterSummaryText(),
         kpis: [
-          { label: 'الرسوم المكتسبة', value: formatCurrencySar(totalFeesEarned, 'credit'), tone: 'accent' },
-          { label: 'حجم الإيداعات', value: formatCurrencySar(totalDepositsVolume), tone: 'neutral' },
-          { label: 'التسويات والتحويلات', value: formatCurrencySar(totalSettlements + totalAgentTransfers, 'debit'), tone: 'debit' },
-          { label: 'الرصيد المتاح', value: formatCurrencySar(superAdmin.walletBalance), tone: 'credit' },
+          { label: 'الرسوم المكتسبة', value: formatCurrencySar(totalFeesEarned, 'credit', activeCurrency, activeExchangeRate), tone: 'accent' },
+          { label: 'حجم الإيداعات', value: formatCurrencySar(totalDepositsVolume, 'neutral', activeCurrency, activeExchangeRate), tone: 'neutral' },
+          { label: 'التسويات والتحويلات', value: formatCurrencySar(totalSettlements + totalAgentTransfers, 'debit', activeCurrency, activeExchangeRate), tone: 'debit' },
+          { label: 'الرصيد المتاح', value: formatCurrencySar(superAdmin.walletBalance, 'neutral', activeCurrency, activeExchangeRate), tone: 'credit' },
         ],
         columns: [
           { key: 'date', label: 'التاريخ', width: '11%', mono: true },
@@ -291,9 +295,9 @@ export const AdminStatementView: React.FC = () => {
         },
         footerSummary: {
           rowCountLabel: `إجمالي القيود المعروضة: ${filteredEntries.length} قيد`,
-          totalDebit: formatCurrencySar(totalDebits, 'debit'),
-          totalCredit: formatCurrencySar(totalCredits, 'credit'),
-          finalBalance: formatCurrencySar(superAdmin.walletBalance),
+          totalDebit: formatCurrencySar(totalDebits, 'debit', activeCurrency, activeExchangeRate),
+          totalCredit: formatCurrencySar(totalCredits, 'credit', activeCurrency, activeExchangeRate),
+          finalBalance: formatCurrencySar(superAdmin.walletBalance, 'neutral', activeCurrency, activeExchangeRate),
         },
         filename: `كشف_حساب_مدير_التطبيق_${nowStr.slice(0, 10)}.pdf`,
       });
@@ -382,7 +386,7 @@ export const AdminStatementView: React.FC = () => {
             <Percent className="w-3.5 h-3.5 text-purple-400" />
           </div>
           <div className="text-xl font-bold font-mono text-purple-400 tabular-nums">
-            +{totalFeesEarned.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-sans text-slate-400">ر.س</span>
+            {formatCurrency(totalFeesEarned, { sign: 'credit', withGrouping: true, includeSymbol: false })} <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
           </div>
           <div className="text-[10px] text-slate-400">من العمليات والتحويلات</div>
         </div>
@@ -393,7 +397,7 @@ export const AdminStatementView: React.FC = () => {
             <Coins className="w-3.5 h-3.5 text-cyan-400" />
           </div>
           <div className="text-xl font-bold font-mono text-cyan-400 tabular-nums">
-            {totalDepositsVolume.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-sans text-slate-400">ر.س</span>
+            {formatCurrency(totalDepositsVolume, { withGrouping: true, includeSymbol: false })} <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
           </div>
           <div className="text-[10px] text-slate-400">شحن محافظ الوكلاء لدى المتاجر</div>
         </div>
@@ -404,7 +408,7 @@ export const AdminStatementView: React.FC = () => {
             <ArrowUpRight className="w-3.5 h-3.5 text-rose-400" />
           </div>
           <div className="text-xl font-bold font-mono text-rose-400 tabular-nums">
-            -{(totalSettlements + totalAgentTransfers).toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-sans text-slate-400">ر.س</span>
+            {formatCurrency(totalSettlements + totalAgentTransfers, { sign: 'debit', withGrouping: true, includeSymbol: false })} <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
           </div>
           <div className="text-[10px] text-slate-400">سحب بنكي + شحن وكلاء</div>
         </div>
@@ -415,7 +419,7 @@ export const AdminStatementView: React.FC = () => {
             <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
           </div>
           <div className="text-xl font-bold font-mono text-emerald-400 tabular-nums">
-            {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-sans text-slate-400">ر.س</span>
+            {formatCurrency(superAdmin.walletBalance, { withGrouping: true, includeSymbol: false })} <span className="text-xs font-sans text-slate-400">{currencyLabel}</span>
           </div>
           <div className="text-[10px] text-slate-400">صافي المتاح للصرف أو التسوية</div>
         </div>
@@ -625,10 +629,10 @@ export const AdminStatementView: React.FC = () => {
 
           <div className="flex items-center gap-4 text-xs font-mono">
             <span className="text-emerald-400">
-              إجمالي الدائن (المقبوض): +{totalCredits.toFixed(2)} ر.س
+              إجمالي الدائن (المقبوض): {formatCurrency(totalCredits, { sign: 'credit' })}
             </span>
             <span className="text-rose-400">
-              إجمالي المدين (المدفوع): -{totalDebits.toFixed(2)} ر.س
+              إجمالي المدين (المدفوع): {formatCurrency(totalDebits, { sign: 'debit' })}
             </span>
           </div>
         </div>
@@ -744,7 +748,7 @@ export const AdminStatementView: React.FC = () => {
                         )}
                         {entry.grossAmount && (
                           <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                            قيمة العملية الأصلية: {entry.grossAmount.toFixed(2)} ر.س
+                            قيمة العملية الأصلية: {formatCurrency(entry.grossAmount)}
                           </div>
                         )}
                       </td>
@@ -753,7 +757,7 @@ export const AdminStatementView: React.FC = () => {
                       <td className="py-3.5 px-4 text-left font-mono whitespace-nowrap">
                         {entry.debit > 0 ? (
                           <span className="font-bold text-rose-400">
-                            -{entry.debit.toFixed(2)} ر.س
+                            {formatCurrency(entry.debit, { sign: 'debit' })}
                           </span>
                         ) : (
                           <span className="text-slate-600">-</span>
@@ -764,7 +768,7 @@ export const AdminStatementView: React.FC = () => {
                       <td className="py-3.5 px-4 text-left font-mono whitespace-nowrap">
                         {entry.credit > 0 ? (
                           <span className="font-bold text-emerald-400">
-                            +{entry.credit.toFixed(2)} ر.س
+                            {formatCurrency(entry.credit, { sign: 'credit' })}
                           </span>
                         ) : (
                           <span className="text-slate-600">
@@ -775,8 +779,8 @@ export const AdminStatementView: React.FC = () => {
 
                       {/* Balance After */}
                       <td className="py-3.5 px-4 text-left font-mono font-bold text-white whitespace-nowrap tabular-nums">
-                        {entry.balanceAfter.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-                        <span className="text-[10px] text-slate-400 font-sans">ر.س</span>
+                        {formatCurrency(entry.balanceAfter, { withGrouping: true, includeSymbol: false })}{' '}
+                        <span className="text-[10px] text-slate-400 font-sans">{currencyLabel}</span>
                       </td>
                     </tr>
                   );
@@ -790,13 +794,13 @@ export const AdminStatementView: React.FC = () => {
                     <span>المجموع الإجمالي للقيود المعروضة ({filteredEntries.length} قيد)</span>
                   </td>
                   <td className="py-3.5 px-4 text-left font-mono text-rose-400">
-                    -{totalDebits.toFixed(2)} ر.س
+                    {formatCurrency(totalDebits, { sign: 'debit' })}
                   </td>
                   <td className="py-3.5 px-4 text-left font-mono text-emerald-400">
-                    +{totalCredits.toFixed(2)} ر.س
+                    {formatCurrency(totalCredits, { sign: 'credit' })}
                   </td>
                   <td className="py-3.5 px-4 text-left font-mono text-purple-300">
-                    {superAdmin.walletBalance.toFixed(2)} ر.س
+                    {formatCurrency(superAdmin.walletBalance)}
                   </td>
                 </tr>
               </tfoot>

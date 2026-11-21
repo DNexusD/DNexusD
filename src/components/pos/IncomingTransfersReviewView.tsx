@@ -35,6 +35,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
     supplierBankAccounts,
     confirmDepositReceiptByReceiver,
     confirmLoanRepaymentReceiptByReceiver,
+    formatCurrency,
   } = useApp();
 
   const [statusFilter, setStatusFilter] = useState<IncomingTransferStatusFilter>('all');
@@ -315,7 +316,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
                       {isLoanRepayment ? 'مبلغ سداد السلفة' : 'مبلغ الحوالة'}
                     </span>
                     <span className="text-xl font-bold font-mono tabular-nums text-emerald-400">
-                      {item.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                      {formatCurrency(item.amount, { withGrouping: true })}
                     </span>
                   </div>
                 </div>
@@ -327,7 +328,7 @@ export const IncomingTransfersReviewView: React.FC = () => {
                       سداد عن السلفة: <strong className="font-mono text-white">#{entry.data.loanId}</strong> ({entry.data.loanTransferNumber})
                     </span>
                     <span>
-                      إجمالي السلفة: <strong className="font-mono text-white">{entry.data.loanTotalAmount.toFixed(2)} ر.س</strong> · المتبقي قبل الطلب: <strong className="font-mono text-amber-300">{entry.data.loanRemainingBefore.toFixed(2)} ر.س</strong>
+                      إجمالي السلفة: <strong className="font-mono text-white">{formatCurrency(entry.data.loanTotalAmount)}</strong> · المتبقي قبل الطلب: <strong className="font-mono text-amber-300">{formatCurrency(entry.data.loanRemainingBefore)}</strong>
                     </span>
                   </div>
                 )}

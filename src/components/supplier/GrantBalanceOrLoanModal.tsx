@@ -8,9 +8,14 @@ interface GrantBalanceOrLoanModalProps {
 }
 
 export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = ({ initialPosId, onClose }) => {
-  const { posClients, grantSupplierBalanceOrLoan, showToast } = useApp();
+  const { posClients, supplier, grantSupplierBalanceOrLoan, showToast, formatCurrency, currencyLabel, convertToSar, activeCurrency } = useApp();
 
-  const initialClient = posClients.find(p => p.id === initialPosId) || posClients[0];
+  const storeClients = React.useMemo(
+    () => posClients.filter(p => p.supplierId === supplier.id),
+    [posClients, supplier.id]
+  );
+
+  const initialClient = storeClients.find(p => p.id === initialPosId) || storeClients[0];
   const isLockedClient = Boolean(initialPosId);
 
   const [supportType, setSupportType] = useState<'cash' | 'loan'>('cash');
@@ -25,7 +30,7 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
     if (!file) return;
 
     const fileName = file.name.toUpperCase();
-    const matchedClient = posClients.find(c => 
+    const matchedClient = storeClients.find(c => 
       fileName.includes(c.posCode.toUpperCase()) || 
       fileName.includes(c.id.toUpperCase()) ||
       fileName.includes(c.tradeName.toUpperCase())
@@ -51,7 +56,7 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
   const handleSelectByCode = (code: string) => {
     const clean = code.trim().toUpperCase();
     setManualPosCode(code);
-    const found = posClients.find(p => p.posCode.toUpperCase() === clean || p.id.toUpperCase() === clean);
+    const found = storeClients.find(p => p.posCode.toUpperCase() === clean || p.id.toUpperCase() === clean);
     if (found) {
       setSelectedPosId(found.id);
     }
@@ -69,7 +74,7 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
 
     let targetId = initialPosId || selectedPosId;
     if (!isLockedClient && manualPosCode.trim()) {
-      const found = posClients.find(p => p.posCode.toUpperCase() === manualPosCode.trim().toUpperCase() || p.id === manualPosCode.trim());
+      const found = storeClients.find(p => p.posCode.toUpperCase() === manualPosCode.trim().toUpperCase() || p.id === manualPosCode.trim());
       if (found) {
         targetId = found.id;
       }
@@ -80,9 +85,10 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
       return;
     }
 
+    const amountSar = convertToSar(numericAmount);
     const res = grantSupplierBalanceOrLoan({
       posId: targetId,
-      amount: numericAmount,
+      amount: amountSar,
       supportType,
       reason: reason.trim() || (supportType === 'loan' ? 'منح سلفة رصيد آجل من المتجر' : 'دعم رصيد مجاني وهدية من المتجر'),
     });
@@ -192,7 +198,7 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
                 <div>
                   <div className="font-bold text-white text-sm">{initialClient?.tradeName}</div>
                   <div className="text-slate-400 text-[11px]">
-                    المالك: {initialClient?.ownerName} · هاتف: {initialClient?.phone} · رصيد المحفظة: <strong className="text-emerald-400 font-mono">{initialClient?.walletBalance.toFixed(2)} ر.س</strong>
+                    المالك: {initialClient?.ownerName} · هاتف: {initialClient?.phone} · رصيد المحفظة: <strong className="text-emerald-400 font-mono">{formatCurrency(initialClient?.walletBalance ?? 0)}</strong>
                   </div>
                 </div>
                 <div className="px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono font-bold text-xs shrink-0">
@@ -207,14 +213,14 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
                     value={selectedPosId}
                     onChange={e => {
                       setSelectedPosId(e.target.value);
-                      const found = posClients.find(p => p.id === e.target.value);
+                      const found = storeClients.find(p => p.id === e.target.value);
                       if (found) setManualPosCode(found.posCode);
                     }}
                     className="w-full bg-slate-900 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 text-white focus:outline-none"
                   >
-                    {posClients.map(client => (
+                    {storeClients.map(client => (
                       <option key={client.id} value={client.id}>
-                        {client.tradeName} ({client.posCode}) - رصيد: {client.walletBalance.toFixed(2)} ر.س
+                        {client.tradeName} ({client.posCode}) - رصيد: {formatCurrency(client.walletBalance)}
                       </option>
                     ))}
                   </select>
@@ -238,13 +244,13 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
           {/* Amount Input */}
           <div>
             <label className="block font-semibold text-slate-300 mb-1">
-              مبلغ {supportType === 'cash' ? 'الدعم المجاني (ر.س):' : 'السلفة (ر.س):'}
+              مبلغ {supportType === 'cash' ? `الدعم المجاني (${currencyLabel}):` : `السلفة (${currencyLabel}):`}
             </label>
             <div className="relative">
               <input
                 type="number"
-                step="0.01"
-                min="1"
+                step="any"
+                min={activeCurrency === 'USD' ? '0.01' : '1'}
                 required
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
@@ -252,7 +258,7 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
                 className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 text-white font-mono text-sm font-bold pl-12 focus:outline-none"
                 dir="ltr"
               />
-              <span className="absolute left-3 top-2 text-slate-400 text-xs font-semibold">ر.س</span>
+              <span className="absolute left-3 top-2 text-slate-400 text-xs font-semibold">{currencyLabel}</span>
             </div>
           </div>
 

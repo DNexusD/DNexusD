@@ -11,6 +11,7 @@ import {
   Calendar,
   Landmark,
 } from 'lucide-react';
+import { useApp } from '../../context/AppContext';
 
 export interface ReceiptImageModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
   posName,
   posCode,
 }) => {
+  const { formatCurrency } = useApp();
   const [isZoomed, setIsZoomed] = useState(false);
 
   if (!isOpen || !imageUrl) return null;
@@ -85,7 +87,7 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
                 <span>{title}</span>
                 {amount !== undefined && (
                   <span className="font-mono text-emerald-400 text-xs sm:text-sm font-bold bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
-                    {amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                    {formatCurrency(amount, { withGrouping: true })}
                   </span>
                 )}
               </h3>

@@ -45,7 +45,13 @@ export const AdminDashboard: React.FC = () => {
     activeNavTab,
     setActiveNavTab,
     showToast,
-    clearUsersSuppliersAndClientsData
+    clearUsersSuppliersAndClientsData,
+    activeCurrency,
+    activeExchangeRate,
+    currencyLabel,
+    convertFromSar,
+    convertToSar,
+    formatCurrency
   } = useApp();
 
   const perms = resolveEffectiveAdminPermissions(currentUser, role);
@@ -102,14 +108,30 @@ export const AdminDashboard: React.FC = () => {
   // Settings state for Global fee
   const [globalFeeType, setGlobalFeeType] = useState<'percentage' | 'fixed' | 'both'>(superAdmin.defaultFeeType || 'percentage');
   const [globalPercentage, setGlobalPercentage] = useState<number>(superAdmin.defaultFeePercentage);
-  const [globalFixedAmount, setGlobalFixedAmount] = useState<number>(superAdmin.defaultFixedFeeAmount || 0);
+  const [globalFixedAmount, setGlobalFixedAmount] = useState<string>(() =>
+    String(Number(convertFromSar(superAdmin.defaultFixedFeeAmount || 0).toFixed(2)))
+  );
+  const [isGlobalFixedDirty, setIsGlobalFixedDirty] = useState(false);
 
   // Settings state for per-supplier fee
   const [selectedSupplierForFee, setSelectedSupplierForFee] = useState<string>(supplier.id);
   const activeSelectedSup = suppliers.find(s => s.id === selectedSupplierForFee) || supplier;
   const [supplierFeeType, setSupplierFeeType] = useState<'percentage' | 'fixed' | 'both'>(activeSelectedSup.feeType || 'percentage');
   const [supplierPercentage, setSupplierPercentage] = useState<number>(activeSelectedSup.feePercentage ?? 1.0);
-  const [supplierFixedAmount, setSupplierFixedAmount] = useState<number>(activeSelectedSup.fixedFeeAmount ?? 0);
+  const [supplierFixedAmount, setSupplierFixedAmount] = useState<string>(() =>
+    String(Number(convertFromSar(activeSelectedSup.fixedFeeAmount ?? 0).toFixed(2)))
+  );
+  const [isSupplierFixedDirty, setIsSupplierFixedDirty] = useState(false);
+
+  useEffect(() => {
+    setGlobalFixedAmount(String(Number(convertFromSar(superAdmin.defaultFixedFeeAmount || 0).toFixed(2))));
+    setIsGlobalFixedDirty(false);
+  }, [activeCurrency, activeExchangeRate, superAdmin.defaultFixedFeeAmount]);
+
+  useEffect(() => {
+    setSupplierFixedAmount(String(Number(convertFromSar(activeSelectedSup.fixedFeeAmount ?? 0).toFixed(2))));
+    setIsSupplierFixedDirty(false);
+  }, [activeCurrency, activeExchangeRate, activeSelectedSup.id, activeSelectedSup.fixedFeeAmount]);
 
   // Add new Supplier Form state
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
@@ -117,6 +139,7 @@ export const AdminDashboard: React.FC = () => {
   const [newSupStoreName, setNewSupStoreName] = useState('');
   const [newSupPhone, setNewSupPhone] = useState('');
   const [newSupEmail, setNewSupEmail] = useState('');
+  const [newSupPassword, setNewSupPassword] = useState('');
   const [newSupBankName, setNewSupBankName] = useState('مصرف الراجحي');
   const [newSupIban, setNewSupIban] = useState('SA');
   const [newSupFeeType, setNewSupFeeType] = useState<'percentage' | 'fixed' | 'both'>('percentage');
@@ -137,11 +160,15 @@ export const AdminDashboard: React.FC = () => {
 
   const handleSaveGlobalFee = (e: React.FormEvent) => {
     e.preventDefault();
+    const fixedSar = isGlobalFixedDirty
+      ? convertToSar(Math.max(0, Number(globalFixedAmount) || 0))
+      : (superAdmin.defaultFixedFeeAmount || 0);
     updateGlobalFeeConfig({
       feeType: globalFeeType,
       percentage: Number(globalPercentage),
-      fixedAmount: Number(globalFixedAmount)
+      fixedAmount: fixedSar
     });
+    setIsGlobalFixedDirty(false);
   };
 
   const handleSaveSupplierFee = (e: React.FormEvent) => {
@@ -155,11 +182,16 @@ export const AdminDashboard: React.FC = () => {
       });
       return;
     }
+    const targetSup = suppliers.find(s => s.id === targetId) || activeSelectedSup;
+    const fixedSar = isSupplierFixedDirty
+      ? convertToSar(Math.max(0, Number(supplierFixedAmount) || 0))
+      : (targetSup?.fixedFeeAmount ?? 0);
     updateSupplierFeeConfig(targetId, {
       feeType: supplierFeeType,
       percentage: Number(supplierPercentage),
-      fixedAmount: Number(supplierFixedAmount)
+      fixedAmount: fixedSar
     });
+    setIsSupplierFixedDirty(false);
   };
 
   const handleCreateSupplier = (e: React.FormEvent) => {
@@ -171,8 +203,9 @@ export const AdminDashboard: React.FC = () => {
       storeName: newSupStoreName.trim(),
       phone: newSupPhone.trim(),
       email: newSupEmail.trim(),
+      password: newSupPassword.trim() || undefined,
       feePercentage: Number(newSupFeePercent),
-      fixedFeeAmount: Number(newSupFixedFee),
+      fixedFeeAmount: convertToSar(Number(newSupFixedFee) || 0),
       feeType: newSupFeeType,
       bankAccountDetails: {
         bankName: newSupBankName,
@@ -187,40 +220,48 @@ export const AdminDashboard: React.FC = () => {
     setNewSupStoreName('');
     setNewSupPhone('');
     setNewSupEmail('');
+    setNewSupPassword('');
     setNewSupIban('');
   };
 
+  const settleAmountSar = settleAmount ? convertToSar(Number(settleAmount)) : 0;
+  const agentAmountSar = agentAmount ? convertToSar(Number(agentAmount)) : 0;
+
   const settleAvailability = getBalanceRequestAvailability({
     walletBalance: superAdmin.walletBalance,
-    requiredAmount: Number(settleAmount) || 0,
+    requiredAmount: settleAmountSar,
     walletLabel: 'محفظة الإدارة',
     requestLabel: 'التسوية البنكية',
+    currency: activeCurrency,
+    exchangeRateSarPerUsd: activeExchangeRate,
   });
 
   const agentTransferAvailability = getBalanceRequestAvailability({
     walletBalance: superAdmin.walletBalance,
-    requiredAmount: Number(agentAmount) || 0,
+    requiredAmount: agentAmountSar,
     walletLabel: 'محفظة الإدارة',
     requestLabel: 'تحويل الرصيد لنقطة البيع',
+    currency: activeCurrency,
+    exchangeRateSarPerUsd: activeExchangeRate,
   });
 
   const handleSettleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!settleAmount || settleAmount <= 0) return;
-    adminSettleBank(Number(settleAmount), settleIban);
-    if (superAdmin.walletBalance >= Number(settleAmount)) {
+    if (!settleAmount || Number(settleAmount) <= 0) return;
+    adminSettleBank(settleAmountSar, settleIban);
+    if (superAdmin.walletBalance >= settleAmountSar) {
       setActiveAdminAction(null);
     }
   };
 
   const handleAgentTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!agentAmount || agentAmount <= 0) return;
-    adminTransferToAgent(targetAgentCode, Number(agentAmount));
+    if (!agentAmount || Number(agentAmount) <= 0) return;
+    adminTransferToAgent(targetAgentCode, agentAmountSar);
     const targetExists = posClients.some(
       p => p.posCode.trim().toUpperCase() === targetAgentCode.trim().toUpperCase()
     );
-    if (targetExists && superAdmin.walletBalance >= Number(agentAmount)) {
+    if (targetExists && superAdmin.walletBalance >= agentAmountSar) {
       setActiveAdminAction(null);
     }
   };
@@ -284,8 +325,8 @@ export const AdminDashboard: React.FC = () => {
                   محفظة مدير التطبيق (إجمالي رسوم العمليات)
                 </span>
                 <div className="text-2xl font-bold font-mono text-emerald-400 tabular-nums">
-                  {superAdmin.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-                  <span className="text-xs text-slate-400 font-sans">ر.س</span>
+                  {formatCurrency(superAdmin.walletBalance, { withGrouping: true, includeSymbol: false })}{' '}
+                  <span className="text-xs text-slate-400 font-sans">{currencyLabel}</span>
                 </div>
                 <div className="text-[10px] text-slate-400 pt-1">
                   تتجمع تلقائياً من رسوم كل عملية شراء وبيع خدمات أو تحويل رصيد
@@ -309,7 +350,7 @@ export const AdminDashboard: React.FC = () => {
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
                 <span className="text-[11px] text-slate-400 block">الرسوم العامة الافتراضية للمنصة</span>
                 <div className="text-2xl font-bold font-mono text-cyan-400 tabular-nums">
-                  {superAdmin.defaultFeePercentage}% {superAdmin.defaultFixedFeeAmount > 0 ? `+ ${superAdmin.defaultFixedFeeAmount} ر.س` : ''}
+                  {superAdmin.defaultFeePercentage}% {superAdmin.defaultFixedFeeAmount > 0 ? `+ ${formatCurrency(superAdmin.defaultFixedFeeAmount)}` : ''}
                 </div>
                 <div className="text-[10px] text-slate-400 pt-1">
                   تطبق على جميع العمليات ما لم يتم تخصيص المتجر
@@ -504,7 +545,7 @@ export const AdminDashboard: React.FC = () => {
                         <div className="flex items-center justify-between">
                           <h4 className="font-bold text-sm text-white">{sup.name}</h4>
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                            رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${sup.fixedFeeAmount} ر.س` : ''}
+                            رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${formatCurrency(sup.fixedFeeAmount)}` : ''}
                           </span>
                         </div>
                         <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
@@ -517,7 +558,7 @@ export const AdminDashboard: React.FC = () => {
                       <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
                         <span className="text-slate-400">رصيد مبيعاته:</span>
                         <strong className="text-emerald-400 font-mono font-bold tabular-nums">
-                          {sup.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                          {formatCurrency(sup.walletBalance, { withGrouping: true })}
                         </strong>
                       </div>
                     </div>
@@ -570,7 +611,7 @@ export const AdminDashboard: React.FC = () => {
                           : 'bg-slate-950 border-slate-800 text-slate-400'
                       }`}
                     >
-                      مبلغ مقطوع (ر.س)
+                      مبلغ مقطوع ({currencyLabel})
                     </button>
                     <button
                       type="button"
@@ -604,14 +645,16 @@ export const AdminDashboard: React.FC = () => {
 
                   {(globalFeeType === 'fixed' || globalFeeType === 'both') && (
                     <div>
-                      <label className="block text-slate-400 mb-1">المبلغ المقطوع (ر.س):</label>
+                      <label className="block text-slate-400 mb-1">المبلغ المقطوع ({currencyLabel}):</label>
                       <input
                         type="number"
-                        step="0.25"
+                        step="any"
                         min="0"
-                        max="50"
                         value={globalFixedAmount}
-                        onChange={e => setGlobalFixedAmount(Number(e.target.value))}
+                        onChange={e => {
+                          setGlobalFixedAmount(e.target.value);
+                          setIsGlobalFixedDirty(true);
+                        }}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
                       />
                     </div>
@@ -650,7 +693,8 @@ export const AdminDashboard: React.FC = () => {
                       if (found) {
                         setSupplierFeeType(found.feeType || 'percentage');
                         setSupplierPercentage(found.feePercentage ?? 1.0);
-                        setSupplierFixedAmount(found.fixedFeeAmount ?? 0);
+                        setSupplierFixedAmount(String(Number(convertFromSar(found.fixedFeeAmount ?? 0).toFixed(2))));
+                        setIsSupplierFixedDirty(false);
                       }
                     }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
@@ -688,7 +732,7 @@ export const AdminDashboard: React.FC = () => {
                           : 'bg-slate-950 border-slate-800 text-slate-400'
                       }`}
                     >
-                      مبلغ مقطوع (ر.س)
+                      مبلغ مقطوع ({currencyLabel})
                     </button>
                     <button
                       type="button"
@@ -722,14 +766,16 @@ export const AdminDashboard: React.FC = () => {
 
                   {(supplierFeeType === 'fixed' || supplierFeeType === 'both') && (
                     <div>
-                      <label className="block text-slate-400 mb-1">المبلغ المقطوع (ر.س):</label>
+                      <label className="block text-slate-400 mb-1">المبلغ المقطوع ({currencyLabel}):</label>
                       <input
                         type="number"
-                        step="0.25"
+                        step="any"
                         min="0"
-                        max="50"
                         value={supplierFixedAmount}
-                        onChange={e => setSupplierFixedAmount(Number(e.target.value))}
+                        onChange={e => {
+                          setSupplierFixedAmount(e.target.value);
+                          setIsSupplierFixedDirty(true);
+                        }}
                         className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
                       />
                     </div>
@@ -795,6 +841,7 @@ export const AdminDashboard: React.FC = () => {
                   <label className="block text-slate-400 mb-1">البريد الإلكتروني:</label>
                   <input
                     type="email"
+                    required
                     value={newSupEmail}
                     onChange={e => setNewSupEmail(e.target.value)}
                     placeholder="jamal@supplier.sa"
@@ -802,6 +849,20 @@ export const AdminDashboard: React.FC = () => {
                     dir="ltr"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1">كلمة مرور دخول المتجر:</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newSupPassword}
+                  onChange={e => setNewSupPassword(e.target.value)}
+                  placeholder="•••••••• (6 أحرف على الأقل)"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-mono"
+                  dir="ltr"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -816,10 +877,11 @@ export const AdminDashboard: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 mb-1">مبلغ الرسوم المقطوع (ر.س):</label>
+                  <label className="block text-slate-400 mb-1">مبلغ الرسوم المقطوع ({currencyLabel}):</label>
                   <input
                     type="number"
-                    step="0.25"
+                    step="any"
+                    min="0"
                     value={newSupFixedFee}
                     onChange={e => setNewSupFixedFee(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-mono"
@@ -866,9 +928,11 @@ export const AdminDashboard: React.FC = () => {
             <h3 className="font-bold text-base text-white">تسوية مبالغ محفظة الإدارة للبنك</h3>
             <form onSubmit={handleSettleSubmit} className="space-y-3">
               <div>
-                <label className="block text-slate-400 mb-1">المبلغ المراد تحويله للبنك (ر.س):</label>
+                <label className="block text-slate-400 mb-1">المبلغ المراد تحويله للبنك ({currencyLabel}):</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.01"
                   required
                   value={settleAmount}
                   onChange={e => setSettleAmount(e.target.value ? Number(e.target.value) : '')}
@@ -889,7 +953,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="p-3 rounded-xl bg-slate-950 text-slate-400 text-[11px] leading-relaxed">
-                * سيتم خصم المبلغ من محفظة رسوم التطبيق (الرصيد المتاح: {superAdmin.walletBalance.toFixed(2)} ر.س).
+                * سيتم خصم المبلغ من محفظة رسوم التطبيق (الرصيد المتاح: {formatCurrency(superAdmin.walletBalance)}).
               </div>
 
               {!settleAvailability.available && (
@@ -943,9 +1007,11 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1">المبلغ المحول (ر.س):</label>
+                <label className="block text-slate-400 mb-1">المبلغ المحول ({currencyLabel}):</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.01"
                   required
                   value={agentAmount}
                   onChange={e => setAgentAmount(e.target.value ? Number(e.target.value) : '')}

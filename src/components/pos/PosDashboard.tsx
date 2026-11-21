@@ -62,7 +62,7 @@ import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getStoreCatalogEmptyMessage } from '../../utils/availabilityMessages';
 
 export const PosDashboard: React.FC = () => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, calculateFee, showToast, confirmClientOtpRead } = useApp();
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, showToast, confirmClientOtpRead, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency } = useApp();
 
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
   const [searchService, setSearchService] = useState('');
@@ -229,6 +229,8 @@ export const PosDashboard: React.FC = () => {
         feeAmount: 0,
         totalAmount: clientOrderTotal,
         paymentMethod: order.paymentMethod,
+        currency: activeCurrency,
+        exchangeRateSarPerUsd: activeExchangeRate,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
         supplier: {
@@ -428,7 +430,7 @@ export const PosDashboard: React.FC = () => {
                 {canSeeGiftsInStore && (
                   <span className="px-2.5 py-1 rounded-xl bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold flex items-center gap-1 text-[11px]">
                     <Gift className="w-3.5 h-3.5 text-purple-400" />
-                    <span>هدايا وعروض مجانية مخصصة لك (0.00 ر.س)</span>
+                    <span>هدايا وعروض مجانية مخصصة لك ({formatCurrency(0)})</span>
                   </span>
                 )}
               </div>
@@ -446,7 +448,7 @@ export const PosDashboard: React.FC = () => {
             >
               <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
                 <Gift className="w-4 h-4 text-purple-300" />
-                <span>🎁 هدايا وعروض مجانية متاحة (السعر: 0.00 ر.س - مجاني)</span>
+                <span>🎁 هدايا وعروض مجانية متاحة (السعر: {formatCurrency(0)} - مجاني)</span>
               </div>
               <div className="text-[10px] text-purple-200/80 mt-0.5">
                 {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر لاستعراض الهدايا المجانية المخصصة لك.'}
@@ -587,8 +589,8 @@ export const PosDashboard: React.FC = () => {
             <div>
               <span className="text-[11px] text-slate-400 block">رصيد محفظتي المسبق لدى المتجر</span>
               <div className="text-2xl font-bold font-mono text-white tabular-nums">
-                {currentPos.walletBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
-                <span className="text-xs text-amber-400 font-sans font-medium">ر.س</span>
+                {formatCurrency(currentPos.walletBalance, { includeSymbol: false, withGrouping: true })}{' '}
+                <span className="text-xs text-amber-400 font-sans font-medium">{currencyLabel}</span>
               </div>
             </div>
           </div>
@@ -835,7 +837,7 @@ export const PosDashboard: React.FC = () => {
                   })
                 : null;
               const isGiftDeactivated = Boolean(giftStatus && !giftStatus.isActive);
-              const tierPriceWithFee = (isGiftService ? 0 : pricing.totalAmount).toFixed(2);
+              const tierPriceWithFee = formatCurrency(isGiftService ? 0 : pricing.totalAmount, { includeSymbol: false });
 
               return (
                 <div
@@ -883,7 +885,7 @@ export const PosDashboard: React.FC = () => {
                             </h3>
                             {isGiftService && (
                               <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[10px] font-bold">
-                                🎁 هدية مجانية · 0.00 ر.س
+                                🎁 هدية مجانية · {formatCurrency(0)}
                               </span>
                             )}
                             {isGiftDeactivated && giftStatus && (
@@ -1003,7 +1005,7 @@ export const PosDashboard: React.FC = () => {
                         <span className="text-[10px] text-purple-300 block">سعر الهدية لك:</span>
                         <div className="flex items-baseline gap-1.5 flex-wrap">
                           <span className="text-xl font-bold font-mono tabular-nums text-purple-300">
-                            0.00 <span className="text-xs font-normal">ر.س</span>
+                            {formatCurrency(0, { includeSymbol: false })} <span className="text-xs font-normal">{currencyLabel}</span>
                           </span>
                           <span className="text-[11px] font-bold text-emerald-400">(مجاني)</span>
                         </div>
@@ -1025,12 +1027,12 @@ export const PosDashboard: React.FC = () => {
                           </span>
                           {isGiftService ? (
                             <span className="text-lg font-bold font-mono tabular-nums text-purple-300">
-                              0.00 <span className="text-[11px] font-normal">ر.س</span>{' '}
+                              {formatCurrency(0, { includeSymbol: false })} <span className="text-[11px] font-normal">{currencyLabel}</span>{' '}
                               <span className="text-xs font-sans text-emerald-400">(مجاني)</span>
                             </span>
                           ) : (
                             <span className="text-lg font-bold font-mono tabular-nums text-amber-400">
-                              {tierPriceWithFee} <span className="text-[11px] font-normal">ر.س</span>
+                              {tierPriceWithFee} <span className="text-[11px] font-normal">{currencyLabel}</span>
                             </span>
                           )}
                         </div>
@@ -1041,12 +1043,12 @@ export const PosDashboard: React.FC = () => {
                           </span>
                           {isGiftService || packagePricing.isFreeGiftApplied ? (
                             <span className="text-lg font-bold font-mono tabular-nums text-purple-300">
-                              0.00 <span className="text-[11px] font-normal">ر.س</span>{' '}
+                              {formatCurrency(0, { includeSymbol: false })} <span className="text-[11px] font-normal">{currencyLabel}</span>{' '}
                               <span className="text-xs font-sans text-emerald-400">(مجاني)</span>
                             </span>
                           ) : (
                             <span className="text-lg font-bold font-mono tabular-nums text-cyan-300">
-                              {packagePricing.totalAmount.toFixed(2)} <span className="text-[11px] font-normal">ر.س</span>
+                              {formatCurrency(packagePricing.totalAmount, { includeSymbol: false })} <span className="text-[11px] font-normal">{currencyLabel}</span>
                             </span>
                           )}
                         </div>
@@ -1066,18 +1068,18 @@ export const PosDashboard: React.FC = () => {
                           {isGiftService ? (
                             <>
                               <span className="text-xl font-bold font-mono tabular-nums text-purple-300">
-                                0.00 <span className="text-xs font-normal">ر.س</span>
+                                {formatCurrency(0, { includeSymbol: false })} <span className="text-xs font-normal">{currencyLabel}</span>
                               </span>
                               <span className="text-xs font-bold text-emerald-400">(مجاني)</span>
                             </>
                           ) : (
                             <span className="text-xl font-bold font-mono tabular-nums text-amber-400">
-                              {tierPriceWithFee} <span className="text-xs font-normal">ر.س</span>
+                              {tierPriceWithFee} <span className="text-xs font-normal">{currencyLabel}</span>
                             </span>
                           )}
                           {isGiftService && pricing.originalTierPrice > 0 && (
                             <span className="text-xs text-slate-500 line-through font-mono">
-                              {pricing.originalTierPrice.toFixed(2)} ر.س
+                              {formatCurrency(pricing.originalTierPrice)}
                             </span>
                           )}
                         </div>
@@ -1355,9 +1357,9 @@ export const PosDashboard: React.FC = () => {
                         const orderCat = orderSrv ? catalogs.find(c => c.id === orderSrv.catalogId) : undefined;
                         const isFreeGiftOrder = Boolean(order.isFreeGiftOrder || (orderCat && isCatalogFreeGifts(orderCat) && order.costPrice === 0));
                         if (isFreeGiftOrder) {
-                          return <span className="text-purple-300 font-bold">0.00 ر.س <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>;
+                          return <span className="text-purple-300 font-bold">{formatCurrency(0)} <span className="text-xs font-sans text-emerald-400">(مجاني)</span></span>;
                         }
-                        return `${order.totalDeducted.toFixed(2)} ر.س`;
+                        return formatCurrency(order.totalDeducted);
                       })()}
                     </div>
                   </div>
