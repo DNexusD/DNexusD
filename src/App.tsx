@@ -95,9 +95,9 @@ export default function App() {
         <ToastContainer />
         <Header />
         
-        <div className="flex-1">
+        <div className="flex-1 w-full">
           <MobileFrame>
-            <div className="p-4 sm:p-6 w-full">
+            <div className="w-full p-4 sm:p-6">
               <MainContent />
             </div>
           </MobileFrame>
@@ -106,17 +106,17 @@ export default function App() {
         {/* Clean Footer adhering to Section 1.B & 1.D (no ornamental engines or telemetry) */}
         <footer className="border-t border-slate-900 bg-slate-950/90 py-5 text-center text-xs text-slate-500">
           <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <img 
                 src="/assets/aistudio/IMG-20261106-WA0058_54921a02.jpg" 
                 alt="DNexusD" 
-                className="w-5 h-5 rounded object-contain bg-white p-0.5" 
+                className="w-5 h-5 rounded object-contain bg-white p-0.5 shrink-0" 
               />
-              <span className="font-mono font-semibold text-slate-300">منصة DNexusD</span>
-              <span className="mx-1 text-slate-600">·</span>
-              <span>ملتقى الخدمات الرقمية المتكاملة ونقاط البيع</span>
+              <span className="font-mono font-semibold text-slate-300 text-[11px] leading-none whitespace-nowrap">منصة DNexusD</span>
+              <span className="text-slate-600 select-none text-[10px]">·</span>
+              <span className="text-[11px] text-slate-400 leading-none whitespace-nowrap">ملتقى الخدمات الرقمية المتكاملة ونقاط البيع</span>
             </div>
-            <div className="text-[11px] text-slate-600 font-mono">
+            <div className="text-[10px] text-slate-600 font-mono">
               جميع العمليات المالية والتسعيرات متوافقة مع أنظمة نقاط البيع والمحافظ المسبقة
             </div>
           </div>

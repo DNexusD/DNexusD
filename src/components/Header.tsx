@@ -52,7 +52,7 @@ export const Header: React.FC = () => {
 
       {/* Sub-bar: Active Interface Persona Selector */}
       {isAuthenticated && (
-        <div className="bg-slate-900 border-t border-slate-800/80 px-4 py-2 text-xs">
+        <div className="bg-slate-900 border-t border-slate-800/80 px-4 sm:px-6 py-2 text-xs w-full">
           <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           {role === 'pos_client' && (
             <div className="flex flex-wrap items-center gap-2">

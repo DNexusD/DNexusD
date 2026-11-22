@@ -677,145 +677,141 @@ export const SupplierDashboard: React.FC = () => {
 
       {/* Supplier Top Header Card */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-4 sm:p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex flex-col gap-2.5">
-            <div className="flex items-center gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden">
+        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
+          <div className="flex flex-col gap-3 min-w-0 flex-1">
+            <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden shadow-inner">
                 {supplier.logoUrl ? (
                   <img src={supplier.logoUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
                   <Building2 className="w-7 h-7" />
                 )}
               </div>
-              <div>
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="flex items-center gap-2 flex-nowrap whitespace-nowrap">
-                      <h1 className="text-base sm:text-lg lg:text-xl font-bold text-white tracking-tight flex items-center gap-2 flex-nowrap whitespace-nowrap">
-                        <span className="text-white font-bold whitespace-nowrap">{supplier.storeName}</span>
-                        <span className="text-slate-600 font-normal select-none">·</span>
-                        <span className="text-amber-400 font-semibold text-sm sm:text-base whitespace-nowrap">
-                          {supplier.name}
-                        </span>
-                      </h1>
-                      {isStoreOwner && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditProfileSection('profile');
-                              setShowEditProfileModal(true);
-                            }}
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 whitespace-nowrap inline-flex items-center justify-center"
-                            title="تعديل بيانات المتجر والشعار وروابط التواصل"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditProfileSection('social');
-                              setShowEditProfileModal(true);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 whitespace-nowrap inline-flex items-center gap-1.5"
-                            title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
-                          >
-                            <Share2 className="w-3 h-3 text-amber-400" />
-                            <span>روابط التواصل (اتصل بالمتجر)</span>
-                          </button>
-                        </>
-                      )}
-                  </div>
-                  </div>
-                  {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
-                  <div className="text-xs text-slate-300 mt-1 flex items-center gap-2 flex-wrap">
-                    {activeEmployee ? (
-                      <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs">
-                        <UserCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                        <span className="text-slate-400">دخول بصلاحية موظف:</span>
-                        <strong className="text-white font-bold">{activeEmployee.name}</strong>
-                        <span className="text-slate-600 mx-0.5">·</span>
-                        <span className="text-cyan-300 font-semibold">{activeEmployee.roleTitle}</span>
-                        <span className="text-slate-600 mx-0.5">·</span>
-                        <div className="flex flex-wrap items-center gap-1">
-                          {EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).length > 0 ? (
-                            EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).map(b => (
-                              <span
-                                key={b.key}
-                                className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold"
-                              >
-                                {b.labelAr}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px]">
-                              صلاحيات مقيدة
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h1 className="text-base sm:text-lg lg:text-xl font-bold text-white tracking-tight flex flex-wrap items-center gap-2">
+                    <span className="text-white font-bold">{supplier.storeName}</span>
+                    <span className="text-slate-600 font-normal select-none">·</span>
+                    <span className="text-amber-400 font-semibold text-sm sm:text-base">
+                      {supplier.name}
+                    </span>
+                  </h1>
+                  {isStoreOwner && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditProfileSection('profile');
+                          setShowEditProfileModal(true);
+                        }}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 inline-flex items-center justify-center cursor-pointer shadow-sm"
+                        title="تعديل بيانات المتجر والشعار وروابط التواصل"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditProfileSection('social');
+                          setShowEditProfileModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
+                      >
+                        <Share2 className="w-3 h-3 text-amber-400" />
+                        <span>روابط التواصل</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
+                <div className="text-xs text-slate-300 flex items-center gap-2 flex-wrap">
+                  {activeEmployee ? (
+                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs">
+                      <UserCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span className="text-slate-400">دخول بصلاحية موظف:</span>
+                      <strong className="text-white font-bold">{activeEmployee.name}</strong>
+                      <span className="text-slate-600 mx-0.5">·</span>
+                      <span className="text-cyan-300 font-semibold">{activeEmployee.roleTitle}</span>
+                      <span className="text-slate-600 mx-0.5">·</span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).length > 0 ? (
+                          EMPLOYEE_PERMISSION_BADGES.filter(b => perms[b.key]).map(b => (
+                            <span
+                              key={b.key}
+                              className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold"
+                            >
+                              {b.labelAr}
                             </span>
-                          )}
-                        </div>
+                          ))
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px]">
+                            صلاحيات مقيدة
+                          </span>
+                        )}
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
-                          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                          <span>مالك المتجر (صلاحيات كاملة)</span>
-                        </span>
-                        <span className="text-[11px] text-slate-400">
-                          {(supplier.employees?.length || 0) > 0
-                            ? `عدد موظفي المكتب المسجلين: ${supplier.employees?.length}`
-                            : 'يمكن لمالك المتجر إضافة موظفين وتحديد صلاحياتهم من قسم الموظفين'}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                        <span>مالك المتجر (صلاحيات كاملة)</span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        {(supplier.employees?.length || 0) > 0
+                          ? `عدد موظفي المكتب المسجلين: ${supplier.employees?.length}`
+                          : 'يمكن لمالك المتجر إضافة موظفين وتحديد صلاحياتهم من قسم الموظفين'}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Supplier QR & ID - placed under logo, trade name, and name */}
-            <div className="flex items-center gap-2 bg-slate-950/70 px-2.5 py-1.5 rounded-xl border border-slate-800/80 w-fit shrink-0">
-              <button
-                type="button"
-                onClick={handleDownloadQrImage}
-                className="p-0.5 bg-white rounded shrink-0 shadow-sm hover:scale-105 hover:ring-2 hover:ring-amber-400 transition-all cursor-pointer group relative"
-                title="اضغط لتحميل صورة الكيو أر إلى جهازك"
-              >
-                <QRCodeSVG id="supplier-qr-code-svg" value={supplier.qrCodeValue || supplier.id} size={20} />
-              </button>
+            {/* Bottom Row: QR & ID Bar + Social Links */}
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <div className="flex items-center gap-2 bg-slate-950/70 px-2.5 py-1.5 rounded-xl border border-slate-800/80 w-fit shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDownloadQrImage}
+                  className="p-0.5 bg-white rounded shrink-0 shadow-sm hover:scale-105 hover:ring-2 hover:ring-amber-400 transition-all cursor-pointer group relative"
+                  title="اضغط لتحميل صورة الكيو أر إلى جهازك"
+                >
+                  <QRCodeSVG id="supplier-qr-code-svg" value={supplier.qrCodeValue || supplier.id} size={20} />
+                </button>
 
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-[11px] font-semibold text-slate-400">المعرف:</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyField(supplier.id, 'supplier_id', 'المعرف')}
+                    className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+                    title="نسخ المعرف"
+                  >
+                    {copiedFields['supplier_id'] ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleShareSupplierInfo}
+                    className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+                    title="مشاركة الكيو أر والمعرف"
+                  >
+                    <Share2 className="w-3 h-3" />
+                  </button>
+                </div>
+
                 <span className="font-mono text-amber-400 font-bold tracking-wider select-all text-xs">{supplier.id}</span>
               </div>
 
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleCopyField(supplier.id, 'supplier_id', 'المعرف')}
-                  className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0"
-                  title="نسخ المعرف"
-                >
-                  {copiedFields['supplier_id'] ? (
-                    <Check className="w-3 h-3 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3 h-3" />
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleShareSupplierInfo}
-                  className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0"
-                  title="مشاركة الكيو أر والمعرف"
-                >
-                  <Share2 className="w-3 h-3" />
-                </button>
-              </div>
+              {supplier.socialLinks && (
+                <SupplierContactLinks socialLinks={supplier.socialLinks} className="pt-0" />
+              )}
             </div>
-
-            {supplier.socialLinks && (
-              <SupplierContactLinks socialLinks={supplier.socialLinks} className="pt-0.5" />
-            )}
           </div>
 
           {/* Quick Actions */}
