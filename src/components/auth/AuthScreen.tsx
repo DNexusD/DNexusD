@@ -490,7 +490,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center p-1 sm:p-4">
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-2xl sm:max-w-3xl">
         
         {/* Main Authentication Box */}
         <div className="rounded-2xl sm:rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden backdrop-blur-xl">

@@ -85,7 +85,7 @@ export const ResetPasswordView: React.FC<ResetPasswordViewProps> = ({
 
   return (
     <div dir="rtl" className="min-h-[75vh] flex items-center justify-center p-2 sm:p-4">
-      <div className="w-full max-w-lg rounded-2xl sm:rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden p-5 sm:p-6 space-y-5">
+      <div className="w-full max-w-2xl sm:max-w-3xl rounded-2xl sm:rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden p-5 sm:p-6 space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
