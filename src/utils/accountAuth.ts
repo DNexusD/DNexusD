@@ -549,3 +549,50 @@ export function buildAuthUserFromIdentity(
     },
   };
 }
+
+/**
+ * Strictly filters orders belonging to a specific POS client ID.
+ * Returns an empty array if posId is empty so unauthenticated/unresolved sessions never see other clients' orders.
+ */
+export function filterOrdersForPosClient<T extends { posId?: string }>(
+  orders: T[],
+  posId?: string | null
+): T[] {
+  const cleanPosId = typeof posId === 'string' ? posId.trim() : '';
+  if (!cleanPosId || !Array.isArray(orders)) return [];
+  return orders.filter((o) => o && o.posId === cleanPosId);
+}
+
+/**
+ * Strictly determines whether a notification belongs to a given POS client.
+ * Never returns notifications belonging to another POS client or another store.
+ */
+export function isNotificationForPosClient(
+  notif: { posId?: string; supplierId?: string; targetRole?: string } | null | undefined,
+  posId?: string | null,
+  supplierId?: string | null
+): boolean {
+  const cleanPosId = typeof posId === 'string' ? posId.trim() : '';
+  if (!notif || !cleanPosId) return false;
+  if (notif.targetRole === 'supplier') return false;
+
+  if (notif.posId) {
+    return notif.posId === cleanPosId;
+  }
+
+  // Broadcast POS notifications without a specific posId must explicitly target POS clients and match the client's supplier if specified
+  if (notif.targetRole !== 'pos') return false;
+  const cleanSupId = typeof supplierId === 'string' ? supplierId.trim() : '';
+  if (notif.supplierId && cleanSupId && notif.supplierId !== cleanSupId) {
+    return false;
+  }
+  return true;
+}
+
+export function filterNotificationsForPosClient<
+  T extends { posId?: string; supplierId?: string; targetRole?: string }
+>(notifications: T[], posId?: string | null, supplierId?: string | null): T[] {
+  if (!Array.isArray(notifications)) return [];
+  return notifications.filter((n) => isNotificationForPosClient(n, posId, supplierId));
+}
+

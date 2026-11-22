@@ -255,12 +255,18 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
               </div>
 
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {posClients.filter(p => p.id !== currentPos.id).length === 0 ? (
-                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 text-center">
-                    لا تتوفر نقاط بيع أو وكلاء آخرين مسجلين حالياً.
-                  </div>
-                ) : (
-                  posClients.filter(p => p.id !== currentPos.id).map(pos => (
+                {(() => {
+                  const sameStoreRecipients = posClients.filter(
+                    p => p.id !== currentPos.id && (!currentPos.supplierId || p.supplierId === currentPos.supplierId)
+                  );
+                  if (sameStoreRecipients.length === 0) {
+                    return (
+                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 text-center">
+                        لا تتوفر نقاط بيع أو وكلاء آخرين مسجلين حالياً.
+                      </div>
+                    );
+                  }
+                  return sameStoreRecipients.map(pos => (
                     <button
                       key={pos.id}
                       type="button"
@@ -273,8 +279,8 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
                       </div>
                       <span className="font-mono text-cyan-400 font-bold">{pos.posCode}</span>
                     </button>
-                  ))
-                )}
+                  ));
+                })()}
               </div>
             </div>
           </div>

@@ -10,6 +10,9 @@ import {
   resolveAccountIdentityByEmail,
   resolveScopedCurrentPos,
   resolveScopedSupplier,
+  filterOrdersForPosClient,
+  isNotificationForPosClient,
+  filterNotificationsForPosClient,
 } from './accountAuth';
 import { AuthUser, OfficeEmployee, POSClient, SuperAdmin, Supplier } from '../types';
 
@@ -363,3 +366,42 @@ test('checkEmailRegistrationConflict prevents cross-role email hijacking', () =>
     false
   );
 });
+
+test('filterOrdersForPosClient strictly isolates orders by posId and returns empty when posId is missing', () => {
+  const orders = [
+    { id: 'ord-1', posId: 'pos-1', serviceName: 'PUBG' },
+    { id: 'ord-2', posId: 'pos-2', serviceName: 'FreeFire' },
+    { id: 'ord-3', posId: '', serviceName: 'Orphan' },
+  ];
+
+  const pos1Orders = filterOrdersForPosClient(orders, 'pos-1');
+  assert.equal(pos1Orders.length, 1);
+  assert.equal(pos1Orders[0].id, 'ord-1');
+
+  assert.equal(filterOrdersForPosClient(orders, '').length, 0);
+  assert.equal(filterOrdersForPosClient(orders, undefined).length, 0);
+});
+
+test('filterNotificationsForPosClient never leaks notifications from other clients, stores, or supplier-only alerts', () => {
+  const notifications = [
+    { id: 'n-pos1', posId: 'pos-1', supplierId: 'sup-1', targetRole: 'pos' },
+    { id: 'n-pos2', posId: 'pos-2', supplierId: 'sup-1', targetRole: 'pos' },
+    { id: 'n-sup', posId: 'pos-1', supplierId: 'sup-1', targetRole: 'supplier' },
+    { id: 'n-bcast-sup1', supplierId: 'sup-1', targetRole: 'pos' },
+    { id: 'n-bcast-sup2', supplierId: 'sup-2', targetRole: 'pos' },
+    { id: 'n-ambiguous', supplierId: 'sup-1' },
+  ];
+
+  const pos1Notifs = filterNotificationsForPosClient(notifications, 'pos-1', 'sup-1');
+  assert.deepEqual(
+    pos1Notifs.map((n) => n.id),
+    ['n-pos1', 'n-bcast-sup1']
+  );
+
+  assert.equal(isNotificationForPosClient(notifications[1], 'pos-1', 'sup-1'), false);
+  assert.equal(isNotificationForPosClient(notifications[2], 'pos-1', 'sup-1'), false);
+  assert.equal(isNotificationForPosClient(notifications[4], 'pos-1', 'sup-1'), false);
+  assert.equal(isNotificationForPosClient(notifications[5], 'pos-1', 'sup-1'), false);
+  assert.equal(filterNotificationsForPosClient(notifications, '', 'sup-1').length, 0);
+});
+

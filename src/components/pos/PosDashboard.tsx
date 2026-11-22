@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TIERS_CONFIG, DigitalService } from '../../types';
 import { 
@@ -31,7 +31,10 @@ import {
   Bell,
   Package,
   FileDown,
-  Loader2
+  Loader2,
+  LogOut,
+  Trash2,
+  Award
 } from 'lucide-react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
@@ -60,13 +63,47 @@ import {
 } from '../../utils/voucherWarehouses';
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getStoreCatalogEmptyMessage } from '../../utils/availabilityMessages';
+import { filterOrdersForPosClient } from '../../utils/accountAuth';
 
 export const PosDashboard: React.FC = () => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, voucherWarehouses, orders, depositRequests, loanRepaymentRequests, supplierBankAccounts, platformSettings, activeNavTab, setActiveNavTab, supplier, showToast, confirmClientOtpRead, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency } = useApp();
+  const {
+    currentPos,
+    currentPosSupplier,
+    superAdmin,
+    catalogs,
+    services,
+    voucherWarehouses,
+    orders,
+    depositRequests,
+    loanRepaymentRequests,
+    supplierBankAccounts,
+    platformSettings,
+    activeNavTab,
+    setActiveNavTab,
+    supplier,
+    showToast,
+    confirmClientOtpRead,
+    activeCurrency,
+    activeExchangeRate,
+    currencyLabel,
+    formatCurrency,
+    clientNotifications,
+    unreadPosNotificationsCount,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    clearAllNotifications,
+    logout,
+  } = useApp();
 
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
   const [searchService, setSearchService] = useState('');
-  
+  const [showNotificationsPopover, setShowNotificationsPopover] = useState(false);
+
+  const clientOrders = useMemo(
+    () => filterOrdersForPosClient(orders, currentPos.id),
+    [orders, currentPos.id]
+  );
+
   // Modals
   const [activePurchaseService, setActivePurchaseService] = useState<DigitalService | null>(null);
   const [showDepositModal, setShowDepositModal] = useState(false);
@@ -110,7 +147,7 @@ export const PosDashboard: React.FC = () => {
         clientTier: currentPos.tier,
         clientCanViewGifts: Boolean(currentPos.canViewGifts),
         usedGiftServiceIds: currentPos.usedGiftServiceIds,
-        orders,
+        orders: clientOrders,
         nowMs,
       });
     })
@@ -156,8 +193,16 @@ export const PosDashboard: React.FC = () => {
   const [copiedNotificationCode, setCopiedNotificationCode] = useState(false);
 
   useEffect(() => {
+    setSupplierOtpNotification(null);
+    setSelectedCatalogId('all');
+    setSearchService('');
+    setShowNotificationsPopover(false);
+  }, [currentPos.id]);
+
+  useEffect(() => {
     const handleLiveReply = (e: any) => {
-      const { orderId, message } = e.detail || {};
+      const { orderId, message, posId } = e.detail || {};
+      if (posId && posId !== currentPos.id) return;
       if (message) {
         setSupplierOtpNotification({ orderId: orderId || '', message, timestamp: Date.now() });
         showToast({
@@ -174,6 +219,7 @@ export const PosDashboard: React.FC = () => {
       if (e.key === 'digipos_live_supplier_reply' && e.newValue) {
         try {
           const data = JSON.parse(e.newValue);
+          if (data?.posId && data.posId !== currentPos.id) return;
           if (data?.message) {
             setSupplierOtpNotification({
               orderId: data.orderId || '',
@@ -192,7 +238,7 @@ export const PosDashboard: React.FC = () => {
       window.removeEventListener('digipos_supplier_reply', handleLiveReply);
       window.removeEventListener('storage', handleStorage);
     };
-  }, []);
+  }, [currentPos.id, showToast]);
 
   const handleCopyPosCode = () => {
     navigator.clipboard.writeText(currentPos.posCode);
@@ -285,7 +331,7 @@ export const PosDashboard: React.FC = () => {
         clientTier: currentPos.tier,
         clientCanViewGifts: Boolean(currentPos.canViewGifts),
         usedGiftServiceIds: currentPos.usedGiftServiceIds,
-        orders,
+        orders: clientOrders,
         nowMs,
       });
       return giftStatus.isTargeted;
@@ -534,12 +580,143 @@ export const PosDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* POS Code & QR Action + Tier Badge */}
+          {/* POS Code & QR Action + Tier Badge + Client Notifications & Logout */}
           <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${tier.badgeColor} ${tier.borderColor} ${tier.textColor}`}>
                 رتبة الحساب: {tier.nameAr}
               </span>
+
+              {/* Client Notifications Bell + Popover */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowNotificationsPopover(!showNotificationsPopover)}
+                  className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                  title="الإشعارات والتنبيهات الخاصة بحسابك"
+                >
+                  <Bell className="w-4 h-4 text-amber-400" />
+                  <span className="hidden sm:inline">الإشعارات</span>
+                  {unreadPosNotificationsCount > 0 && (
+                    <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white font-black text-[10px] flex items-center justify-center shadow-sm animate-pulse">
+                      {unreadPosNotificationsCount > 99 ? '99+' : unreadPosNotificationsCount}
+                    </span>
+                  )}
+                </button>
+
+                {showNotificationsPopover && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setShowNotificationsPopover(false)}
+                    />
+                    <div className="absolute left-0 mt-2 w-80 sm:w-96 bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl z-50 overflow-hidden text-right animate-in fade-in zoom-in-95 duration-150">
+                      <div className="p-3.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Bell className="w-4 h-4 text-amber-400" />
+                          <h3 className="font-bold text-white text-sm">إشعارات العميل</h3>
+                          {unreadPosNotificationsCount > 0 && (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30">
+                              {unreadPosNotificationsCount} جديد
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {clientNotifications.length > 0 && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={markAllNotificationsAsRead}
+                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer"
+                                title="تحديد الكل كقراءة"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>قراءة الكل</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={clearAllNotifications}
+                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-rose-400 transition-colors flex items-center gap-1 cursor-pointer"
+                                title="مسح الإشعارات"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>مسح</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60 custom-scrollbar">
+                        {clientNotifications.length === 0 ? (
+                          <div className="p-8 text-center text-slate-400 space-y-2">
+                            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center mx-auto text-slate-500">
+                              <Bell className="w-6 h-6" />
+                            </div>
+                            <p className="text-xs font-medium text-slate-300">لا توجد إشعارات حالياً</p>
+                            <p className="text-[11px] text-slate-500">
+                              ستصلك هنا التنبيهات وإشعارات الشحن والرصيد المجاني والسلف والطلبات من المتجر
+                            </p>
+                          </div>
+                        ) : (
+                          clientNotifications.map((notif) => {
+                            const isUnread = !notif.isRead;
+                            return (
+                              <div
+                                key={notif.id}
+                                onClick={() => markNotificationAsRead(notif.id)}
+                                className={`p-3.5 transition-colors cursor-pointer flex items-start gap-3 ${
+                                  isUnread ? 'bg-amber-500/10 hover:bg-amber-500/15' : 'hover:bg-slate-800/50'
+                                }`}
+                              >
+                                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                                  notif.type === 'deposit'
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : notif.type === 'loan'
+                                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                                    : notif.type === 'loan_repayment'
+                                    ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                                    : notif.type === 'receiver_confirmation'
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : notif.type === 'tier_upgrade'
+                                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                }`}>
+                                  {notif.type === 'deposit' ? <Wallet className="w-4 h-4" /> :
+                                   notif.type === 'loan' ? <HandCoins className="w-4 h-4" /> :
+                                   notif.type === 'loan_repayment' ? <CreditCard className="w-4 h-4" /> :
+                                   notif.type === 'receiver_confirmation' ? <ShieldCheck className="w-4 h-4" /> :
+                                   notif.type === 'tier_upgrade' ? <Award className="w-4 h-4" /> :
+                                   notif.type === 'order_status' ? <CheckCircle2 className="w-4 h-4" /> :
+                                   <Bell className="w-4 h-4" />}
+                                </div>
+                                <div className="flex-1 min-w-0 space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-bold text-xs text-white truncate">{notif.title}</span>
+                                    {isUnread && (
+                                      <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-slate-300 leading-normal">{notif.message}</p>
+                                  <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
+                                    <span className="text-amber-400/80 font-medium">
+                                      المتجر: {notif.supplierName || currentPosSupplier.storeName || currentPosSupplier.name || ''}
+                                    </span>
+                                    <span className="flex items-center gap-1 dir-ltr">
+                                      <Clock className="w-3 h-3 text-slate-400" />
+                                      {notif.createdAt}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
 
               <button
                 onClick={() => setShowQrModal(true)}
@@ -556,6 +733,16 @@ export const PosDashboard: React.FC = () => {
               >
                 <Edit3 className="w-3.5 h-3.5 text-amber-400" />
                 <span>تعديل البيانات</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={logout}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-colors cursor-pointer"
+                title="تسجيل الخروج والعودة لشاشة الدخول"
+              >
+                <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                <span>تسجيل الخروج</span>
               </button>
             </div>
 
@@ -650,7 +837,7 @@ export const PosDashboard: React.FC = () => {
           }`}
         >
           <History className="w-4 h-4 shrink-0" />
-          <span>سجل العمليات السابقة ({orders.length})</span>
+          <span>سجل العمليات السابقة ({clientOrders.length})</span>
         </button>
 
         {currentPos.canRequestLoans && (
@@ -1161,11 +1348,16 @@ export const PosDashboard: React.FC = () => {
                 متابعة حالة شحن الأيدي من اللعبة لدى المتجر، والأكواد المستلمة، وتفاصيل العمليات.
               </p>
             </div>
-            <span className="text-xs text-slate-400 font-mono">إجمالي الطلبات: {orders.length}</span>
+            <span className="text-xs text-slate-400 font-mono">إجمالي الطلبات: {clientOrders.length}</span>
           </div>
 
           <div className="space-y-3">
-            {orders.map(order => {
+            {clientOrders.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center text-slate-400 text-xs">
+                لا توجد طلبات أو عمليات شحن مسجلة لهذا الحساب حتى الآن.
+              </div>
+            ) : (
+            clientOrders.map(order => {
               const isPending = order.status === 'pending_supplier' || order.status === 'in_progress';
               const isPlayerId = order.deliveryMethod === 'player_id';
 
@@ -1365,7 +1557,8 @@ export const PosDashboard: React.FC = () => {
                   </div>
                 </div>
               );
-            })}
+            })
+            )}
           </div>
         </div>
       )}

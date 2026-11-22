@@ -18,8 +18,8 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
   const { catalogs, supplier, posClients, voucherWarehouses, addService, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertFromSar, convertToSar, formatCurrency } = useApp();
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
-  const supplierClients = posClients.filter(c => !c.supplierId || c.supplierId === supplier.id);
-  const targetableClients = supplierClients.length > 0 ? supplierClients : posClients;
+  const supplierClients = posClients.filter(c => c.supplierId === supplier.id);
+  const targetableClients = supplierClients;
 
   const [catalogId, setCatalogId] = useState(supplierCatalogs[0]?.id || '');
   const [nameAr, setNameAr] = useState('');

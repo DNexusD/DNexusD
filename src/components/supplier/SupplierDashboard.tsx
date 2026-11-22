@@ -55,7 +55,8 @@ import {
   AlertTriangle,
   Archive,
   Coins,
-  ArrowRightLeft
+  ArrowRightLeft,
+  LogOut
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { AddServiceModal } from './AddServiceModal';
@@ -132,7 +133,8 @@ export const SupplierDashboard: React.FC = () => {
     activeExchangeRate,
     setActiveCurrency,
     updateSupplierExchangeRate,
-    formatCurrency
+    formatCurrency,
+    logout
   } = useApp();
 
   const supplierCatalogs = useMemo(
@@ -914,6 +916,16 @@ export const SupplierDashboard: React.FC = () => {
                 </span>
               )}
             </button>
+
+            <button
+              type="button"
+              onClick={logout}
+              className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              title="تسجيل الخروج والعودة لشاشة الدخول"
+            >
+              <LogOut className="w-4 h-4 text-rose-400" />
+              <span>تسجيل الخروج</span>
+            </button>
           </div>
         </div>
 
@@ -1351,7 +1363,7 @@ export const SupplierDashboard: React.FC = () => {
           {/* Catalogs Pills */}
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             {supplierCatalogs.map(cat => {
-              const catServices = services.filter(s => s.catalogId === cat.id);
+              const catServices = supplierServices.filter(s => s.catalogId === cat.id);
               const isGiftCat = isCatalogFreeGifts(cat);
               const isFixedAdminCat = Boolean(cat.isFixedByAdmin || cat.supplierId === 'all');
               const canModify = canSupplierModifyCatalog(cat, role);

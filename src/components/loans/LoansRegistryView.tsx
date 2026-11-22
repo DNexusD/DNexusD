@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   HandCoins,
@@ -66,6 +66,13 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
     'all' | 'pending' | 'approved' | 'rejected'
   >('pending');
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>(filterSupplierId || 'all');
+  useEffect(() => {
+    if (filterSupplierId) {
+      setSelectedSupplierId(filterSupplierId);
+    }
+  }, [filterSupplierId]);
+  const effectiveSupplierId = filterSupplierId || selectedSupplierId;
+
   const [customApproveAmounts, setCustomApproveAmounts] = useState<Record<string, string>>({});
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
   const [viewingReceiptRequest, setViewingReceiptRequest] = useState<LoanRepaymentRequest | null>(null);
@@ -77,23 +84,23 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
 
   const supplierFilteredLoans = useMemo(() => {
     return allLoans.filter((l) => {
-      if (selectedSupplierId !== 'all') {
-        return l.supplierId === selectedSupplierId;
+      if (effectiveSupplierId !== 'all') {
+        return l.supplierId === effectiveSupplierId;
       }
       return true;
     });
-  }, [allLoans, selectedSupplierId]);
+  }, [allLoans, effectiveSupplierId]);
 
   const supplierFilteredRepayments = useMemo(() => {
     return loanRepaymentRequests
       .filter((r) => {
-        if (selectedSupplierId !== 'all') {
-          return r.supplierId === selectedSupplierId;
+        if (effectiveSupplierId !== 'all') {
+          return r.supplierId === effectiveSupplierId;
         }
         return true;
       })
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  }, [loanRepaymentRequests, selectedSupplierId]);
+  }, [loanRepaymentRequests, effectiveSupplierId]);
 
   const pendingRepaymentsCount = supplierFilteredRepayments.filter(
     (r) => r.status === 'pending'
@@ -283,7 +290,7 @@ export const LoansRegistryView: React.FC<LoansRegistryViewProps> = ({ filterSupp
               <span className="text-xs text-slate-400 font-sans">طلب سلفة</span>
             </div>
             <div className="text-[10px] text-slate-400 pt-0.5">
-              من إجمالي {posClients.length} نقطة بيع مسجلة
+              من إجمالي {posClients.filter((c) => effectiveSupplierId === 'all' || c.supplierId === effectiveSupplierId).length} نقطة بيع مسجلة
             </div>
           </div>
         </div>

@@ -123,7 +123,9 @@ import {
   canSwitchToPosClient,
   canSwitchToSupplier,
   checkEmailRegistrationConflict,
+  filterNotificationsForPosClient,
   findPosClientsForEmail,
+  isNotificationForPosClient,
   resolveAccountIdentityByEmail,
   resolveScopedCurrentPos,
   resolveScopedSupplier
@@ -736,11 +738,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markAllNotificationsAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    setNotifications(prev =>
+      prev.map(n =>
+        isNotificationForPosClient(n, currentPos?.id, currentPos?.supplierId)
+          ? { ...n, isRead: true }
+          : n
+      )
+    );
   };
 
   const clearAllNotifications = () => {
-    setNotifications([]);
+    setNotifications(prev =>
+      prev.filter(n => !isNotificationForPosClient(n, currentPos?.id, currentPos?.supplierId))
+    );
   };
 
   const markAllSupplierNotificationsAsRead = () => {
@@ -837,16 +847,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : (prev.adminAccounts || [])
         }));
       }
-      if (bootData.suppliers && bootData.suppliers.length > 0) {
+      if (Array.isArray(bootData.suppliers)) {
         setSuppliers(bootData.suppliers);
       }
-      if (bootData.posClients && bootData.posClients.length > 0) {
+      if (Array.isArray(bootData.posClients)) {
         setPosClients(bootData.posClients);
       }
       return bootData;
     } catch (err) {
       console.warn('Auth bootstrap fetch skipped:', err);
       return {};
+    }
+  };
+
+  const clearTransientSessionCaches = () => {
+    setOrders([]);
+    setDepositRequests([]);
+    setLoanRepaymentRequests([]);
+    setAccountingEntries([]);
+    setAdminAccountingEntries([]);
+    setSupplierBankAccounts([]);
+    setVoucherWarehouses([]);
+    setInviteLinks([]);
+    setActiveOtps({});
+    try {
+      localStorage.removeItem('digipos_auth_user');
+      localStorage.removeItem('digipos_orders_v2');
+      localStorage.removeItem('digipos_deposits_v2');
+      localStorage.removeItem('digipos_loan_repayments_v1');
+      localStorage.removeItem('digipos_accounting_v2');
+      localStorage.removeItem('digipos_admin_accounting_v2');
+      localStorage.removeItem('digipos_supplier_bank_accounts_v1');
+      localStorage.removeItem('digipos_voucher_warehouses_v1');
+      localStorage.removeItem('digipos_invites_v2');
+      localStorage.removeItem('digipos_live_supplier_reply');
+      localStorage.removeItem('digipos_employee_currency_v1');
+      localStorage.removeItem('digipos_admin_currency_v1');
+    } catch {
+      // ignore
     }
   };
 
@@ -975,6 +1013,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return;
           }
 
+          const activeExistingEmail = normalizeStoreEmail(currentUserRef.current?.email);
+          const isSameActiveAccount = Boolean(activeExistingEmail && activeExistingEmail === cleanEmail);
+
           let activeSuppliers = suppliersRef.current;
           let activePosClients = posClientsRef.current;
           let activeSuperAdmin = superAdminRef.current;
@@ -986,17 +1027,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             posClients: activePosClients,
           });
 
-          // On reload / cold start, ensure Firestore collections are loaded before resolving role
-          if (identity.kind === 'unregistered' || activeSuppliers.length === 0) {
+          // On reload / cold start or email mismatch, always fetch fresh Firestore records before resolving role
+          if (!isSameActiveAccount || identity.kind === 'unregistered' || activeSuppliers.length === 0) {
             const [bootData, fetchedUser] = await Promise.all([
               bootstrapAuthDataFromFirestore(),
               firestoreSync.getUser(fbUser.uid).catch(() => null),
             ]);
             userDoc = fetchedUser;
-            if (bootData.suppliers && bootData.suppliers.length > 0) {
+            if (Array.isArray(bootData.suppliers)) {
               activeSuppliers = bootData.suppliers;
             }
-            if (bootData.posClients && bootData.posClients.length > 0) {
+            if (Array.isArray(bootData.posClients)) {
               activePosClients = bootData.posClients;
             }
             if (bootData.superAdmin) {
@@ -1022,23 +1063,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           if (identity.kind === 'sub_admin' && !identity.adminAccount.isActive) {
             fbSignOut(auth).catch(console.error);
+            clearTransientSessionCaches();
             setCurrentUser(null);
             return;
           }
 
           if (identity.kind === 'unregistered') {
             // Never log an unrecognized Firebase session into someone else's client or supplier account
+            clearTransientSessionCaches();
             setCurrentPosId('');
             setCurrentSupplierId('');
             setCurrentUser(null);
             return;
           }
 
+          if (!isSameActiveAccount) {
+            clearTransientSessionCaches();
+          }
+
+          const safePreferredPosId = isSameActiveAccount
+            ? (currentPosIdRef.current || userDoc?.associatedId)
+            : userDoc?.associatedId;
+
           const built = buildAuthUserFromIdentity(identity, {
             uid: fbUser.uid,
             phone: fbUser.phoneNumber || undefined,
             masterAdminName: activeSuperAdmin.name || fbUser.displayName || 'الإدارة العامة للمنصة',
-            preferredPosId: currentPosIdRef.current || userDoc?.associatedId,
+            preferredPosId: safePreferredPosId,
           });
 
           setCurrentPosId(built.posId);
@@ -1360,6 +1411,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.GET, 'system/superAdmin', handleTransientOffline);
     });
 
+    // 11. Accounting Entries live sync
+    const unsubAccounting = onSnapshot(collection(db, 'accountingEntries'), (snapshot) => {
+      const entryMap = new Map<string, AccountingEntry>();
+      snapshot.forEach(docSnap => {
+        const entry = docSnap.data() as AccountingEntry;
+        if (entry && entry.id) {
+          entryMap.set(entry.id, entry);
+        }
+      });
+      const syncedEntries = Array.from(entryMap.values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      setAccountingEntries(syncedEntries);
+    }, (err) => {
+      handleSnapshotError(err, OperationType.LIST, 'accountingEntries', handleTransientOffline);
+    });
+
+    // 12. Admin Accounting Entries live sync
+    const unsubAdminAccounting = onSnapshot(collection(db, 'adminAccountingEntries'), (snapshot) => {
+      const admMap = new Map<string, AdminAccountingEntry>();
+      snapshot.forEach(docSnap => {
+        const entry = docSnap.data() as AdminAccountingEntry;
+        if (entry && entry.id) {
+          admMap.set(entry.id, entry);
+        }
+      });
+      const syncedAdmEntries = Array.from(admMap.values()).sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      setAdminAccountingEntries(syncedAdmEntries);
+    }, (err) => {
+      handleSnapshotError(err, OperationType.LIST, 'adminAccountingEntries', handleTransientOffline);
+    });
+
+    // 13. Invite Links live sync
+    const unsubInvites = onSnapshot(collection(db, 'inviteLinks'), (snapshot) => {
+      const invMap = new Map<string, InviteLink>();
+      snapshot.forEach(docSnap => {
+        const inv = docSnap.data() as InviteLink;
+        if (inv && inv.id) {
+          invMap.set(inv.id, inv);
+        }
+      });
+      setInviteLinks(Array.from(invMap.values()));
+    }, (err) => {
+      handleSnapshotError(err, OperationType.LIST, 'inviteLinks', handleTransientOffline);
+    });
+
     return () => {
       unsubOrders();
       unsubDeposits();
@@ -1372,6 +1471,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubWarehouses();
       unsubPlatformSettings();
       unsubSuperAdmin();
+      unsubAccounting();
+      unsubAdminAccounting();
+      unsubInvites();
     };
   }, [isAuthenticated]);
 
@@ -1523,6 +1625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         masterAdminName: activeSuperAdmin.name || displayName,
       });
 
+      clearTransientSessionCaches();
       setCurrentPosId(built.posId);
       setCurrentSupplierId(built.supplierId);
       setIsSupplierSelectionRequired(built.requiresSupplierSelection);
@@ -1920,6 +2023,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         masterAdminName: activeSuperAdmin.name,
       });
 
+      // Clear any residual session state/caches from a prior user before activating the verified session
+      clearTransientSessionCaches();
+
       // Clear used OTP (single-use constraint)
       if (storedOtp) {
         setActiveOtps(prev => {
@@ -2259,11 +2365,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = () => {
     fbSignOut(auth).catch(console.error);
+    clearTransientSessionCaches();
     setCurrentUser(null);
     setCurrentPosId('');
     setCurrentSupplierId('');
     setRole('pos_client');
     setIsSupplierSelectionRequired(false);
+    setActiveNavTab('store');
     showToast({
       type: 'info',
       title: 'تم تسجيل الخروج',
@@ -2416,12 +2524,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [notifications, supplier?.id, effectiveEmployeePerms, role]);
 
   const clientNotifications = React.useMemo(() => {
-    return notifications.filter(
-      n =>
-        (n.targetRole === 'pos' || (!n.targetRole && n.posId)) &&
-        (!n.posId || n.posId === currentPos?.id)
-    );
-  }, [notifications, currentPos?.id]);
+    return filterNotificationsForPosClient(notifications, currentPos?.id, currentPos?.supplierId);
+  }, [notifications, currentPos?.id, currentPos?.supplierId]);
 
   const unreadSupplierNotificationsCount = React.useMemo(() => {
     return supplierNotifications.filter(n => !n.isRead).length;
@@ -3038,7 +3142,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
 
     // Accounting entries for sender & receiver
-    setAccountingEntries(prev => [
+    const transferAccountingEntries: AccountingEntry[] = [
       {
         id: `acc-${Date.now()}-trf-out`,
         date: formattedDate,
@@ -3069,21 +3173,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         type: 'transfer_in',
         referenceId: transferId,
         posId: target.id,
-        supplierId: supplier.id,
+        supplierId: target.supplierId || supplier.id,
         description: `استلام تحويل رصيد من (${currentPos.tradeName} - ${currentPos.posCode})`,
         debit: 0,
         credit: amount,
         balanceAfter: targetSettlement.finalWalletBalance
       },
-      ...prev
-    ]);
+    ];
+    setAccountingEntries(prev => [...transferAccountingEntries, ...prev]);
+    for (const trfAcc of transferAccountingEntries) {
+      firestoreSync.saveAccountingEntry(trfAcc).catch(console.error);
+    }
 
     if (feeAmount > 0 || targetSettlement.settledFeeAmount > 0) {
       const nextAdminEntries: AdminAccountingEntry[] = [];
       let runningAdminBal = superAdmin.walletBalance;
       if (feeAmount > 0) {
         runningAdminBal = parseFloat((runningAdminBal + feeAmount).toFixed(2));
-        nextAdminEntries.push({
+        const feeAdmEntry: AdminAccountingEntry = {
           id: `adm-acc-${Date.now()}-trf`,
           date: formattedDate,
           type: 'fee_collected',
@@ -3100,7 +3207,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           credit: feeAmount,
           balanceAfter: runningAdminBal,
           notes: `تحويل بقيمة ${amount.toFixed(2)} ر.س بين الوكيلين`
-        });
+        };
+        nextAdminEntries.push(feeAdmEntry);
+        firestoreSync.saveAdminAccountingEntry(feeAdmEntry).catch(console.error);
       }
       if (targetSettlement.settledFeeAmount > 0) {
         runningAdminBal = parseFloat((runningAdminBal + targetSettlement.settledFeeAmount).toFixed(2));
@@ -4900,10 +5009,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
 
     if (targetOrder) {
+      firestoreSync.saveOrder({
+        ...targetOrder,
+        deliveryDetails: {
+          ...targetOrder.deliveryDetails,
+          supplierReplyMessage: message,
+          verificationCodeEntered: message
+        }
+      }).catch(console.error);
       addNotification({
         posId: targetOrder.posId,
         supplierId: supplier.id,
         supplierName: supplier.name,
+        targetRole: 'pos',
         title: 'رسالة جديدة من المتجر',
         message: `أرسل المتجر تنبيهاً/رمزاً للطلب #${orderId}: "${message}"`,
         type: 'order_status',
@@ -4912,15 +5030,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      localStorage.setItem('digipos_live_supplier_reply', JSON.stringify({
+      const replyPayload = {
         orderId,
+        posId: targetOrder?.posId || '',
         message,
         timestamp: Date.now()
-      }));
+      };
+      localStorage.setItem('digipos_live_supplier_reply', JSON.stringify(replyPayload));
       window.dispatchEvent(new CustomEvent('digipos_supplier_reply', {
-        detail: { orderId, message }
+        detail: replyPayload
       }));
-    } catch (e) {
+    } catch {
       // ignore
     }
 
@@ -6060,24 +6180,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       walletBalance: newBal
     }));
 
-    setAdminAccountingEntries(prev => [
-      {
-        id: `adm-acc-${Date.now()}-stl`,
-        date: formattedDate,
-        type: 'bank_settlement',
-        referenceId: refId,
-        supplierId: supplier.id,
-        supplierName: `${supplier.name} (${supplier.storeName})`,
-        description: `تسوية رصيد بنكي وتحويل ${amount.toFixed(2)} ر.س إلى الحساب البنكي للإدارة (${bankIban})`,
-        grossAmount: amount,
-        feeAmount: 0,
-        debit: amount,
-        credit: 0,
-        balanceAfter: newBal,
-        notes: `تم الخصم من محفظة الإدارة وتسوية القيمة مع بنك المتجر (${supplier.bankAccountDetails.bankName})`
-      },
-      ...prev
-    ]);
+    const settleEntry: AdminAccountingEntry = {
+      id: `adm-acc-${Date.now()}-stl`,
+      date: formattedDate,
+      type: 'bank_settlement',
+      referenceId: refId,
+      supplierId: supplier.id,
+      supplierName: `${supplier.name} (${supplier.storeName})`,
+      description: `تسوية رصيد بنكي وتحويل ${amount.toFixed(2)} ر.س إلى الحساب البنكي للإدارة (${bankIban})`,
+      grossAmount: amount,
+      feeAmount: 0,
+      debit: amount,
+      credit: 0,
+      balanceAfter: newBal,
+      notes: `تم الخصم من محفظة الإدارة وتسوية القيمة مع بنك المتجر (${supplier.bankAccountDetails.bankName})`
+    };
+    setAdminAccountingEntries(prev => [settleEntry, ...prev]);
+    firestoreSync.saveAdminAccountingEntry(settleEntry).catch(console.error);
 
     triggerConfetti();
     showToast({
@@ -6176,6 +6295,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setAdminAccountingEntries(prev => [...adminLogs, ...prev]);
+    for (const admLog of adminLogs) {
+      firestoreSync.saveAdminAccountingEntry(admLog).catch(console.error);
+    }
 
     triggerConfetti();
     showToast({

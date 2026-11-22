@@ -25,7 +25,8 @@ import {
   FileText,
   Trash2,
   UserCog,
-  AlertCircle
+  AlertCircle,
+  LogOut
 } from 'lucide-react';
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 
@@ -51,7 +52,8 @@ export const AdminDashboard: React.FC = () => {
     currencyLabel,
     convertFromSar,
     convertToSar,
-    formatCurrency
+    formatCurrency,
+    logout
   } = useApp();
 
   const perms = resolveEffectiveAdminPermissions(currentUser, role);
@@ -295,25 +297,37 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          {perms.canManageSuppliers && (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setShowAddSupplierModal(true)}
-                className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
-              >
-                <PlusCircle className="w-4 h-4" />
-                <span>إضافة ممول / متجر جديد</span>
-              </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {perms.canManageSuppliers && (
+              <>
+                <button
+                  onClick={() => setShowAddSupplierModal(true)}
+                  className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>إضافة ممول / متجر جديد</span>
+                </button>
 
-              <button
-                onClick={() => setShowSupplierInvite(true)}
-                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
-              >
-                <Send className="w-3.5 h-3.5 text-purple-400" />
-                <span>إرسال رابط تسجيل لمتجر</span>
-              </button>
-            </div>
-          )}
+                <button
+                  onClick={() => setShowSupplierInvite(true)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5 text-purple-400" />
+                  <span>إرسال رابط تسجيل لمتجر</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={logout}
+              className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="تسجيل الخروج والعودة لشاشة الدخول"
+            >
+              <LogOut className="w-4 h-4 text-rose-400" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
         </div>
 
         {/* Central Wallet & Platform Stats */}

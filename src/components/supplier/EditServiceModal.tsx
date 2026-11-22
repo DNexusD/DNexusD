@@ -43,8 +43,8 @@ export const EditServiceModal: React.FC<EditServiceModalProps> = ({ service, onC
   const canEditVoucherStock = role !== 'employee' || perms.canManageVoucherStock;
   const supplierCatalogs = getCatalogsForSupplierView(catalogs, supplier.id);
   const supplierWarehouses = voucherWarehouses.filter(w => !w.supplierId || w.supplierId === supplier.id);
-  const supplierClients = posClients.filter(c => !c.supplierId || c.supplierId === supplier.id);
-  const targetableClients = supplierClients.length > 0 ? supplierClients : posClients;
+  const supplierClients = posClients.filter(c => c.supplierId === supplier.id);
+  const targetableClients = supplierClients;
 
   const initialMethods: DeliveryMethod[] =
     service.deliveryMethods && service.deliveryMethods.length > 0
