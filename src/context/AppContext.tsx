@@ -129,7 +129,9 @@ import {
   filterNotificationsForPosClient,
   findPosClientsForEmail,
   isNotificationForPosClient,
+  mapUnregisteredFirebaseAuthLoginErrorAr,
   resolveAccountIdentityByEmail,
+  resolveOrphanedAuthRecovery,
   resolveScopedCurrentPos,
   resolveScopedSupplier
 } from '../utils/accountAuth';
@@ -472,116 +474,20 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Authentication state (initialized early so scoped POS & Supplier lookups can enforce strict isolation)
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_auth_user');
-      return saved ? (JSON.parse(saved) as AuthUser) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Authentication state (initialized purely via Firebase Auth onAuthStateChanged)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
 
   const isAuthenticated = currentUser !== null;
 
-  const [role, setRole] = useState<UserRole>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        ensureCleanBootLocalStorageOnce(window.localStorage);
-      }
-      const saved = localStorage.getItem('digipos_auth_user');
-      if (saved) {
-        const parsed = JSON.parse(saved) as AuthUser;
-        if (parsed?.role) return parsed.role;
-      }
-    } catch {
-      // ignore
-    }
-    return 'pos_client';
-  });
+  const [role, setRole] = useState<UserRole>('pos_client');
   const [viewMode, setViewMode] = useState<'mobile_frame' | 'responsive'>('mobile_frame');
-  const [activeNavTab, setActiveNavTab] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_auth_user');
-      if (saved) {
-        const parsed = JSON.parse(saved) as AuthUser;
-        if (parsed?.role === 'super_admin') {
-          return getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(parsed, 'super_admin'));
-        }
-        if (parsed?.role === 'supplier') {
-          return 'catalogs';
-        }
-        if (parsed?.role === 'employee') {
-          return getFirstAllowedSupplierTab(
-            resolveEffectiveEmployeePermissions(parsed, 'employee'),
-            'employee'
-          );
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return 'store';
-  });
+  const [activeNavTab, setActiveNavTab] = useState<string>('store');
   
-  const [posClients, setPosClients] = useState<POSClient[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_clients_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return Array.isArray(parsed) ? parsed : [];
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  });
-  
-  const [currentPosId, setCurrentPosId] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_auth_user');
-      if (saved) {
-        const parsed = JSON.parse(saved) as AuthUser;
-        if (parsed?.role === 'pos_client' && parsed.associatedId) {
-          return parsed.associatedId;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return '';
-  });
+  const [posClients, setPosClients] = useState<POSClient[]>([]);
+  const [currentPosId, setCurrentPosId] = useState<string>('');
 
-  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_suppliers_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return Array.isArray(parsed) ? parsed : [];
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  });
-
-  const [currentSupplierId, setCurrentSupplierId] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_auth_user');
-      if (saved) {
-        const parsed = JSON.parse(saved) as AuthUser;
-        if (parsed?.role === 'employee' && (parsed.supplierId || parsed.associatedId)) {
-          return parsed.supplierId || parsed.associatedId || '';
-        }
-        if (parsed?.role === 'supplier' && parsed.associatedId) {
-          return parsed.associatedId;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return '';
-  });
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [currentSupplierId, setCurrentSupplierId] = useState<string>('');
 
   const currentPos = React.useMemo(
     () =>
@@ -609,157 +515,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [isAuthenticated, role, currentUser, currentSupplierId, currentPos, suppliers, posClients]
   );
   
-  const [superAdmin, setSuperAdmin] = useState<SuperAdmin>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_admin_v2');
-      return saved ? JSON.parse(saved) : initialSuperAdmin;
-    } catch {
-      return initialSuperAdmin;
-    }
-  });
+  const [superAdmin, setSuperAdmin] = useState<SuperAdmin>(initialSuperAdmin);
 
-  const [platformSettings, setPlatformSettings] = useState<PlatformInterfaceSettings>(() => {
-    const saved = localStorage.getItem('digipos_platform_settings_v1');
-    if (saved) {
-      try {
-        return mergePlatformSettings(JSON.parse(saved) as Partial<PlatformInterfaceSettings>);
-      } catch {
-        return DEFAULT_PLATFORM_INTERFACE_SETTINGS;
-      }
-    }
-    return DEFAULT_PLATFORM_INTERFACE_SETTINGS;
-  });
+  const [platformSettings, setPlatformSettings] = useState<PlatformInterfaceSettings>(
+    DEFAULT_PLATFORM_INTERFACE_SETTINGS
+  );
   
-  const [catalogs, setCatalogs] = useState<Catalog[]>(() => {
-    const saved = localStorage.getItem('digipos_catalogs_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as Catalog[];
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // fallback
-      }
-    }
-    return [];
-  });
-  
-  const [services, setServices] = useState<DigitalService[]>(() => {
-    const saved = localStorage.getItem('digipos_services_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as DigitalService[];
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // fallback
-      }
-    }
-    return [];
-  });
-
-  const [voucherWarehouses, setVoucherWarehouses] = useState<VoucherWarehouse[]>(() => {
-    const saved = localStorage.getItem('digipos_voucher_warehouses_v1');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as VoucherWarehouse[];
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // fallback
-      }
-    }
-    return [];
-  });
-  
-  const [depositRequests, setDepositRequests] = useState<DepositRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_deposits_v2');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [loanRepaymentRequests, setLoanRepaymentRequests] = useState<LoanRepaymentRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_loan_repayments_v1');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [supplierBankAccounts, setSupplierBankAccounts] = useState<SupplierBankAccount[]>(() => {
-    const saved = localStorage.getItem('digipos_supplier_bank_accounts_v1');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as SupplierBankAccount[];
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
-  
-  const [orders, setOrders] = useState<Order[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_orders_v2');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-  
-  const [accountingEntries, setAccountingEntries] = useState<AccountingEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_accounting_v2');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [adminAccountingEntries, setAdminAccountingEntries] = useState<AdminAccountingEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_admin_accounting_v2');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-  
-  const [inviteLinks, setInviteLinks] = useState<InviteLink[]>(() => {
-    try {
-      const saved = localStorage.getItem('digipos_invites_v2');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [notifications, setNotifications] = useState<AppNotification[]>(() => {
-    const saved = localStorage.getItem('digipos_notifications_v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {
-        // fallback
-      }
-    }
-    return [];
-  });
+  const [catalogs, setCatalogs] = useState<Catalog[]>([]);
+  const [services, setServices] = useState<DigitalService[]>([]);
+  const [voucherWarehouses, setVoucherWarehouses] = useState<VoucherWarehouse[]>([]);
+  const [depositRequests, setDepositRequests] = useState<DepositRequest[]>([]);
+  const [loanRepaymentRequests, setLoanRepaymentRequests] = useState<LoanRepaymentRequest[]>([]);
+  const [supplierBankAccounts, setSupplierBankAccounts] = useState<SupplierBankAccount[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [accountingEntries, setAccountingEntries] = useState<AccountingEntry[]>([]);
+  const [adminAccountingEntries, setAdminAccountingEntries] = useState<AdminAccountingEntry[]>([]);
+  const [inviteLinks, setInviteLinks] = useState<InviteLink[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   useEffect(() => {
     localStorage.setItem('digipos_notifications_v2', JSON.stringify(notifications));
@@ -1906,7 +1678,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated]);
 
-  // Sync to local storage
+  // Sync auth user to local storage (or keep purely in memory/Firebase Auth)
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('digipos_auth_user', JSON.stringify(currentUser));
@@ -1914,49 +1686,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem('digipos_auth_user');
     }
   }, [currentUser]);
-
-  useEffect(() => {
-    localStorage.setItem('digipos_clients_v2', JSON.stringify(posClients));
-  }, [posClients]);
-  useEffect(() => {
-    localStorage.setItem('digipos_suppliers_v2', JSON.stringify(suppliers));
-  }, [suppliers]);
-  useEffect(() => {
-    localStorage.setItem('digipos_admin_v2', JSON.stringify(superAdmin));
-  }, [superAdmin]);
-  useEffect(() => {
-    localStorage.setItem('digipos_platform_settings_v1', JSON.stringify(platformSettings));
-  }, [platformSettings]);
-  useEffect(() => {
-    localStorage.setItem('digipos_catalogs_v2', JSON.stringify(catalogs));
-  }, [catalogs]);
-  useEffect(() => {
-    localStorage.setItem('digipos_services_v2', JSON.stringify(services));
-  }, [services]);
-  useEffect(() => {
-    localStorage.setItem('digipos_voucher_warehouses_v1', JSON.stringify(voucherWarehouses));
-  }, [voucherWarehouses]);
-  useEffect(() => {
-    localStorage.setItem('digipos_deposits_v2', JSON.stringify(depositRequests));
-  }, [depositRequests]);
-  useEffect(() => {
-    localStorage.setItem('digipos_loan_repayments_v1', JSON.stringify(loanRepaymentRequests));
-  }, [loanRepaymentRequests]);
-  useEffect(() => {
-    localStorage.setItem('digipos_supplier_bank_accounts_v1', JSON.stringify(supplierBankAccounts));
-  }, [supplierBankAccounts]);
-  useEffect(() => {
-    localStorage.setItem('digipos_orders_v2', JSON.stringify(orders));
-  }, [orders]);
-  useEffect(() => {
-    localStorage.setItem('digipos_accounting_v2', JSON.stringify(accountingEntries));
-  }, [accountingEntries]);
-  useEffect(() => {
-    localStorage.setItem('digipos_admin_accounting_v2', JSON.stringify(adminAccountingEntries));
-  }, [adminAccountingEntries]);
-  useEffect(() => {
-    localStorage.setItem('digipos_invites_v2', JSON.stringify(inviteLinks));
-  }, [inviteLinks]);
 
   // Google Login via Firebase Popup
   const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
@@ -2362,25 +2091,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 4. Resolve exact account identity by email (NO substring role escalation, NO fallback to another person's account)
-      const identity = resolveAccountIdentityByEmail(cleanEmail, {
+      let identity = resolveAccountIdentityByEmail(cleanEmail, {
         superAdmin: activeSuperAdmin,
         suppliers: activeSuppliers,
         posClients: activePosClients,
       });
 
-      if (identity.kind === 'unregistered') {
-        showToast({
-          type: 'error',
-          title: 'الحساب غير مسجل',
-          description: 'لم يتم العثور على حساب بهذا البريد الإلكتروني. يرجى التحقق من البريد أو إنشاء حساب جديد.'
-        });
-        return {
-          success: false,
-          error: 'هذا البريد الإلكتروني غير مسجل في المنصة. يرجى التحقق من البريد أو إنشاء حساب جديد.'
-        };
-      }
-
       let verifiedUid: string | undefined;
+
+      if (identity.kind === 'unregistered') {
+        let authFallbackCred = null;
+        let authFallbackError: any = null;
+        try {
+          authFallbackCred = await signInWithEmailAndPassword(auth, cleanEmail, enteredPassword);
+        } catch (err: any) {
+          authFallbackError = err;
+        }
+
+        if (authFallbackCred) {
+          verifiedUid = authFallbackCred.user.uid;
+          const [userDoc, existingClients] = await Promise.all([
+            firestoreSync.findUserByEmail(cleanEmail).catch(() => null),
+            firestoreSync.findPosClientsByEmail(cleanEmail).catch(() => []),
+          ]);
+          const allKnownClients = [...existingClients, ...activePosClients];
+
+          const recovery = resolveOrphanedAuthRecovery({
+            email: cleanEmail,
+            uid: verifiedUid,
+            displayName: authFallbackCred.user.displayName,
+            phone: authFallbackCred.user.phoneNumber,
+            userDoc,
+            existingClients: allKnownClients,
+            suppliers: activeSuppliers,
+            superAdmin: activeSuperAdmin,
+          });
+
+          if (recovery.action === 'reject_admin') {
+            await fbSignOut(auth).catch(() => {});
+            showToast({
+              type: 'error',
+              title: 'صلاحية مرفوضة',
+              description: 'لا يمكن استعادة حساب مشرف بهذه الطرق. يرجى مراجعة إعدادات الإدارة العامة.',
+            });
+            return { success: false, error: 'صلاحية مرفوضة لحساب مشرف.' };
+          } else if (recovery.action === 'restore_supplier') {
+            await firestoreSync.saveSupplier(recovery.supplier);
+            setSuppliers(prev => [recovery.supplier, ...prev.filter(s => s.id !== recovery.supplier.id)]);
+            identity = { kind: 'supplier', email: cleanEmail, supplier: recovery.supplier };
+          } else if (recovery.action === 'restore_pos_client') {
+            await firestoreSync.savePosClient(recovery.posClient);
+            setPosClients(prev => [recovery.posClient, ...prev.filter(p => p.id !== recovery.posClient.id)]);
+            identity = {
+              kind: 'pos_client',
+              email: cleanEmail,
+              posRecords: [recovery.posClient],
+              suppliers: activeSuppliers.filter(s => s.id === recovery.posClient.supplierId),
+            };
+          } else {
+            await fbSignOut(auth).catch(() => {});
+            showToast({
+              type: 'error',
+              title: 'الحساب غير مرتبط بمتجر',
+              description: 'تم التحقق من بياناتك في نظام المصادقة، ولكن لم يتم العثور على متجر مرتبط بهذا الحساب. يرجى إنشاء حساب جديد عبر اختيار المتجر الصحيح.',
+            });
+            return {
+              success: false,
+              error: 'الحساب غير مرتبط بمتجر محدد. يرجى التأكد من البريد أو التسجيل برابط المتجر.',
+            };
+          }
+        } else {
+          const mapped = mapUnregisteredFirebaseAuthLoginErrorAr(authFallbackError?.code);
+          showToast({
+            type: 'error',
+            title: mapped.title,
+            description: mapped.error,
+          });
+          return {
+            success: false,
+            error: mapped.error,
+          };
+        }
+      }
 
       if (identity.kind === 'sub_admin') {
         if (!identity.adminAccount.isActive) {

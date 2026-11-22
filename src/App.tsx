@@ -10,6 +10,7 @@ import { PromptStudio } from './components/prompt-studio/PromptStudio';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
 import { parsePasswordResetUrl } from './utils/passwordReset';
+import { isFirestoreInternalAssertionError } from './utils/firestoreConnectivity';
 
 const MainContent: React.FC = () => {
   const { role, activeNavTab, isAuthenticated } = useApp();
@@ -74,6 +75,20 @@ const MainContent: React.FC = () => {
 };
 
 export default function App() {
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (isFirestoreInternalAssertionError(event.reason)) {
+        event.preventDefault();
+        console.warn('Suppressed internal Firestore assertion error:', event.reason);
+      }
+    };
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   return (
     <AppProvider>
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950">

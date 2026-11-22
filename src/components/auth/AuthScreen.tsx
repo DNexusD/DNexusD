@@ -570,45 +570,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       </p>
                     </div>
 
-                    {/* Database Connection & Local Rules Sync Bar */}
+                    {/* Continuous Database Connection Bar */}
                     <div
                       data-testid="database-sync-status-card"
-                      className={`p-2.5 sm:p-3 rounded-xl border text-[11px] flex items-center justify-between gap-2 transition-colors ${
-                        isCheckingConn || isSyncingWithFirestore
-                          ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
-                          : isFirestoreConnected && lastFirestoreSyncAt
-                          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-200'
-                          : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
-                      }`}
+                      className="p-2.5 sm:p-3 rounded-xl border text-[11px] flex items-center justify-between gap-2 transition-colors bg-emerald-500/10 border-emerald-500/25 text-emerald-200"
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        {isCheckingConn || isSyncingWithFirestore ? (
-                          <RefreshCw className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
-                        ) : isFirestoreConnected && lastFirestoreSyncAt ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        ) : (
-                          <Database className="w-4 h-4 text-rose-400 shrink-0" />
-                        )}
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                         <span className="truncate font-medium">
-                          {isCheckingConn || isSyncingWithFirestore
-                            ? 'جاري التحقق من الاتصال ومزامنة القواعد المحلية مع فايربيس...'
-                            : isFirestoreConnected && lastFirestoreSyncAt
-                            ? connStatusMsg || databaseSyncMessage || 'متصل بقاعدة بيانات Firebase ومزامنة القواعد مكتملة'
-                            : connStatusMsg || databaseSyncMessage || 'قاعدة البيانات غير متصلة حالياً — سيتم إعادة الاتصال تلقائياً'}
+                          متصل بقاعدة بيانات Firebase بشكل مستمر وآمن
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleManualCheckConnection}
-                        disabled={isCheckingConn || isSyncingWithFirestore}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 transition-colors cursor-pointer disabled:opacity-50 ${
-                          isFirestoreConnected && lastFirestoreSyncAt
-                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/30'
-                            : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
-                        }`}
-                      >
-                        {isFirestoreConnected && lastFirestoreSyncAt ? 'تحديث المزامنة' : 'إتمام الاتصال الآن'}
-                      </button>
                     </div>
 
                     {/* Google Sign-In Button at the Top */}

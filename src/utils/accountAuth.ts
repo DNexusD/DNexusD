@@ -620,3 +620,149 @@ export function evaluateEmployeeLoginEligibility(
   return { allowed: true };
 }
 
+export type OrphanedAuthRecoveryDecision =
+  | { action: 'reject_admin' }
+  | { action: 'restore_supplier'; supplier: Supplier }
+  | { action: 'restore_pos_client'; posClient: POSClient }
+  | { action: 'needs_profile_completion'; email: string };
+
+/**
+ * Safely decides how to handle a user who passed Firebase Authentication
+ * (`signInWithEmailAndPassword`) while having no matching Supplier/POSClient
+ * document in Firestore (e.g., after a database reset or incomplete registration).
+ * Never promotes anyone to super_admin or employee.
+ */
+export function resolveOrphanedAuthRecovery(params: {
+  email: string;
+  uid: string;
+  displayName?: string | null;
+  phone?: string | null;
+  userDoc?: AuthUser | null;
+  existingClients?: POSClient[];
+  suppliers: Supplier[];
+  superAdmin?: Pick<SuperAdmin, 'email' | 'adminAccounts'> | null;
+}): OrphanedAuthRecoveryDecision {
+  const cleanEmail = normalizeStoreEmail(params.email);
+  if (!cleanEmail) {
+    return { action: 'needs_profile_completion', email: '' };
+  }
+
+  if (
+    isMasterAdminEmail(cleanEmail, params.superAdmin?.email) ||
+    params.userDoc?.role === 'super_admin' ||
+    findAdminAccountByEmail(cleanEmail, params.superAdmin?.adminAccounts || [])
+  ) {
+    return { action: 'reject_admin' };
+  }
+
+  const matchedClients = (params.existingClients || []).filter(
+    (p) => normalizeStoreEmail(p.email) === cleanEmail
+  );
+  if (matchedClients.length > 0) {
+    return { action: 'restore_pos_client', posClient: matchedClients[0] };
+  }
+
+  const userDoc = params.userDoc;
+  const userDocEmail = normalizeStoreEmail(userDoc?.email);
+  const userDocMatchesEmail = Boolean(userDoc && (!userDocEmail || userDocEmail === cleanEmail));
+
+  if (userDocMatchesEmail && userDoc?.role === 'supplier') {
+    const preferredSupId = userDoc.associatedId || `sup-${params.uid}`;
+    const conflictingSupplier = params.suppliers.find(
+      (s) =>
+        s.id === preferredSupId &&
+        Boolean(s.email) &&
+        normalizeStoreEmail(s.email) !== cleanEmail
+    );
+    if (!conflictingSupplier) {
+      const displayName =
+        (userDoc.name || params.displayName || '').trim() || cleanEmail.split('@')[0] || 'متجر جديد';
+      const restoredSupplier: Supplier = {
+        id: preferredSupId,
+        name: displayName,
+        storeName: `متجر ${displayName}`,
+        phone: (userDoc.phone || params.phone || '').trim() || '+966 50 000 0000',
+        email: cleanEmail,
+        feePercentage: 1.0,
+        fixedFeeAmount: 0,
+        feeType: 'percentage',
+        walletBalance: 0,
+        bankAccountDetails: {
+          bankName: 'مصرف الراجحي',
+          accountHolder: displayName,
+          iban: 'SA4480000123608010123456',
+          accountNumber: '123608010123456',
+        },
+        createdAt: new Date().toISOString().substring(0, 10),
+      };
+      return { action: 'restore_supplier', supplier: restoredSupplier };
+    }
+  }
+
+  if (userDocMatchesEmail && userDoc?.role === 'pos_client') {
+    const preferredSupId =
+      userDoc.supplierId && params.suppliers.some((s) => s.id === userDoc.supplierId)
+        ? userDoc.supplierId
+        : '';
+
+    if (preferredSupId) {
+      const displayName =
+        (userDoc.name || params.displayName || '').trim() || cleanEmail.split('@')[0] || 'عميل';
+      const numericSuffix = Math.floor(10000 + Math.random() * 90000);
+      const newPosCode = `POS-${numericSuffix}`;
+      const restoredClient: POSClient = {
+        id: userDoc.associatedId || `pos-${params.uid}`,
+        posCode: newPosCode,
+        tradeName: `متجر ${displayName}`,
+        ownerName: displayName,
+        phone: (userDoc.phone || params.phone || '').trim() || '+966 55 000 0000',
+        email: cleanEmail,
+        country: 'المملكة العربية السعودية',
+        city: 'الرياض',
+        supplierId: preferredSupId,
+        tier: 'regular',
+        walletBalance: 0,
+        totalSpent: 0,
+        ordersCount: 0,
+        createdAt: new Date().toISOString().substring(0, 10),
+        qrCodeValue: `DIGIPOS:${newPosCode}`,
+      };
+      return { action: 'restore_pos_client', posClient: restoredClient };
+    }
+  }
+
+  return { action: 'needs_profile_completion', email: cleanEmail };
+}
+
+export function mapUnregisteredFirebaseAuthLoginErrorAr(errorCode?: string): {
+  title: string;
+  error: string;
+} {
+  switch (errorCode) {
+    case 'auth/wrong-password':
+      return {
+        title: 'كلمة المرور غير صحيحة',
+        error:
+          'هذا البريد الإلكتروني مسجل في نظام التوثيق، لكن كلمة المرور المدخلة غير صحيحة. يمكنك استخدام «نسيت كلمة المرور» لإعادة تعيينها.',
+      };
+    case 'auth/user-not-found':
+      return {
+        title: 'الحساب غير مسجل',
+        error:
+          'هذا البريد الإلكتروني غير مسجل في المنصة. يرجى التحقق من البريد أو إنشاء حساب جديد.',
+      };
+    case 'auth/too-many-requests':
+      return {
+        title: 'محاولات دخول متكررة',
+        error:
+          'تم إيقاف محاولات الدخول مؤقتاً لكثرة المحاولات الخاطئة. يرجى الانتظار قليلاً أو استخدام «نسيت كلمة المرور».',
+      };
+    case 'auth/invalid-credential':
+    default:
+      return {
+        title: 'تعذر التحقق من الحساب',
+        error:
+          'البريد الإلكتروني غير مسجل في قاعدة بيانات المتاجر/العملاء أو كلمة المرور غير صحيحة. إذا سبق لك التسجيل بهذا البريد وتظهر لك رسالة أنه مسجل عند إنشاء حساب جديد، استخدم «نسيت كلمة المرور» أو أكمل التسجيل بنفس كلمة المرور من تبويب «إنشاء حساب جديد».',
+      };
+  }
+}

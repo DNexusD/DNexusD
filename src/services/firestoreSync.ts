@@ -301,6 +301,53 @@ export const firestoreSync = {
     }
   },
 
+  async findUserByEmail(email: string): Promise<AuthUser | null> {
+    const cleanEmail = normalizeStoreEmail(email);
+    if (!cleanEmail) return null;
+    try {
+      const qNormalized = query(collection(db, 'users'), where('email', '==', cleanEmail));
+      let snap;
+      try {
+        snap = await getDocsFromServer(qNormalized);
+      } catch {
+        snap = await getDocs(qNormalized);
+      }
+      if (snap.empty && email.trim() !== cleanEmail) {
+        const qRaw = query(collection(db, 'users'), where('email', '==', email.trim()));
+        try {
+          snap = await getDocsFromServer(qRaw);
+        } catch {
+          snap = await getDocs(qRaw);
+        }
+      }
+      if (snap.empty) return null;
+      const firstDoc = snap.docs[0];
+      return {
+        ...(firstDoc.data() as AuthUser),
+        id: firstDoc.id,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  async findPosClientsByEmail(email: string): Promise<POSClient[]> {
+    const cleanEmail = normalizeStoreEmail(email);
+    if (!cleanEmail) return [];
+    try {
+      const q = query(collection(db, 'posClients'), where('email', '==', cleanEmail));
+      let snap;
+      try {
+        snap = await getDocsFromServer(q);
+      } catch {
+        snap = await getDocs(q);
+      }
+      return mapDocsById<POSClient>(snap.docs);
+    } catch {
+      return [];
+    }
+  },
+
   async deleteUser(userId: string): Promise<void> {
     const path = `users/${userId}`;
     try {
