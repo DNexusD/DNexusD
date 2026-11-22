@@ -48,7 +48,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     showToast, 
     loginWithGoogle, 
     isFirestoreConnected,
-    checkDatabaseConnection,
+    isSyncingWithFirestore,
+    lastFirestoreSyncAt,
+    databaseSyncMessage,
+    ensureDatabaseConnectedAndSynced,
     isSupplierSelectionRequired,
     setIsSupplierSelectionRequired,
     suppliers,
@@ -194,23 +197,80 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     return () => clearInterval(timer);
   }, [cooldownSeconds, remainingSeconds]);
 
-  // Handle Manual Database Connection Test
+  // Trigger database connection verification & local <-> Firebase sync when AuthScreen opens
+  useEffect(() => {
+    if (isFirestoreConnected && lastFirestoreSyncAt) return;
+    let active = true;
+    setIsCheckingConn(true);
+    void ensureDatabaseConnectedAndSynced({ silent: true })
+      .then((res) => {
+        if (!active) return;
+        setConnStatusMsg(res.message);
+      })
+      .finally(() => {
+        if (active) setIsCheckingConn(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Trigger connection completion & local sync when user fills in email/password if not yet connected/synced
+  useEffect(() => {
+    if (mode !== 'login') return;
+    if (!loginEmail.trim() && !loginPassword.trim()) return;
+    if (isFirestoreConnected && lastFirestoreSyncAt) return;
+
+    const timer = setTimeout(() => {
+      setIsCheckingConn(true);
+      void ensureDatabaseConnectedAndSynced({
+        forceSync: !isFirestoreConnected,
+        silent: true,
+      })
+        .then((res) => {
+          setConnStatusMsg(res.message);
+        })
+        .finally(() => {
+          setIsCheckingConn(false);
+        });
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [loginEmail, loginPassword, mode, isFirestoreConnected, lastFirestoreSyncAt]);
+
+  const handleCredentialFieldFocus = () => {
+    if (isFirestoreConnected && lastFirestoreSyncAt) return;
+    if (isCheckingConn || isSyncingWithFirestore) return;
+    setIsCheckingConn(true);
+    void ensureDatabaseConnectedAndSynced({
+      forceSync: !isFirestoreConnected,
+      silent: true,
+    })
+      .then((res) => {
+        setConnStatusMsg(res.message);
+      })
+      .finally(() => {
+        setIsCheckingConn(false);
+      });
+  };
+
+  // Handle Manual Database Connection & Sync
   const handleManualCheckConnection = async () => {
     setIsCheckingConn(true);
     setConnStatusMsg(null);
     try {
-      const res = await checkDatabaseConnection();
+      const res = await ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
       setConnStatusMsg(res.message);
-      if (res.success) {
+      if (res.connected && res.synced) {
         showToast({
           type: 'success',
-          title: 'الاتصال بقاعدة البيانات يعمل بنجاح!',
+          title: 'تم الاتصال والمزامنة بنجاح!',
           description: res.message
         });
       } else {
         showToast({
           type: 'error',
-          title: 'فشل الاتصال بقاعدة البيانات',
+          title: 'تعذر إتمام الاتصال والمزامنة',
           description: res.message
         });
       }
@@ -510,6 +570,47 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                       </p>
                     </div>
 
+                    {/* Database Connection & Local Rules Sync Bar */}
+                    <div
+                      data-testid="database-sync-status-card"
+                      className={`p-2.5 sm:p-3 rounded-xl border text-[11px] flex items-center justify-between gap-2 transition-colors ${
+                        isCheckingConn || isSyncingWithFirestore
+                          ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                          : isFirestoreConnected && lastFirestoreSyncAt
+                          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-200'
+                          : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {isCheckingConn || isSyncingWithFirestore ? (
+                          <RefreshCw className="w-4 h-4 text-amber-400 animate-spin shrink-0" />
+                        ) : isFirestoreConnected && lastFirestoreSyncAt ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <Database className="w-4 h-4 text-rose-400 shrink-0" />
+                        )}
+                        <span className="truncate font-medium">
+                          {isCheckingConn || isSyncingWithFirestore
+                            ? 'جاري التحقق من الاتصال ومزامنة القواعد المحلية مع فايربيس...'
+                            : isFirestoreConnected && lastFirestoreSyncAt
+                            ? connStatusMsg || databaseSyncMessage || 'متصل بقاعدة بيانات Firebase ومزامنة القواعد مكتملة'
+                            : connStatusMsg || databaseSyncMessage || 'قاعدة البيانات غير متصلة حالياً — سيتم إعادة الاتصال تلقائياً'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleManualCheckConnection}
+                        disabled={isCheckingConn || isSyncingWithFirestore}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 transition-colors cursor-pointer disabled:opacity-50 ${
+                          isFirestoreConnected && lastFirestoreSyncAt
+                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/30'
+                            : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                        }`}
+                      >
+                        {isFirestoreConnected && lastFirestoreSyncAt ? 'تحديث المزامنة' : 'إتمام الاتصال الآن'}
+                      </button>
+                    </div>
+
                     {/* Google Sign-In Button at the Top */}
                     <button
                       type="button"
@@ -565,6 +666,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           type="email"
                           required
                           value={loginEmail}
+                          onFocus={handleCredentialFieldFocus}
                           onChange={e => {
                             setLoginEmail(e.target.value);
                             if (otpSent || otpSentToEmail || cooldownSeconds > 0) {
@@ -607,6 +709,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           type={showLoginPassword ? 'text' : 'password'}
                           required
                           value={loginPassword}
+                          onFocus={handleCredentialFieldFocus}
                           onChange={e => setLoginPassword(e.target.value)}
                           placeholder="••••••••••••"
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white pl-9 focus:outline-none transition-colors font-mono"

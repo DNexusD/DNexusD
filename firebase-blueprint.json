@@ -74,7 +74,8 @@
         "socialLinks": { "type": "object" },
         "employees": { "type": "array" },
         "preferredCurrency": { "type": "string", "enum": ["SAR", "USD"] },
-        "exchangeRateSarPerUsd": { "type": "number" }
+        "exchangeRateSarPerUsd": { "type": "number" },
+        "isActive": { "type": "boolean" }
       },
       "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
     },

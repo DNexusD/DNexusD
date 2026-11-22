@@ -263,6 +263,7 @@ export interface OfficeEmployee {
   country?: string;
   roleTitle: string;
   isTransferReceiverOnly?: boolean;
+  isActive?: boolean;
   permissions: EmployeePermissions;
   createdAt: string;
 }
@@ -312,6 +313,7 @@ export interface Supplier {
   employees?: OfficeEmployee[];
   preferredCurrency?: CurrencyCode; // العملة النشطة المفضلة للتاجر (SAR / USD)
   exchangeRateSarPerUsd?: number; // سعر الصرف المحدد من التاجر: 1 دولار أمريكي = X ريال سعودي
+  isActive?: boolean; // حالة تفعيل المتجر (يتم التحكم بها من مدير التطبيق)
 }
 
 export interface SuperAdmin {

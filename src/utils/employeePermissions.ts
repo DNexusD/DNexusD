@@ -2,6 +2,7 @@ import {
   AppNotification,
   AuthUser,
   DepositRequest,
+  DigitalService,
   EmployeePermissions,
   OfficeEmployee,
   Order,
@@ -333,6 +334,12 @@ export function resolveStoreActorByEmail(
   return null;
 }
 
+export function isEmployeeActive(
+  employee?: Pick<OfficeEmployee, 'isActive'> | null
+): boolean {
+  return employee?.isActive !== false;
+}
+
 export function verifyEmployeeCredentials(
   employee: OfficeEmployee | null | undefined,
   enteredPassword: string
@@ -437,8 +444,78 @@ export function resolveEffectiveEmployeePermissions(
   }
 
   const liveEmployee = findEmployeeRecordForUser(currentUser, activeSupplier);
+  if (liveEmployee && !isEmployeeActive(liveEmployee)) {
+    return { ...EMPTY_EMPLOYEE_PERMISSIONS };
+  }
   const raw = liveEmployee?.permissions ?? currentUser?.permissions;
   return normalizeEmployeePermissions(raw);
+}
+
+/**
+ * Enforces field-level service edit restrictions for employees at the state/mutation boundary:
+ * - Employees with ONLY `canEditServicePrices` can modify `tierPrices` / `packageTierPrices` on existing packages
+ *   without altering service metadata, catalog, delivery methods, or package structure.
+ * - Employees with ONLY `canAddServices` can modify service details and package structure without altering
+ *   existing package prices.
+ */
+export function sanitizeServiceUpdatesForEmployeePermissions(
+  existingService: DigitalService,
+  updates: Partial<Omit<DigitalService, 'id' | 'supplierId'>>,
+  perms: Required<EmployeePermissions>,
+  role: UserRole
+): Partial<Omit<DigitalService, 'id' | 'supplierId'>> {
+  if (role !== 'employee') {
+    return updates;
+  }
+
+  const canEditDetails = Boolean(perms.canAddServices);
+  const canEditPrices = Boolean(perms.canEditServicePrices);
+
+  if (!canEditDetails && !canEditPrices) {
+    return {};
+  }
+
+  if (canEditDetails && canEditPrices) {
+    return updates;
+  }
+
+  const origPkgMap = new Map((existingService.packages || []).map((p) => [p.id, p]));
+
+  if (!canEditDetails && canEditPrices) {
+    // Only allow updating tierPrices & packageTierPrices on existing packages
+    const incomingPkgMap = new Map((updates.packages || []).map((p) => [p.id, p]));
+    return {
+      packages: (existingService.packages || []).map((orig) => {
+        const inc = incomingPkgMap.get(orig.id);
+        if (!inc) return orig;
+        return {
+          ...orig,
+          tierPrices: inc.tierPrices ?? orig.tierPrices,
+          ...(inc.packageTierPrices || orig.packageTierPrices
+            ? { packageTierPrices: inc.packageTierPrices ?? orig.packageTierPrices }
+            : {}),
+        };
+      }),
+    };
+  }
+
+  // canEditDetails && !canEditPrices: allow metadata & structure changes, preserve existing prices
+  const sanitizedPackages = updates.packages
+    ? updates.packages.map((pkg) => {
+        const orig = origPkgMap.get(pkg.id);
+        if (!orig) return pkg;
+        return {
+          ...pkg,
+          tierPrices: orig.tierPrices,
+          ...(orig.packageTierPrices ? { packageTierPrices: orig.packageTierPrices } : {}),
+        };
+      })
+    : undefined;
+
+  return {
+    ...updates,
+    ...(sanitizedPackages ? { packages: sanitizedPackages } : {}),
+  };
 }
 
 export function countActiveEmployeePermissions(

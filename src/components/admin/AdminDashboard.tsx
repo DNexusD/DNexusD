@@ -4,11 +4,20 @@ import { AdminStatementView } from './AdminStatementView';
 import { AdminInterfaceSettingsView } from './AdminInterfaceSettingsView';
 import { AdminAccountsView } from './AdminAccountsView';
 import {
+  AdminStoreSupervisionModal,
+  StoreSupervisionTab
+} from './AdminStoreSupervisionModal';
+import {
   AdminDashboardTab,
   getFirstAllowedAdminTab,
   isAdminTabAllowed,
   resolveEffectiveAdminPermissions
 } from '../../utils/adminAccounts';
+import {
+  computeStoreSupervisionMetrics,
+  filterSuppliersForAdmin,
+  isSupplierActive
+} from '../../utils/storeSupervision';
 import { 
   ShieldCheck, 
   Wallet, 
@@ -26,7 +35,14 @@ import {
   Trash2,
   UserCog,
   AlertCircle,
-  LogOut
+  LogOut,
+  Search,
+  Eye,
+  Edit3,
+  Activity,
+  Power,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 
@@ -38,8 +54,18 @@ export const AdminDashboard: React.FC = () => {
     suppliers,
     supplier, 
     posClients, 
+    orders,
+    depositRequests,
+    loanRepaymentRequests,
+    accountingEntries,
+    adminAccountingEntries,
+    services,
+    voucherWarehouses,
+    catalogs,
+    supplierBankAccounts,
     addSupplier,
     updateSupplierFeeConfig, 
+    toggleSupplierActiveStatus,
     updateGlobalFeeConfig, 
     adminSettleBank, 
     adminTransferToAgent,
@@ -159,6 +185,23 @@ export const AdminDashboard: React.FC = () => {
   const [showSupplierInvite, setShowSupplierInvite] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
+
+  // Store Supervision & Management state
+  const [storeSearchQuery, setStoreSearchQuery] = useState('');
+  const [storeStatusFilter, setStoreStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
+  const [supervisedStoreState, setSupervisedStoreState] = useState<{
+    supplierId: string;
+    initialTab: StoreSupervisionTab;
+  } | null>(null);
+
+  const filteredSuppliersList = filterSuppliersForAdmin(
+    suppliers,
+    storeSearchQuery,
+    storeStatusFilter
+  );
+  const activeSupervisedStore = supervisedStoreState
+    ? suppliers.find(s => s.id === supervisedStoreState.supplierId) || null
+    : null;
 
   const handleSaveGlobalFee = (e: React.FormEvent) => {
     e.preventDefault();
@@ -539,44 +582,248 @@ export const AdminDashboard: React.FC = () => {
           {/* List of Registered Suppliers under Supervision */}
           {perms.canManageSuppliers && (
             <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Building2 className="w-5 h-5 text-purple-400" />
-                  <span>قائمة المتاجر المعتمدين تحت إشراف الإدارة</span>
-                </h2>
-                <span className="text-xs text-slate-400 font-mono">العدد: {suppliers.length} متاجرن</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-purple-400" />
+                    <span>إشراف وإدارة المتاجر المعتمدين</span>
+                  </h2>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    افتح لوحة إشراف أي متجر للاطلاع على بياناته الشخصية وتعديلها، مراجعة عملائه، ومتابعة حركة طلباته وسلفه وقيوده المحاسبية.
+                  </p>
+                </div>
+                <span className="text-xs text-slate-400 font-mono shrink-0">
+                  الإجمالي: {suppliers.length} متجر ({suppliers.filter(s => isSupplierActive(s)).length} نشط)
+                </span>
               </div>
+
+              {/* Search & Status Filters */}
+              {suppliers.length > 0 && (
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={storeSearchQuery}
+                      onChange={e => setStoreSearchQuery(e.target.value)}
+                      placeholder="ابحث باسم المتجر، اسم المالك، البريد، الهاتف، المدينة أو الآيبان..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pr-9 pl-3 py-2 text-white text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {(['all', 'active', 'suspended'] as const).map(statusKey => (
+                      <button
+                        key={statusKey}
+                        type="button"
+                        onClick={() => setStoreStatusFilter(statusKey)}
+                        className={`px-3 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                          storeStatusFilter === statusKey
+                            ? 'bg-purple-500 text-slate-950 border-purple-400'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {statusKey === 'all' ? 'الكل' : statusKey === 'active' ? 'نشط' : 'موقوف'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {suppliers.length === 0 ? (
                 <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center text-slate-400">
                   لا توجد متاجر أو ممولون مسجلون حالياً. يمكنك إضافة متجر جديد من زر &quot;إضافة ممول / متجر جديد&quot;.
                 </div>
+              ) : filteredSuppliersList.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center text-slate-400">
+                  لا توجد متاجر مطابقة لمعايير البحث أو التصفية الحالية.
+                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {suppliers.map(sup => (
-                    <div key={sup.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-bold text-sm text-white">{sup.name}</h4>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                            رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${formatCurrency(sup.fixedFeeAmount)}` : ''}
-                          </span>
-                        </div>
-                        <div className="text-slate-400 text-[11px]">{sup.storeName}</div>
-                        <div className="text-slate-500 text-[10px]">{sup.phone} · {sup.email}</div>
-                        <div className="text-slate-500 text-[10px] font-mono">
-                          البنك: {sup.bankAccountDetails.bankName} ({sup.bankAccountDetails.iban})
-                        </div>
-                      </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {filteredSuppliersList.map(sup => {
+                    const supActive = isSupplierActive(sup);
+                    const supMetrics = computeStoreSupervisionMetrics({
+                      supplier: sup,
+                      posClients,
+                      orders,
+                      depositRequests,
+                      loanRepaymentRequests,
+                      accountingEntries,
+                      adminAccountingEntries,
+                      services,
+                      voucherWarehouses,
+                      catalogs,
+                      supplierBankAccounts,
+                    });
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
-                        <span className="text-slate-400">رصيد مبيعاته:</span>
-                        <strong className="text-emerald-400 font-mono font-bold tabular-nums">
-                          {formatCurrency(sup.walletBalance, { withGrouping: true })}
-                        </strong>
+                    return (
+                      <div
+                        key={sup.id}
+                        className={`p-4 rounded-2xl bg-slate-950 border flex flex-col justify-between gap-3 transition-colors ${
+                          supActive
+                            ? 'border-slate-800 hover:border-purple-500/40'
+                            : 'border-rose-500/30 bg-rose-950/10'
+                        }`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
+                                {sup.logoUrl ? (
+                                  <img
+                                    src={sup.logoUrl}
+                                    alt={sup.storeName}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <Building2 className="w-5 h-5 text-purple-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <h4 className="font-bold text-sm text-white truncate">
+                                    {sup.storeName}
+                                  </h4>
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-flex items-center gap-1 ${
+                                      supActive
+                                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                        : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                    }`}
+                                  >
+                                    {supActive ? (
+                                      <>
+                                        <CheckCircle2 className="w-2.5 h-2.5" />
+                                        <span>نشط</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <XCircle className="w-2.5 h-2.5" />
+                                        <span>موقوف</span>
+                                      </>
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="text-slate-300 text-[11px] truncate">
+                                  المالك: {sup.name}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20 shrink-0">
+                              رسوم: {sup.feePercentage}% {sup.fixedFeeAmount > 0 ? `+ ${formatCurrency(sup.fixedFeeAmount)}` : ''}
+                            </span>
+                          </div>
+
+                          <div className="text-slate-400 text-[11px] flex flex-wrap items-center gap-2">
+                            <span dir="ltr" className="font-mono">{sup.phone || '-'}</span>
+                            <span>·</span>
+                            <span dir="ltr" className="font-mono">{sup.email}</span>
+                            {(sup.country || sup.city) && (
+                              <>
+                                <span>·</span>
+                                <span>{[sup.country, sup.city].filter(Boolean).join(' / ')}</span>
+                              </>
+                            )}
+                          </div>
+                          <div className="text-slate-500 text-[10px] font-mono">
+                            البنك: {sup.bankAccountDetails.bankName || 'غير محدد'} ({sup.bankAccountDetails.iban || 'بدون آيبان'})
+                          </div>
+
+                          {/* Store Quick Metrics Grid */}
+                          <div className="grid grid-cols-4 gap-1.5 pt-1 text-center">
+                            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800/80">
+                              <span className="text-[9px] text-slate-400 block">العملاء</span>
+                              <strong className="font-mono text-cyan-300">{supMetrics.clientsCount}</strong>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800/80">
+                              <span className="text-[9px] text-slate-400 block">الطلبات</span>
+                              <strong className="font-mono text-amber-300">{supMetrics.ordersCount}</strong>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800/80">
+                              <span className="text-[9px] text-slate-400 block">الموظفين</span>
+                              <strong className="font-mono text-slate-200">{supMetrics.employeesCount}</strong>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800/80">
+                              <span className="text-[9px] text-slate-400 block">رسوم المنصة</span>
+                              <strong className="font-mono text-purple-300 text-[10px]">
+                                {formatCurrency(supMetrics.totalPlatformFeesEarned)}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-slate-400">رصيد مبيعات المتجر:</span>
+                            <strong className="text-emerald-400 font-mono font-bold tabular-nums">
+                              {formatCurrency(sup.walletBalance, { withGrouping: true })}
+                            </strong>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSupervisedStoreState({ supplierId: sup.id, initialTab: 'overview' })
+                              }
+                              className="flex-1 px-3 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>إشراف وإدارة المتجر</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSupervisedStoreState({ supplierId: sup.id, initialTab: 'profile' })
+                              }
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              title="البيانات الشخصية والبنكية"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                              <span>البيانات</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSupervisedStoreState({ supplierId: sup.id, initialTab: 'clients' })
+                              }
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              title="عرض عملاء المتجر"
+                            >
+                              <Users className="w-3.5 h-3.5" />
+                              <span>العملاء</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSupervisedStoreState({ supplierId: sup.id, initialTab: 'activity' })
+                              }
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              title="عرض حركة المتجر"
+                            >
+                              <Activity className="w-3.5 h-3.5" />
+                              <span>الحركة</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleSupplierActiveStatus(sup.id)}
+                              className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+                                supActive
+                                  ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                  : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                              }`}
+                              title={supActive ? 'إيقاف المتجر مؤقتاً' : 'إعادة تفعيل المتجر'}
+                            >
+                              <Power className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1148,6 +1395,15 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Store Supervision & Management Modal */}
+      {activeSupervisedStore && supervisedStoreState && (
+        <AdminStoreSupervisionModal
+          supplier={activeSupervisedStore}
+          initialTab={supervisedStoreState.initialTab}
+          onClose={() => setSupervisedStoreState(null)}
+        />
       )}
 
     </div>

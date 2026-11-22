@@ -6,6 +6,7 @@ import {
   canSwitchToPosClient,
   canSwitchToSupplier,
   checkEmailRegistrationConflict,
+  evaluateEmployeeLoginEligibility,
   isMasterAdminEmail,
   resolveAccountIdentityByEmail,
   resolveScopedCurrentPos,
@@ -403,5 +404,34 @@ test('filterNotificationsForPosClient never leaks notifications from other clien
   assert.equal(isNotificationForPosClient(notifications[4], 'pos-1', 'sup-1'), false);
   assert.equal(isNotificationForPosClient(notifications[5], 'pos-1', 'sup-1'), false);
   assert.equal(filterNotificationsForPosClient(notifications, '', 'sup-1').length, 0);
+});
+
+test('evaluateEmployeeLoginEligibility blocks suspended stores and suspended employees while allowing active accounts', () => {
+  const activeSup = makeSupplier({ id: 'sup-2', isActive: true });
+  const suspendedSup = makeSupplier({ id: 'sup-2', isActive: false });
+  const activeEmp = makeEmployee({ id: 'emp-1', isActive: true });
+  const suspendedEmp = makeEmployee({
+    id: 'emp-2',
+    isActive: false,
+    permissions: { canAddServices: true, canEditServicePrices: true, canViewReports: true },
+  });
+
+  assert.equal(evaluateEmployeeLoginEligibility(activeSup, activeEmp).allowed, true);
+  assert.equal(evaluateEmployeeLoginEligibility(suspendedSup, activeEmp).allowed, false);
+
+  const empBlocked = evaluateEmployeeLoginEligibility(activeSup, suspendedEmp);
+  assert.equal(empBlocked.allowed, false);
+  assert.equal(empBlocked.title, 'حساب الموظف موقوف');
+
+  // Suspended employee identity builds with all permissions stripped
+  const builtSuspended = buildAuthUserFromIdentity({
+    kind: 'employee',
+    email: suspendedEmp.email,
+    supplier: activeSup,
+    employee: suspendedEmp,
+  });
+  assert.equal(builtSuspended.authUser.permissions?.canAddServices, false);
+  assert.equal(builtSuspended.authUser.permissions?.canEditServicePrices, false);
+  assert.equal(builtSuspended.authUser.permissions?.canViewReports, false);
 });
 

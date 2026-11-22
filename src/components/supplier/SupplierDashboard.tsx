@@ -70,6 +70,7 @@ import { OfficeEmployeesView } from './OfficeEmployeesView';
 import { BankAccountsView } from './BankAccountsView';
 import { SupplierNotificationsView } from './SupplierNotificationsView';
 import { VoucherWarehousesView } from './VoucherWarehousesView';
+import { SupplierClientsDirectoryModal } from './SupplierClientsDirectoryModal';
 import {
   getPackageAvailableStock,
   mergeWarehouseOptionsIntoPackage,
@@ -173,6 +174,7 @@ export const SupplierDashboard: React.FC = () => {
   const [newCatIsFreeGift, setNewCatIsFreeGift] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [grantModalClientPosId, setGrantModalClientPosId] = useState<string | undefined>(undefined);
+  const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
 
   const perms = useMemo(
     () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
@@ -882,6 +884,18 @@ export const SupplierDashboard: React.FC = () => {
               </button>
             )}
 
+            {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
+              <button
+                type="button"
+                onClick={() => setShowClientsDirectoryModal(true)}
+                className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                title="عرض عملاء القاعدة المحلية وقاعدة فايربيس مع إيميل تسجيل الدخول والمعرّف"
+              >
+                <Database className="w-4 h-4 text-cyan-400" />
+                <span>عملاء المحلي وفايربيس</span>
+              </button>
+            )}
+
             {(isStoreOwner || perms.canManageEmployees) && (
               <button
                 type="button"
@@ -1511,10 +1525,22 @@ export const SupplierDashboard: React.FC = () => {
                           type="button"
                           onClick={() => setEditingService(srv)}
                           className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-amber-500/20 text-slate-200 hover:text-amber-400 border border-slate-700 hover:border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-                          title="تعديل بيانات الخدمة والأسعار والباقات"
+                          title={
+                            isStoreOwner || (perms.canAddServices && perms.canEditServicePrices)
+                              ? 'تعديل بيانات الخدمة والأسعار والباقات'
+                              : perms.canAddServices
+                              ? 'تعديل بيانات الخدمة والباقات (دون تغيير الأسعار)'
+                              : 'تعديل أسعار الباقات والرتب فقط'
+                          }
                         >
                           <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                          <span>{perms.canAddServices ? 'تعديل الخدمة والأسعار' : 'تعديل الأسعار'}</span>
+                          <span>
+                            {isStoreOwner || (perms.canAddServices && perms.canEditServicePrices)
+                              ? 'تعديل الخدمة والأسعار'
+                              : perms.canAddServices
+                              ? 'تعديل بيانات الخدمة'
+                              : 'تعديل الأسعار'}
+                          </span>
                         </button>
                       </div>
                     )}
@@ -2743,15 +2769,28 @@ export const SupplierDashboard: React.FC = () => {
                   : 'صلاحية الاطلاع على العملاء مفعلة (عرض فقط بدون تعديل الرتب أو الميزات).'}
               </p>
             </div>
-            {(isStoreOwner || perms.canUpgradeClientTiers) && (
-              <button
-                onClick={() => setShowInviteModal(true)}
-                className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-                <span>إرسال رابط تسجيل برتبة محددة</span>
-              </button>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
+                <button
+                  type="button"
+                  onClick={() => setShowClientsDirectoryModal(true)}
+                  className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="عرض عملاء القاعدة المحلية وقاعدة فايربيس مع إيميل تسجيل الدخول والمعرّف"
+                >
+                  <Database className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>عرض عملاء المحلي وفايربيس</span>
+                </button>
+              )}
+              {(isStoreOwner || perms.canUpgradeClientTiers) && (
+                <button
+                  onClick={() => setShowInviteModal(true)}
+                  className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  <span>إرسال رابط تسجيل برتبة محددة</span>
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3241,6 +3280,16 @@ export const SupplierDashboard: React.FC = () => {
             setShowGrantModal(false);
             setGrantModalClientPosId(undefined);
           }}
+        />
+      )}
+
+      {/* Supplier Local vs Firebase Clients Directory Modal */}
+      {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
+        <SupplierClientsDirectoryModal
+          isOpen={showClientsDirectoryModal}
+          onClose={() => setShowClientsDirectoryModal(false)}
+          supplierId={supplier.id}
+          supplierStoreName={supplier.storeName}
         />
       )}
 

@@ -8,6 +8,7 @@ import {
   UserRole,
 } from '../types';
 import {
+  isEmployeeActive,
   normalizeEmployeePermissions,
   normalizeStoreEmail,
   resolveStoreActorByEmail,
@@ -490,7 +491,9 @@ export function buildAuthUserFromIdentity(
   }
 
   if (identity.kind === 'employee') {
-    const perms = normalizeEmployeePermissions(identity.employee.permissions);
+    const perms = isEmployeeActive(identity.employee)
+      ? normalizeEmployeePermissions(identity.employee.permissions)
+      : normalizeEmployeePermissions(null);
     return {
       role: 'employee',
       supplierId: identity.supplier.id,
@@ -594,5 +597,26 @@ export function filterNotificationsForPosClient<
 >(notifications: T[], posId?: string | null, supplierId?: string | null): T[] {
   if (!Array.isArray(notifications)) return [];
   return notifications.filter((n) => isNotificationForPosClient(n, posId, supplierId));
+}
+
+export function evaluateEmployeeLoginEligibility(
+  supplier: Pick<Supplier, 'isActive'>,
+  employee: Pick<OfficeEmployee, 'isActive'>
+): { allowed: boolean; title?: string; error?: string } {
+  if (supplier?.isActive === false) {
+    return {
+      allowed: false,
+      title: 'المتجر موقوف من الإدارة',
+      error: 'تم إيقاف المتجر التابع له هذا الحساب من قِبل مدير التطبيق. يرجى التواصل مع إدارة المنصة.',
+    };
+  }
+  if (!isEmployeeActive(employee)) {
+    return {
+      allowed: false,
+      title: 'حساب الموظف موقوف',
+      error: 'تم إيقاف صلاحية دخول هذا الموظف مؤقتاً من قِبل مالك المتجر. يرجى مراجعة مالك المتجر لإعادة التفعيل.',
+    };
+  }
+  return { allowed: true };
 }
 

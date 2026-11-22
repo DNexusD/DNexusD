@@ -5,14 +5,16 @@ import {
   filterSupplierNotificationsForEmployee,
   getFirstAllowedSupplierTab,
   isDepositVisibleToEmployee,
+  isEmployeeActive,
   isEmployeeTabAllowed,
   isOrderVisibleToEmployee,
   resolveEffectiveEmployeePermissions,
   resolveStoreActorByEmail,
+  sanitizeServiceUpdatesForEmployeePermissions,
   validateOfficeEmployeeInput,
   verifyEmployeeCredentials,
 } from './employeePermissions';
-import { AppNotification, AuthUser, OfficeEmployee, Supplier } from '../types';
+import { AppNotification, AuthUser, DigitalService, OfficeEmployee, Supplier } from '../types';
 
 function makeSupplier(overrides: Partial<Supplier> = {}): Supplier {
   return {
@@ -258,4 +260,132 @@ test('validateOfficeEmployeeInput blocks owner email collision, duplicates, miss
     'owner@store.sa'
   );
   assert.equal(ok.valid, true);
+});
+
+test('suspended employee collapses to empty permissions in resolveEffectiveEmployeePermissions', () => {
+  const suspendedEmp = makeEmployee({
+    id: 'emp-susp',
+    email: 'susp@store.sa',
+    isActive: false,
+    permissions: {
+      canManagePlayerIdOrders: true,
+      canAddServices: true,
+      canEditServicePrices: true,
+      canViewReports: true,
+    },
+  });
+  const sup = makeSupplier({ employees: [suspendedEmp] });
+  const empUser: AuthUser = {
+    id: 'emp-susp',
+    email: 'susp@store.sa',
+    name: 'موقوف',
+    role: 'employee',
+    supplierId: 'sup-1',
+    employeeId: 'emp-susp',
+    permissions: suspendedEmp.permissions,
+  };
+
+  assert.equal(isEmployeeActive(suspendedEmp), false);
+  assert.equal(isEmployeeActive(makeEmployee()), true);
+
+  const effective = resolveEffectiveEmployeePermissions(empUser, 'employee', sup);
+  assert.equal(countActiveEmployeePermissions(effective), 0);
+  assert.equal(effective.canAddServices, false);
+  assert.equal(effective.canEditServicePrices, false);
+  assert.equal(effective.canViewReports, false);
+});
+
+test('sanitizeServiceUpdatesForEmployeePermissions enforces field-level restrictions for price-only and detail-only employees', () => {
+  const existingService: DigitalService = {
+    id: 'srv-1',
+    supplierId: 'sup-1',
+    catalogId: 'cat-1',
+    nameAr: 'ببجي موبايل',
+    descriptionAr: 'شحن شدات',
+    icon: '🎮',
+    deliveryMethods: ['player_id'],
+    isActive: true,
+    packages: [
+      {
+        id: 'pkg-1',
+        name: '60 شدة',
+        deliveryMethod: 'player_id',
+        tierPrices: { regular: 1, bronze: 0.95, silver: 0.9, gold: 0.85, vip: 0.8 },
+      },
+    ],
+  };
+
+  const priceOnlyPerms = resolveEffectiveEmployeePermissions(
+    {
+      id: 'emp-p',
+      email: 'p@store.sa',
+      name: 'مسعر',
+      role: 'employee',
+      permissions: { canEditServicePrices: true, canAddServices: false },
+    },
+    'employee'
+  );
+
+  const sanitizedPriceOnly = sanitizeServiceUpdatesForEmployeePermissions(
+    existingService,
+    {
+      nameAr: 'اسم مخترق',
+      catalogId: 'cat-hacked',
+      isActive: false,
+      packages: [
+        {
+          id: 'pkg-1',
+          name: 'باقة معدلة',
+          deliveryMethod: 'voucher_code',
+          tierPrices: { regular: 1.5, bronze: 1.4, silver: 1.3, gold: 1.2, vip: 1.1 },
+        },
+        {
+          id: 'pkg-injected',
+          name: 'باقة جديدة',
+          tierPrices: { regular: 5, bronze: 5, silver: 5, gold: 5, vip: 5 },
+        },
+      ],
+    },
+    priceOnlyPerms,
+    'employee'
+  );
+
+  assert.equal(sanitizedPriceOnly.nameAr, undefined);
+  assert.equal(sanitizedPriceOnly.catalogId, undefined);
+  assert.equal(sanitizedPriceOnly.isActive, undefined);
+  assert.equal(sanitizedPriceOnly.packages?.length, 1);
+  assert.equal(sanitizedPriceOnly.packages?.[0].name, '60 شدة');
+  assert.equal(sanitizedPriceOnly.packages?.[0].deliveryMethod, 'player_id');
+  assert.equal(sanitizedPriceOnly.packages?.[0].tierPrices.regular, 1.5);
+
+  const detailOnlyPerms = resolveEffectiveEmployeePermissions(
+    {
+      id: 'emp-d',
+      email: 'd@store.sa',
+      name: 'منسق',
+      role: 'employee',
+      permissions: { canAddServices: true, canEditServicePrices: false },
+    },
+    'employee'
+  );
+
+  const sanitizedDetailOnly = sanitizeServiceUpdatesForEmployeePermissions(
+    existingService,
+    {
+      nameAr: 'ببجي العالمية',
+      packages: [
+        {
+          id: 'pkg-1',
+          name: '60 UC',
+          tierPrices: { regular: 99, bronze: 99, silver: 99, gold: 99, vip: 99 },
+        },
+      ],
+    },
+    detailOnlyPerms,
+    'employee'
+  );
+
+  assert.equal(sanitizedDetailOnly.nameAr, 'ببجي العالمية');
+  assert.equal(sanitizedDetailOnly.packages?.[0].name, '60 UC');
+  assert.equal(sanitizedDetailOnly.packages?.[0].tierPrices.regular, 1);
 });

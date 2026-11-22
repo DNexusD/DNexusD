@@ -37,8 +37,8 @@ export const ADMIN_PERMISSION_META: Array<{
   },
   {
     key: 'canManageSuppliers',
-    labelAr: 'إشراف وإضافة المتاجر والممولين',
-    descriptionAr: 'استعراض قائمة المتاجر، إضافة متاجرن جدد، وإرسال روابط التسجيل.',
+    labelAr: 'إشراف وإدارة المتاجر والممولين',
+    descriptionAr: 'الإشراف الكامل على المتاجر، الاطلاع على بياناتهم الشخصية وعملائهم وحركة متاجرهم، وتعديلهم وتفعيلهم أو إيقافهم.',
     category: 'operations',
   },
   {

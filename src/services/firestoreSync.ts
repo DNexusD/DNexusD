@@ -2,11 +2,13 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  getDocsFromServer,
+  query,
+  where,
   setDoc,
-  updateDoc,
   deleteDoc,
-  onSnapshot,
   writeBatch,
   DocumentReference
 } from 'firebase/firestore';
@@ -35,10 +37,47 @@ import {
   mergeSuperAdminAccountsForPreservation,
   sanitizeSuperAdminForCleanReset
 } from '../utils/systemReset';
+import {
+  clearEntityPendingSync,
+  FullDatabaseSnapshot,
+  markEntityPendingSync
+} from '../utils/localFirestoreSync';
+import { normalizeEmployeePermissions, normalizeStoreEmail } from '../utils/employeePermissions';
 
 function sanitizeData<T>(obj: T): T {
   if (obj === undefined || obj === null) return obj;
   return JSON.parse(JSON.stringify(obj));
+}
+
+async function getDocPreferServer(ref: DocumentReference) {
+  try {
+    return await getDocFromServer(ref);
+  } catch {
+    return await getDoc(ref);
+  }
+}
+
+async function getDocsPreferServer(colName: string) {
+  const colRef = collection(db, colName);
+  try {
+    return await getDocsFromServer(colRef);
+  } catch {
+    return await getDocs(colRef);
+  }
+}
+
+function mapDocsById<T extends { id?: string }>(
+  docs: Array<{ id: string; data: () => unknown }>
+): T[] {
+  const map = new Map<string, T>();
+  for (const docSnap of docs) {
+    const raw = docSnap.data() as T;
+    if (!raw || typeof raw !== 'object') continue;
+    const resolvedId = raw.id || docSnap.id;
+    if (!resolvedId) continue;
+    map.set(resolvedId, { ...raw, id: resolvedId });
+  }
+  return Array.from(map.values());
 }
 
 export const firestoreSync = {
@@ -57,10 +96,10 @@ export const firestoreSync = {
     } = {};
 
     const [adminRes, settingsRes, suppliersRes, clientsRes] = await Promise.allSettled([
-      getDoc(doc(db, 'system', 'superAdmin')),
-      getDoc(doc(db, 'system', 'platformSettings')),
-      getDocs(collection(db, 'suppliers')),
-      getDocs(collection(db, 'posClients')),
+      getDocPreferServer(doc(db, 'system', 'superAdmin')),
+      getDocPreferServer(doc(db, 'system', 'platformSettings')),
+      getDocsPreferServer('suppliers'),
+      getDocsPreferServer('posClients'),
     ]);
 
     if (adminRes.status === 'fulfilled' && adminRes.value.exists()) {
@@ -70,23 +109,171 @@ export const firestoreSync = {
       result.platformSettings = settingsRes.value.data() as Partial<PlatformInterfaceSettings>;
     }
     if (suppliersRes.status === 'fulfilled') {
-      const supMap = new Map<string, Supplier>();
-      suppliersRes.value.forEach(docSnap => {
-        const sup = docSnap.data() as Supplier;
-        if (sup && sup.id) supMap.set(sup.id, sup);
-      });
-      result.suppliers = Array.from(supMap.values());
+      result.suppliers = mapDocsById<Supplier>(suppliersRes.value.docs);
     }
     if (clientsRes.status === 'fulfilled') {
-      const clientMap = new Map<string, POSClient>();
-      clientsRes.value.forEach(docSnap => {
-        const client = docSnap.data() as POSClient;
-        if (client && client.id) clientMap.set(client.id, client);
-      });
-      result.posClients = Array.from(clientMap.values());
+      result.posClients = mapDocsById<POSClient>(clientsRes.value.docs);
     }
 
     return result;
+  },
+
+  // Fetch all remote databases directly from Firestore server for full local <-> remote reconciliation
+  async fetchAllDatabasesFromServer(): Promise<FullDatabaseSnapshot> {
+    const [
+      adminSnap,
+      settingsSnap,
+      suppliersSnap,
+      posClientsSnap,
+      catalogsSnap,
+      servicesSnap,
+      voucherWarehousesSnap,
+      ordersSnap,
+      depositRequestsSnap,
+      loanRepaymentRequestsSnap,
+      supplierBankAccountsSnap,
+      accountingEntriesSnap,
+      adminAccountingEntriesSnap,
+      inviteLinksSnap,
+    ] = await Promise.all([
+      getDocFromServer(doc(db, 'system', 'superAdmin')),
+      getDocFromServer(doc(db, 'system', 'platformSettings')),
+      getDocsFromServer(collection(db, 'suppliers')),
+      getDocsFromServer(collection(db, 'posClients')),
+      getDocsFromServer(collection(db, 'catalogs')),
+      getDocsFromServer(collection(db, 'services')),
+      getDocsFromServer(collection(db, 'voucherWarehouses')),
+      getDocsFromServer(collection(db, 'orders')),
+      getDocsFromServer(collection(db, 'depositRequests')),
+      getDocsFromServer(collection(db, 'loanRepaymentRequests')),
+      getDocsFromServer(collection(db, 'supplierBankAccounts')),
+      getDocsFromServer(collection(db, 'accountingEntries')),
+      getDocsFromServer(collection(db, 'adminAccountingEntries')),
+      getDocsFromServer(collection(db, 'inviteLinks')),
+    ]);
+
+    return {
+      superAdmin: adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
+      platformSettings: settingsSnap.exists()
+        ? (settingsSnap.data() as Partial<PlatformInterfaceSettings>)
+        : null,
+      suppliers: mapDocsById<Supplier>(suppliersSnap.docs),
+      posClients: mapDocsById<POSClient>(posClientsSnap.docs),
+      catalogs: mapDocsById<Catalog>(catalogsSnap.docs),
+      services: mapDocsById<DigitalService>(servicesSnap.docs),
+      voucherWarehouses: mapDocsById<VoucherWarehouse>(voucherWarehousesSnap.docs),
+      orders: mapDocsById<Order>(ordersSnap.docs),
+      depositRequests: mapDocsById<DepositRequest>(depositRequestsSnap.docs),
+      loanRepaymentRequests: mapDocsById<LoanRepaymentRequest>(loanRepaymentRequestsSnap.docs),
+      supplierBankAccounts: mapDocsById<SupplierBankAccount>(supplierBankAccountsSnap.docs),
+      accountingEntries: mapDocsById<AccountingEntry>(accountingEntriesSnap.docs),
+      adminAccountingEntries: mapDocsById<AdminAccountingEntry>(adminAccountingEntriesSnap.docs),
+      inviteLinks: mapDocsById<InviteLink>(inviteLinksSnap.docs),
+    };
+  },
+
+  async fetchSupplierClientsDirectoryFromServer(supplierId: string): Promise<{
+    clients: POSClient[];
+    users: AuthUser[];
+  }> {
+    if (!supplierId) {
+      return { clients: [], users: [] };
+    }
+    const clientsQuery = query(
+      collection(db, 'posClients'),
+      where('supplierId', '==', supplierId)
+    );
+    const usersQuery = query(
+      collection(db, 'users'),
+      where('role', '==', 'pos_client')
+    );
+
+    const [clientsSnap, usersSnap] = await Promise.all([
+      getDocsFromServer(clientsQuery),
+      getDocsFromServer(usersQuery).catch(() => null),
+    ]);
+
+    return {
+      clients: mapDocsById<POSClient>(clientsSnap.docs),
+      users: usersSnap ? mapDocsById<AuthUser>(usersSnap.docs) : [],
+    };
+  },
+
+  async commitBatchSets(
+    entries: Array<{ path: [string, string]; data: unknown }>
+  ): Promise<number> {
+    if (entries.length === 0) return 0;
+    const CHUNK_SIZE = 400;
+    let written = 0;
+    for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
+      const chunk = entries.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+      for (const entry of chunk) {
+        batch.set(
+          doc(db, entry.path[0], entry.path[1]),
+          sanitizeData(entry.data) as Record<string, unknown>,
+          { merge: true }
+        );
+      }
+      await batch.commit();
+      written += chunk.length;
+    }
+    return written;
+  },
+
+  async syncUsersForAccounts(suppliers: Supplier[], posClients: POSClient[]): Promise<number> {
+    const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
+    const nowIso = new Date().toISOString();
+
+    for (const sup of suppliers) {
+      if (!sup?.id) continue;
+      if (sup.email) {
+        const cleanSupEmail = normalizeStoreEmail(sup.email);
+        const supUser: AuthUser & { updatedAt: string } = {
+          id: sup.id,
+          email: cleanSupEmail,
+          name: sup.name,
+          role: 'supplier',
+          phone: sup.phone,
+          associatedId: sup.id,
+          updatedAt: nowIso,
+        };
+        userEntries.push({ path: ['users', sup.id], data: supUser });
+      }
+      for (const emp of sup.employees || []) {
+        if (!emp?.id || !emp.email) continue;
+        const empUser: AuthUser & { updatedAt: string } = {
+          id: emp.id,
+          email: normalizeStoreEmail(emp.email),
+          name: emp.name,
+          role: 'employee',
+          phone: emp.phone,
+          associatedId: sup.id,
+          supplierId: sup.id,
+          employeeId: emp.id,
+          roleTitle: emp.roleTitle,
+          permissions: normalizeEmployeePermissions(emp.permissions),
+          updatedAt: nowIso,
+        };
+        userEntries.push({ path: ['users', emp.id], data: empUser });
+      }
+    }
+
+    for (const client of posClients) {
+      if (!client?.id || !client.email) continue;
+      const clientUser: AuthUser & { updatedAt: string } = {
+        id: client.id,
+        email: normalizeStoreEmail(client.email),
+        name: client.ownerName || client.tradeName,
+        role: 'pos_client',
+        phone: client.phone,
+        associatedId: client.id,
+        updatedAt: nowIso,
+      };
+      userEntries.push({ path: ['users', client.id], data: clientUser });
+    }
+
+    return this.commitBatchSets(userEntries);
   },
 
   // Sync User profile
@@ -106,7 +293,7 @@ export const firestoreSync = {
   async getUser(userId: string): Promise<AuthUser | null> {
     const path = `users/${userId}`;
     try {
-      const snap = await getDoc(doc(db, 'users', userId));
+      const snap = await getDocPreferServer(doc(db, 'users', userId));
       return snap.exists() ? (snap.data() as AuthUser) : null;
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, path);
@@ -128,7 +315,9 @@ export const firestoreSync = {
     const path = `posClients/${client.id}`;
     try {
       await setDoc(doc(db, 'posClients', client.id), sanitizeData(client), { merge: true });
+      clearEntityPendingSync('posClients', client.id);
     } catch (error) {
+      markEntityPendingSync('posClients', client.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -138,7 +327,9 @@ export const firestoreSync = {
     const path = `suppliers/${supplier.id}`;
     try {
       await setDoc(doc(db, 'suppliers', supplier.id), sanitizeData(supplier), { merge: true });
+      clearEntityPendingSync('suppliers', supplier.id);
     } catch (error) {
+      markEntityPendingSync('suppliers', supplier.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -148,7 +339,9 @@ export const firestoreSync = {
     const path = 'system/superAdmin';
     try {
       await setDoc(doc(db, 'system', 'superAdmin'), sanitizeData(admin), { merge: true });
+      clearEntityPendingSync('superAdmin', 'superAdmin');
     } catch (error) {
+      markEntityPendingSync('superAdmin', 'superAdmin');
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -158,7 +351,9 @@ export const firestoreSync = {
     const path = 'system/platformSettings';
     try {
       await setDoc(doc(db, 'system', 'platformSettings'), sanitizeData(settings), { merge: true });
+      clearEntityPendingSync('platformSettings', 'platformSettings');
     } catch (error) {
+      markEntityPendingSync('platformSettings', 'platformSettings');
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -168,7 +363,9 @@ export const firestoreSync = {
     const path = `orders/${order.id}`;
     try {
       await setDoc(doc(db, 'orders', order.id), sanitizeData(order), { merge: true });
+      clearEntityPendingSync('orders', order.id);
     } catch (error) {
+      markEntityPendingSync('orders', order.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -178,7 +375,9 @@ export const firestoreSync = {
     const path = `depositRequests/${req.id}`;
     try {
       await setDoc(doc(db, 'depositRequests', req.id), sanitizeData(req), { merge: true });
+      clearEntityPendingSync('depositRequests', req.id);
     } catch (error) {
+      markEntityPendingSync('depositRequests', req.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -188,7 +387,9 @@ export const firestoreSync = {
     const path = `loanRepaymentRequests/${req.id}`;
     try {
       await setDoc(doc(db, 'loanRepaymentRequests', req.id), sanitizeData(req), { merge: true });
+      clearEntityPendingSync('loanRepaymentRequests', req.id);
     } catch (error) {
+      markEntityPendingSync('loanRepaymentRequests', req.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -198,7 +399,9 @@ export const firestoreSync = {
     const path = `accountingEntries/${entry.id}`;
     try {
       await setDoc(doc(db, 'accountingEntries', entry.id), sanitizeData(entry), { merge: true });
+      clearEntityPendingSync('accountingEntries', entry.id);
     } catch (error) {
+      markEntityPendingSync('accountingEntries', entry.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -208,7 +411,9 @@ export const firestoreSync = {
     const path = `adminAccountingEntries/${entry.id}`;
     try {
       await setDoc(doc(db, 'adminAccountingEntries', entry.id), sanitizeData(entry), { merge: true });
+      clearEntityPendingSync('adminAccountingEntries', entry.id);
     } catch (error) {
+      markEntityPendingSync('adminAccountingEntries', entry.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -218,7 +423,9 @@ export const firestoreSync = {
     const path = `catalogs/${cat.id}`;
     try {
       await setDoc(doc(db, 'catalogs', cat.id), sanitizeData(cat), { merge: true });
+      clearEntityPendingSync('catalogs', cat.id);
     } catch (error) {
+      markEntityPendingSync('catalogs', cat.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -227,6 +434,7 @@ export const firestoreSync = {
     const path = `catalogs/${catalogId}`;
     try {
       await deleteDoc(doc(db, 'catalogs', catalogId));
+      clearEntityPendingSync('catalogs', catalogId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -236,7 +444,9 @@ export const firestoreSync = {
     const path = `services/${service.id}`;
     try {
       await setDoc(doc(db, 'services', service.id), sanitizeData(service), { merge: true });
+      clearEntityPendingSync('services', service.id);
     } catch (error) {
+      markEntityPendingSync('services', service.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -245,6 +455,7 @@ export const firestoreSync = {
     const path = `services/${serviceId}`;
     try {
       await deleteDoc(doc(db, 'services', serviceId));
+      clearEntityPendingSync('services', serviceId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -255,7 +466,9 @@ export const firestoreSync = {
     const path = `voucherWarehouses/${warehouse.id}`;
     try {
       await setDoc(doc(db, 'voucherWarehouses', warehouse.id), sanitizeData(warehouse), { merge: true });
+      clearEntityPendingSync('voucherWarehouses', warehouse.id);
     } catch (error) {
+      markEntityPendingSync('voucherWarehouses', warehouse.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -264,6 +477,7 @@ export const firestoreSync = {
     const path = `voucherWarehouses/${warehouseId}`;
     try {
       await deleteDoc(doc(db, 'voucherWarehouses', warehouseId));
+      clearEntityPendingSync('voucherWarehouses', warehouseId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -284,7 +498,9 @@ export const firestoreSync = {
     const path = `inviteLinks/${link.id}`;
     try {
       await setDoc(doc(db, 'inviteLinks', link.id), sanitizeData(link), { merge: true });
+      clearEntityPendingSync('inviteLinks', link.id);
     } catch (error) {
+      markEntityPendingSync('inviteLinks', link.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -294,7 +510,9 @@ export const firestoreSync = {
     const path = `supplierBankAccounts/${account.id}`;
     try {
       await setDoc(doc(db, 'supplierBankAccounts', account.id), sanitizeData(account), { merge: true });
+      clearEntityPendingSync('supplierBankAccounts', account.id);
     } catch (error) {
+      markEntityPendingSync('supplierBankAccounts', account.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   },
@@ -303,18 +521,21 @@ export const firestoreSync = {
     const path = `supplierBankAccounts/${accountId}`;
     try {
       await deleteDoc(doc(db, 'supplierBankAccounts', accountId));
+      clearEntityPendingSync('supplierBankAccounts', accountId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
   },
 
-  // Seed all initial data to Firestore in a batch
+  // Seed all initial data to Firestore in chunked batches (safe above 500 operations)
   async seedInitialDataToFirestore(data: {
     posClients: POSClient[];
     suppliers: Supplier[];
     superAdmin: SuperAdmin;
+    platformSettings?: PlatformInterfaceSettings;
     catalogs: Catalog[];
     services: DigitalService[];
+    voucherWarehouses?: VoucherWarehouse[];
     orders: Order[];
     depositRequests: DepositRequest[];
     loanRepaymentRequests?: LoanRepaymentRequest[];
@@ -324,71 +545,53 @@ export const firestoreSync = {
     inviteLinks: InviteLink[];
   }): Promise<{ success: boolean; error?: string }> {
     try {
-      const batch = writeBatch(db);
+      const entries: Array<{ path: [string, string]; data: unknown }> = [
+        { path: ['system', 'superAdmin'], data: data.superAdmin },
+      ];
 
-      // Seed SuperAdmin
-      batch.set(doc(db, 'system', 'superAdmin'), sanitizeData(data.superAdmin));
+      if (data.platformSettings) {
+        entries.push({ path: ['system', 'platformSettings'], data: data.platformSettings });
+      }
 
-      // Seed POS Clients
       for (const client of data.posClients) {
-        batch.set(doc(db, 'posClients', client.id), sanitizeData(client));
+        entries.push({ path: ['posClients', client.id], data: client });
       }
-
-      // Seed Suppliers
       for (const sup of data.suppliers) {
-        batch.set(doc(db, 'suppliers', sup.id), sanitizeData(sup));
+        entries.push({ path: ['suppliers', sup.id], data: sup });
       }
-
-      // Seed Catalogs
       for (const cat of data.catalogs) {
-        batch.set(doc(db, 'catalogs', cat.id), sanitizeData(cat));
+        entries.push({ path: ['catalogs', cat.id], data: cat });
       }
-
-      // Seed Services
       for (const srv of data.services) {
-        batch.set(doc(db, 'services', srv.id), sanitizeData(srv));
+        entries.push({ path: ['services', srv.id], data: srv });
       }
-
-      // Seed Orders
+      for (const wh of data.voucherWarehouses || []) {
+        entries.push({ path: ['voucherWarehouses', wh.id], data: wh });
+      }
       for (const ord of data.orders) {
-        batch.set(doc(db, 'orders', ord.id), sanitizeData(ord));
+        entries.push({ path: ['orders', ord.id], data: ord });
       }
-
-      // Seed Deposits & Loans
       for (const dep of data.depositRequests) {
-        batch.set(doc(db, 'depositRequests', dep.id), sanitizeData(dep));
+        entries.push({ path: ['depositRequests', dep.id], data: dep });
       }
-
-      // Seed Loan Repayment Requests
-      if (data.loanRepaymentRequests) {
-        for (const req of data.loanRepaymentRequests) {
-          batch.set(doc(db, 'loanRepaymentRequests', req.id), sanitizeData(req));
-        }
+      for (const req of data.loanRepaymentRequests || []) {
+        entries.push({ path: ['loanRepaymentRequests', req.id], data: req });
       }
-
-      // Seed Supplier Bank Accounts
-      if (data.supplierBankAccounts) {
-        for (const acc of data.supplierBankAccounts) {
-          batch.set(doc(db, 'supplierBankAccounts', acc.id), sanitizeData(acc));
-        }
+      for (const acc of data.supplierBankAccounts || []) {
+        entries.push({ path: ['supplierBankAccounts', acc.id], data: acc });
       }
-
-      // Seed Accounting
       for (const acc of data.accountingEntries) {
-        batch.set(doc(db, 'accountingEntries', acc.id), sanitizeData(acc));
+        entries.push({ path: ['accountingEntries', acc.id], data: acc });
       }
-
-      // Seed Admin Accounting
       for (const admAcc of data.adminAccountingEntries) {
-        batch.set(doc(db, 'adminAccountingEntries', admAcc.id), sanitizeData(admAcc));
+        entries.push({ path: ['adminAccountingEntries', admAcc.id], data: admAcc });
       }
-
-      // Seed Invites
       for (const inv of data.inviteLinks) {
-        batch.set(doc(db, 'inviteLinks', inv.id), sanitizeData(inv));
+        entries.push({ path: ['inviteLinks', inv.id], data: inv });
       }
 
-      await batch.commit();
+      await this.commitBatchSets(entries);
+      await this.syncUsersForAccounts(data.suppliers, data.posClients);
       return { success: true };
     } catch (err: unknown) {
       console.error('Error seeding data to Firestore:', err);
@@ -573,7 +776,7 @@ export const firestoreSync = {
   }> {
     try {
       const markerRef = doc(db, 'system', 'cleanStateMigrationV2');
-      const markerSnap = await getDoc(markerRef);
+      const markerSnap = await getDocPreferServer(markerRef);
       if (markerSnap.exists()) {
         return { migrated: false };
       }

@@ -58,11 +58,13 @@ import {
 import {
   filterSupplierNotificationsForEmployee,
   getFirstAllowedSupplierTab,
+  isEmployeeActive,
   isOrderVisibleToEmployee,
   normalizeEmployeePermissions,
   normalizeStoreEmail,
   resolveEffectiveEmployeePermissions,
   resolveStoreActorByEmail,
+  sanitizeServiceUpdatesForEmployeePermissions,
   validateOfficeEmployeeInput,
   verifyEmployeeCredentials
 } from '../utils/employeePermissions';
@@ -123,6 +125,7 @@ import {
   canSwitchToPosClient,
   canSwitchToSupplier,
   checkEmailRegistrationConflict,
+  evaluateEmployeeLoginEligibility,
   filterNotificationsForPosClient,
   findPosClientsForEmail,
   isNotificationForPosClient,
@@ -130,9 +133,14 @@ import {
   resolveScopedCurrentPos,
   resolveScopedSupplier
 } from '../utils/accountAuth';
+import {
+  isEmailUsedByOtherAccount,
+  isSupplierActive
+} from '../utils/storeSupervision';
 import confetti from 'canvas-confetti';
 import {
   testConnection,
+  reconnectFirestore,
   auth,
   googleProvider,
   db,
@@ -144,6 +152,16 @@ import {
   confirmPasswordReset
 } from '../services/firebase';
 import { isNavigatorOffline } from '../utils/firestoreConnectivity';
+import {
+  clearEntityPendingSync,
+  readPendingSyncMap,
+  readSyncedIdsMap,
+  reconcileCollectionWithRemote,
+  reconcilePlatformSettingsWithRemote,
+  reconcileSuperAdminWithRemote,
+  SyncedIdsMap,
+  writeSyncedIdsMap
+} from '../utils/localFirestoreSync';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { onSnapshot, collection, doc } from 'firebase/firestore';
 import { firestoreSync } from '../services/firestoreSync';
@@ -179,11 +197,23 @@ interface AppContextType {
   // Firebase Firestore Status & Sync
   isFirestoreConnected: boolean;
   isSyncingWithFirestore: boolean;
+  lastFirestoreSyncAt: string | null;
+  databaseSyncMessage: string | null;
   isSupplierSelectionRequired: boolean;
   setIsSupplierSelectionRequired: (required: boolean) => void;
   syncAllToFirestore: () => Promise<void>;
   clearUsersSuppliersAndClientsData: () => Promise<void>;
   checkDatabaseConnection: () => Promise<ConnectionTestResult>;
+  ensureDatabaseConnectedAndSynced: (options?: {
+    forceSync?: boolean;
+    silent?: boolean;
+  }) => Promise<{
+    connected: boolean;
+    synced: boolean;
+    pushedCount: number;
+    message: string;
+    error?: string;
+  }>;
 
   // Authentication State & Actions
   isAuthenticated: boolean;
@@ -409,6 +439,8 @@ interface AppContextType {
   
   addSupplier: (newSup: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => void;
   updateSupplierFeeConfig: (supplierId: string, config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
+  adminUpdateSupplier: (supplierId: string, updates: Partial<Supplier>) => { success: boolean; error?: string };
+  toggleSupplierActiveStatus: (supplierId: string) => void;
   updateGlobalFeeConfig: (config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
   adminSettleBank: (amount: number, bankIban: string) => void;
   adminTransferToAgent: (targetPosCode: string, amount: number) => void;
@@ -791,9 +823,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Firebase Firestore connection state
+  // Firebase Firestore connection & sync state
   const [isFirestoreConnected, setIsFirestoreConnected] = useState<boolean>(false);
   const [isSyncingWithFirestore, setIsSyncingWithFirestore] = useState<boolean>(false);
+  const [lastFirestoreSyncAt, setLastFirestoreSyncAt] = useState<string | null>(null);
+  const [databaseSyncMessage, setDatabaseSyncMessage] = useState<string | null>(null);
   const [isSupplierSelectionRequired, setIsSupplierSelectionRequired] = useState<boolean>(false);
 
   // Compute registered suppliers strictly belonging to the currently logged in POS client
@@ -813,7 +847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return suppliers.filter(s => registeredSupIds.includes(s.id));
   }, [currentUser, posClients, suppliers]);
 
-  // Validate Connection to Firestore on boot and on-demand
+  // Validate & restore connection to Firestore on boot and on-demand
   const checkDatabaseConnection = async (retries = 1): Promise<ConnectionTestResult> => {
     if (isNavigatorOffline()) {
       setIsFirestoreConnected(false);
@@ -822,10 +856,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
       };
     }
-    let res = await testConnection(12000);
+    let res = await reconnectFirestore(12000);
     if (!res.success && retries > 0 && !isNavigatorOffline()) {
-      await new Promise(r => setTimeout(r, 1000));
-      res = await testConnection(15000);
+      await new Promise(r => setTimeout(r, 800));
+      res = await reconnectFirestore(15000);
     }
     setIsFirestoreConnected(res.success);
     return res;
@@ -834,26 +868,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const bootstrapAuthDataFromFirestore = async () => {
     try {
       const bootData = await firestoreSync.fetchAuthBootstrapData();
+      const pendingMap = readPendingSyncMap();
+      const syncedMap = readSyncedIdsMap();
+
       if (bootData.platformSettings) {
-        setPlatformSettings(mergePlatformSettings(bootData.platformSettings));
+        const settingsRec = reconcilePlatformSettingsWithRemote(
+          platformSettingsRef.current,
+          bootData.platformSettings,
+          (pendingMap.platformSettings?.length ?? 0) > 0
+        );
+        platformSettingsRef.current = settingsRec.merged;
+        setPlatformSettings(settingsRec.merged);
       }
       if (bootData.superAdmin) {
-        const remoteAdmin = bootData.superAdmin;
-        setSuperAdmin(prev => ({
-          ...prev,
-          ...remoteAdmin,
-          adminAccounts: Array.isArray(remoteAdmin.adminAccounts)
-            ? remoteAdmin.adminAccounts
-            : (prev.adminAccounts || [])
-        }));
+        const adminRec = reconcileSuperAdminWithRemote(
+          superAdminRef.current,
+          bootData.superAdmin,
+          (pendingMap.superAdmin?.length ?? 0) > 0
+        );
+        superAdminRef.current = adminRec.merged;
+        setSuperAdmin(adminRec.merged);
       }
       if (Array.isArray(bootData.suppliers)) {
-        setSuppliers(bootData.suppliers);
+        const supRec = reconcileCollectionWithRemote(
+          suppliersRef.current,
+          bootData.suppliers,
+          syncedMap.suppliers,
+          pendingMap.suppliers
+        );
+        suppliersRef.current = supRec.merged;
+        setSuppliers(supRec.merged);
       }
       if (Array.isArray(bootData.posClients)) {
-        setPosClients(bootData.posClients);
+        const posRec = reconcileCollectionWithRemote(
+          posClientsRef.current,
+          bootData.posClients,
+          syncedMap.posClients,
+          pendingMap.posClients
+        );
+        posClientsRef.current = posRec.merged;
+        setPosClients(posRec.merged);
       }
-      return bootData;
+      return {
+        superAdmin: superAdminRef.current,
+        platformSettings: platformSettingsRef.current,
+        suppliers: suppliersRef.current,
+        posClients: posClientsRef.current,
+      };
     } catch (err) {
       console.warn('Auth bootstrap fetch skipped:', err);
       return {};
@@ -888,9 +949,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const isRegisteringRef = React.useRef(false);
+  const isManualAuthInProgressRef = React.useRef(false);
+  const currentUserRef = React.useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const suppliersRef = React.useRef(suppliers);
+  suppliersRef.current = suppliers;
+  const posClientsRef = React.useRef(posClients);
+  posClientsRef.current = posClients;
+  const catalogsRef = React.useRef(catalogs);
+  catalogsRef.current = catalogs;
+  const servicesRef = React.useRef(services);
+  servicesRef.current = services;
+  const voucherWarehousesRef = React.useRef(voucherWarehouses);
+  voucherWarehousesRef.current = voucherWarehouses;
+  const ordersRef = React.useRef(orders);
+  ordersRef.current = orders;
+  const depositRequestsRef = React.useRef(depositRequests);
+  depositRequestsRef.current = depositRequests;
+  const loanRepaymentRequestsRef = React.useRef(loanRepaymentRequests);
+  loanRepaymentRequestsRef.current = loanRepaymentRequests;
+  const supplierBankAccountsRef = React.useRef(supplierBankAccounts);
+  supplierBankAccountsRef.current = supplierBankAccounts;
+  const accountingEntriesRef = React.useRef(accountingEntries);
+  accountingEntriesRef.current = accountingEntries;
+  const adminAccountingEntriesRef = React.useRef(adminAccountingEntries);
+  adminAccountingEntriesRef.current = adminAccountingEntries;
+  const inviteLinksRef = React.useRef(inviteLinks);
+  inviteLinksRef.current = inviteLinks;
+  const currentPosIdRef = React.useRef(currentPosId);
+  currentPosIdRef.current = currentPosId;
+  const currentSupplierIdRef = React.useRef(supplier?.id);
+  currentSupplierIdRef.current = supplier?.id;
+  const superAdminRef = React.useRef(superAdmin);
+  superAdminRef.current = superAdmin;
+  const platformSettingsRef = React.useRef(platformSettings);
+  platformSettingsRef.current = platformSettings;
+  const lastFirestoreSyncAtRef = React.useRef(lastFirestoreSyncAt);
+  lastFirestoreSyncAtRef.current = lastFirestoreSyncAt;
+  const syncInFlightRef = React.useRef<Promise<{
+    connected: boolean;
+    synced: boolean;
+    pushedCount: number;
+    message: string;
+    error?: string;
+  }> | null>(null);
+
   const applyLocalNonAdminStateReset = (preservedAdmin: SuperAdmin) => {
     sanitizeLocalStorageForCleanReset(localStorage, preservedAdmin);
     localStorage.setItem(CLEAN_BOOT_STORAGE_FLAG, '1');
+    const preservedCatalogs = filterPreservedFixedCatalogs(catalogsRef.current);
+    posClientsRef.current = [];
+    suppliersRef.current = [];
+    servicesRef.current = [];
+    voucherWarehousesRef.current = [];
+    supplierBankAccountsRef.current = [];
+    ordersRef.current = [];
+    depositRequestsRef.current = [];
+    loanRepaymentRequestsRef.current = [];
+    accountingEntriesRef.current = [];
+    adminAccountingEntriesRef.current = [];
+    inviteLinksRef.current = [];
+    catalogsRef.current = preservedCatalogs;
+
     setPosClients([]);
     setSuppliers([]);
     setServices([]);
@@ -903,13 +1024,313 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAdminAccountingEntries([]);
     setInviteLinks([]);
     setNotifications([]);
-    setCatalogs(prev => filterPreservedFixedCatalogs(prev));
+    setCatalogs(preservedCatalogs);
     setCurrentPosId('');
     setCurrentSupplierId('');
     setIsSupplierSelectionRequired(false);
     setCurrentUser(prev =>
       isPreservedAdminAuthUser(prev, preservedAdmin) ? prev : null
     );
+  };
+
+  const ensureDatabaseConnectedAndSynced = async (options?: {
+    forceSync?: boolean;
+    silent?: boolean;
+  }): Promise<{
+    connected: boolean;
+    synced: boolean;
+    pushedCount: number;
+    message: string;
+    error?: string;
+  }> => {
+    if (syncInFlightRef.current) {
+      return syncInFlightRef.current;
+    }
+
+    const runSync = async () => {
+      setIsSyncingWithFirestore(true);
+      try {
+        if (isNavigatorOffline()) {
+          setIsFirestoreConnected(false);
+          const msg = 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.';
+          setDatabaseSyncMessage(msg);
+          return { connected: false, synced: false, pushedCount: 0, message: msg, error: msg };
+        }
+
+        const conn = await reconnectFirestore(12000);
+        setIsFirestoreConnected(conn.success);
+        if (!conn.success) {
+          setDatabaseSyncMessage(conn.message);
+          return {
+            connected: false,
+            synced: false,
+            pushedCount: 0,
+            message: conn.message,
+            error: conn.message,
+          };
+        }
+
+        const mig = await firestoreSync.ensureCleanStateMigrationOnce(superAdminRef.current);
+        if (mig.migrated) {
+          applyLocalNonAdminStateReset(superAdminRef.current);
+        }
+
+        // Skip heavy full pull/push if already synced recently and no local pending items unless forced
+        const pendingMap = readPendingSyncMap();
+        const hasPending = Object.values(pendingMap).some(
+          (ids) => Array.isArray(ids) && ids.length > 0
+        );
+        if (!options?.forceSync && lastFirestoreSyncAtRef.current && !hasPending) {
+          const msg = 'تم الاتصال بقاعدة بيانات Firebase ومزامنة القواعد المحلية بنجاح.';
+          setDatabaseSyncMessage(msg);
+          return { connected: true, synced: true, pushedCount: 0, message: msg };
+        }
+
+        const remote = await firestoreSync.fetchAllDatabasesFromServer();
+        const syncedMap = readSyncedIdsMap();
+
+        const adminRec = reconcileSuperAdminWithRemote(
+          superAdminRef.current,
+          remote.superAdmin,
+          (pendingMap.superAdmin?.length ?? 0) > 0
+        );
+        const settingsRec = reconcilePlatformSettingsWithRemote(
+          platformSettingsRef.current,
+          remote.platformSettings,
+          (pendingMap.platformSettings?.length ?? 0) > 0
+        );
+
+        const suppliersRec = reconcileCollectionWithRemote(
+          suppliersRef.current,
+          remote.suppliers,
+          syncedMap.suppliers,
+          pendingMap.suppliers
+        );
+        const posClientsRec = reconcileCollectionWithRemote(
+          posClientsRef.current,
+          remote.posClients,
+          syncedMap.posClients,
+          pendingMap.posClients
+        );
+        const catalogsRec = reconcileCollectionWithRemote(
+          catalogsRef.current,
+          remote.catalogs,
+          syncedMap.catalogs,
+          pendingMap.catalogs
+        );
+        const servicesRec = reconcileCollectionWithRemote(
+          servicesRef.current,
+          remote.services,
+          syncedMap.services,
+          pendingMap.services
+        );
+        const warehousesRec = reconcileCollectionWithRemote(
+          voucherWarehousesRef.current,
+          remote.voucherWarehouses,
+          syncedMap.voucherWarehouses,
+          pendingMap.voucherWarehouses
+        );
+        const ordersRec = reconcileCollectionWithRemote(
+          ordersRef.current,
+          remote.orders,
+          syncedMap.orders,
+          pendingMap.orders
+        );
+        const depositsRec = reconcileCollectionWithRemote(
+          depositRequestsRef.current,
+          remote.depositRequests,
+          syncedMap.depositRequests,
+          pendingMap.depositRequests
+        );
+        const loanRepaymentsRec = reconcileCollectionWithRemote(
+          loanRepaymentRequestsRef.current,
+          remote.loanRepaymentRequests,
+          syncedMap.loanRepaymentRequests,
+          pendingMap.loanRepaymentRequests
+        );
+        const bankAccountsRec = reconcileCollectionWithRemote(
+          supplierBankAccountsRef.current,
+          remote.supplierBankAccounts,
+          syncedMap.supplierBankAccounts,
+          pendingMap.supplierBankAccounts
+        );
+        const accountingRec = reconcileCollectionWithRemote(
+          accountingEntriesRef.current,
+          remote.accountingEntries,
+          syncedMap.accountingEntries,
+          pendingMap.accountingEntries
+        );
+        const adminAccountingRec = reconcileCollectionWithRemote(
+          adminAccountingEntriesRef.current,
+          remote.adminAccountingEntries,
+          syncedMap.adminAccountingEntries,
+          pendingMap.adminAccountingEntries
+        );
+        const invitesRec = reconcileCollectionWithRemote(
+          inviteLinksRef.current,
+          remote.inviteLinks,
+          syncedMap.inviteLinks,
+          pendingMap.inviteLinks
+        );
+
+        const pushEntries: Array<{ path: [string, string]; data: unknown }> = [];
+        const pushedMarkers: Array<[keyof typeof pendingMap, string]> = [];
+
+        if (adminRec.shouldPushToRemote) {
+          pushEntries.push({ path: ['system', 'superAdmin'], data: adminRec.merged });
+          pushedMarkers.push(['superAdmin', 'superAdmin']);
+        }
+        if (settingsRec.shouldPushToRemote) {
+          pushEntries.push({ path: ['system', 'platformSettings'], data: settingsRec.merged });
+          pushedMarkers.push(['platformSettings', 'platformSettings']);
+        }
+
+        const addColPush = <T extends { id: string }>(
+          colKey: Exclude<keyof SyncedIdsMap, never>,
+          items: T[]
+        ) => {
+          for (const item of items) {
+            pushEntries.push({ path: [colKey, item.id], data: item });
+            pushedMarkers.push([colKey, item.id]);
+          }
+        };
+
+        addColPush('suppliers', suppliersRec.toPushToRemote);
+        addColPush('posClients', posClientsRec.toPushToRemote);
+        addColPush('catalogs', catalogsRec.toPushToRemote);
+        addColPush('services', servicesRec.toPushToRemote);
+        addColPush('voucherWarehouses', warehousesRec.toPushToRemote);
+        addColPush('orders', ordersRec.toPushToRemote);
+        addColPush('depositRequests', depositsRec.toPushToRemote);
+        addColPush('loanRepaymentRequests', loanRepaymentsRec.toPushToRemote);
+        addColPush('supplierBankAccounts', bankAccountsRec.toPushToRemote);
+        addColPush('accountingEntries', accountingRec.toPushToRemote);
+        addColPush('adminAccountingEntries', adminAccountingRec.toPushToRemote);
+        addColPush('inviteLinks', invitesRec.toPushToRemote);
+
+        const pushedCount = await firestoreSync.commitBatchSets(pushEntries);
+
+        if (suppliersRec.toPushToRemote.length > 0 || posClientsRec.toPushToRemote.length > 0) {
+          await firestoreSync.syncUsersForAccounts(
+            suppliersRec.toPushToRemote,
+            posClientsRec.toPushToRemote
+          );
+        }
+
+        for (const [colKey, docId] of pushedMarkers) {
+          clearEntityPendingSync(colKey, docId);
+        }
+
+        const sortByDateDesc = <T extends { date: string }>(items: T[]) =>
+          [...items].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        const sortedOrders = sortByDateDesc(ordersRec.merged);
+        const sortedDeposits = sortByDateDesc(depositsRec.merged);
+        const sortedLoanRepayments = sortByDateDesc(loanRepaymentsRec.merged);
+        const sortedAccounting = sortByDateDesc(accountingRec.merged);
+        const sortedAdminAccounting = sortByDateDesc(adminAccountingRec.merged);
+
+        superAdminRef.current = adminRec.merged;
+        platformSettingsRef.current = settingsRec.merged;
+        suppliersRef.current = suppliersRec.merged;
+        posClientsRef.current = posClientsRec.merged;
+        catalogsRef.current = catalogsRec.merged;
+        servicesRef.current = servicesRec.merged;
+        voucherWarehousesRef.current = warehousesRec.merged;
+        ordersRef.current = sortedOrders;
+        depositRequestsRef.current = sortedDeposits;
+        loanRepaymentRequestsRef.current = sortedLoanRepayments;
+        supplierBankAccountsRef.current = bankAccountsRec.merged;
+        accountingEntriesRef.current = sortedAccounting;
+        adminAccountingEntriesRef.current = sortedAdminAccounting;
+        inviteLinksRef.current = invitesRec.merged;
+
+        setSuperAdmin(adminRec.merged);
+        setPlatformSettings(settingsRec.merged);
+        setSuppliers(suppliersRec.merged);
+        setPosClients(posClientsRec.merged);
+        setCatalogs(catalogsRec.merged);
+        setServices(servicesRec.merged);
+        setVoucherWarehouses(warehousesRec.merged);
+        setOrders(sortedOrders);
+        setDepositRequests(sortedDeposits);
+        setLoanRepaymentRequests(sortedLoanRepayments);
+        setSupplierBankAccounts(bankAccountsRec.merged);
+        setAccountingEntries(sortedAccounting);
+        setAdminAccountingEntries(sortedAdminAccounting);
+        setInviteLinks(invitesRec.merged);
+
+        const nextSyncedIds: SyncedIdsMap = {
+          suppliers: suppliersRec.nextSyncedIds,
+          posClients: posClientsRec.nextSyncedIds,
+          catalogs: catalogsRec.nextSyncedIds,
+          services: servicesRec.nextSyncedIds,
+          voucherWarehouses: warehousesRec.nextSyncedIds,
+          orders: ordersRec.nextSyncedIds,
+          depositRequests: depositsRec.nextSyncedIds,
+          loanRepaymentRequests: loanRepaymentsRec.nextSyncedIds,
+          supplierBankAccounts: bankAccountsRec.nextSyncedIds,
+          accountingEntries: accountingRec.nextSyncedIds,
+          adminAccountingEntries: adminAccountingRec.nextSyncedIds,
+          inviteLinks: invitesRec.nextSyncedIds,
+        };
+        writeSyncedIdsMap(nextSyncedIds);
+
+        const nowIso = new Date().toISOString();
+        lastFirestoreSyncAtRef.current = nowIso;
+        setLastFirestoreSyncAt(nowIso);
+
+        const msg =
+          pushedCount > 0
+            ? `تم الاتصال بقاعدة البيانات ومزامنة ${pushedCount} سجل محلي مع فايربيس بنجاح.`
+            : 'تم الاتصال بقاعدة بيانات Firebase ومزامنة القواعد والبيانات بنجاح.';
+        setDatabaseSyncMessage(msg);
+
+        if (!options?.silent) {
+          showToast({
+            type: 'success',
+            title: 'تمت المزامنة مع قاعدة البيانات',
+            description: msg,
+          });
+        }
+
+        return {
+          connected: true,
+          synced: true,
+          pushedCount,
+          message: msg,
+        };
+      } catch (err: unknown) {
+        console.warn('Database connect & sync error:', err);
+        const errorMsg = err instanceof Error ? err.message : 'تعذر إتمام مزامنة البيانات مع فايربيس.';
+        if (isNavigatorOffline()) {
+          setIsFirestoreConnected(false);
+        }
+        const userMsg = 'تم الاتصال جزئياً أو تعذر إتمام مزامنة بعض السجلات مع فايربيس.';
+        setDatabaseSyncMessage(userMsg);
+        if (!options?.silent) {
+          showToast({
+            type: 'error',
+            title: 'تنبيه مزامنة قاعدة البيانات',
+            description: userMsg,
+          });
+        }
+        return {
+          connected: !isNavigatorOffline(),
+          synced: false,
+          pushedCount: 0,
+          message: userMsg,
+          error: errorMsg,
+        };
+      } finally {
+        setIsSyncingWithFirestore(false);
+      }
+    };
+
+    syncInFlightRef.current = runSync().finally(() => {
+      syncInFlightRef.current = null;
+    });
+    return syncInFlightRef.current;
   };
 
   useEffect(() => {
@@ -919,34 +1340,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const runBootSync = async () => {
       try {
         if (isNavigatorOffline()) {
-          if (isMounted) setIsFirestoreConnected(false);
+          if (isMounted) {
+            setIsFirestoreConnected(false);
+            setDatabaseSyncMessage('الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.');
+          }
           return;
         }
-        const res = await checkDatabaseConnection();
+        const res = await ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
         if (!isMounted) return;
-        if (res.success) {
-          console.log('Firebase Firestore connection verified:', res.message);
-          const mig = await firestoreSync.ensureCleanStateMigrationOnce(superAdminRef.current);
-          if (isMounted && mig.migrated) {
-            applyLocalNonAdminStateReset(superAdminRef.current);
-          }
+        if (res.connected) {
+          console.log('Firebase Firestore connection & sync verified:', res.message);
         } else {
           console.warn('Firebase Firestore initial connection test:', res.message);
           retryTimer = setTimeout(async () => {
             if (!isMounted || isNavigatorOffline()) return;
             try {
-              const retryRes = await checkDatabaseConnection(0);
-              if (retryRes.success && isMounted) {
-                console.log('Firebase Firestore connection verified on retry:', retryRes.message);
-                const mig = await firestoreSync.ensureCleanStateMigrationOnce(superAdminRef.current);
-                if (isMounted && mig.migrated) {
-                  applyLocalNonAdminStateReset(superAdminRef.current);
-                }
+              const retryRes = await ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
+              if (retryRes.connected && isMounted) {
+                console.log('Firebase Firestore connection & sync verified on retry:', retryRes.message);
               }
             } catch (e) {
               console.warn(e);
             }
-          }, 2500);
+          }, 2000);
         }
       } catch (err) {
         console.warn('Firestore connection check error:', err);
@@ -957,11 +1373,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleOffline = () => {
       if (!isMounted) return;
       setIsFirestoreConnected(false);
+      setDatabaseSyncMessage('انقطع الاتصال بشبكة الإنترنت حالياً.');
     };
 
     const handleOnline = () => {
       if (!isMounted) return;
-      void runBootSync();
+      void ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
     };
 
     if (typeof window !== 'undefined') {
@@ -980,21 +1397,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
   }, []);
-
-  const isRegisteringRef = React.useRef(false);
-  const isManualAuthInProgressRef = React.useRef(false);
-  const currentUserRef = React.useRef(currentUser);
-  currentUserRef.current = currentUser;
-  const suppliersRef = React.useRef(suppliers);
-  suppliersRef.current = suppliers;
-  const posClientsRef = React.useRef(posClients);
-  posClientsRef.current = posClients;
-  const currentPosIdRef = React.useRef(currentPosId);
-  currentPosIdRef.current = currentPosId;
-  const currentSupplierIdRef = React.useRef(supplier?.id);
-  currentSupplierIdRef.current = supplier?.id;
-  const superAdminRef = React.useRef(superAdmin);
-  superAdminRef.current = superAdmin;
 
   // Listen to Firebase Auth state (registered once on mount)
   useEffect(() => {
@@ -1027,8 +1429,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             posClients: activePosClients,
           });
 
-          // On reload / cold start or email mismatch, always fetch fresh Firestore records before resolving role
-          if (!isSameActiveAccount || identity.kind === 'unregistered' || activeSuppliers.length === 0) {
+          // On reload / cold start, employee permission refresh, or email mismatch, always fetch fresh Firestore records before resolving role
+          if (
+            !isSameActiveAccount ||
+            identity.kind === 'unregistered' ||
+            identity.kind === 'employee' ||
+            activeSuppliers.length === 0
+          ) {
             const [bootData, fetchedUser] = await Promise.all([
               bootstrapAuthDataFromFirestore(),
               firestoreSync.getUser(fbUser.uid).catch(() => null),
@@ -1066,6 +1473,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             clearTransientSessionCaches();
             setCurrentUser(null);
             return;
+          }
+
+          if (identity.kind === 'supplier' && !isSupplierActive(identity.supplier)) {
+            fbSignOut(auth).catch(console.error);
+            clearTransientSessionCaches();
+            setCurrentSupplierId('');
+            setCurrentUser(null);
+            return;
+          }
+
+          if (identity.kind === 'employee') {
+            const eligibility = evaluateEmployeeLoginEligibility(identity.supplier, identity.employee);
+            if (!eligibility.allowed) {
+              fbSignOut(auth).catch(console.error);
+              clearTransientSessionCaches();
+              setCurrentSupplierId('');
+              setCurrentUser(null);
+              return;
+            }
           }
 
           if (identity.kind === 'unregistered') {
@@ -1233,7 +1659,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 (s.id === prevUser.associatedId &&
                   (!s.email || normalizeStoreEmail(s.email) === cleanPrevEmail))
             );
-            if (ownerSup) {
+            if (ownerSup && isSupplierActive(ownerSup)) {
               setCurrentSupplierId(ownerSup.id);
               return {
                 ...prevUser,
@@ -1241,7 +1667,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 associatedId: ownerSup.id,
               };
             }
-            // Store removed or email reassigned -> revoke stale store session
+            // Store removed, suspended, or email reassigned -> revoke stale store session
+            clearTransientSessionCaches();
             setCurrentSupplierId('');
             return null;
           }
@@ -1249,7 +1676,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const targetSup = syncedSuppliers.find(
               s => s.id === (prevUser.supplierId || prevUser.associatedId)
             );
-            if (!targetSup) {
+            if (!targetSup || !isSupplierActive(targetSup)) {
+              clearTransientSessionCaches();
               setCurrentSupplierId('');
               return null;
             }
@@ -1273,8 +1701,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 (prevUser.employeeId && e.id === prevUser.employeeId) ||
                 normalizeStoreEmail(e.email) === cleanPrevEmail
             );
-            if (!syncedEmp) {
-              // Employee removed by store owner -> revoke session immediately
+            if (!syncedEmp || !isEmployeeActive(syncedEmp)) {
+              // Employee removed or suspended by store owner -> revoke session immediately
+              clearTransientSessionCaches();
               setCurrentSupplierId('');
               return null;
             }
@@ -1534,8 +1963,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isManualAuthInProgressRef.current = true;
     try {
       const res = await signInWithPopup(auth, googleProvider);
-      if (!isFirestoreConnected && !isNavigatorOffline()) {
-        void checkDatabaseConnection(0).catch(() => {});
+      if (!isFirestoreConnected || !lastFirestoreSyncAtRef.current) {
+        await ensureDatabaseConnectedAndSynced({
+          forceSync: !isFirestoreConnected,
+          silent: true,
+        }).catch(() => {});
       }
       const fbUser = res.user;
       const cleanEmail = normalizeStoreEmail(fbUser.email);
@@ -1586,6 +2018,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           description: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام للتطبيق.'
         });
         return { success: false, error: 'تم إيقاف هذا الحساب الإداري من قبل المدير العام للتطبيق.' };
+      }
+
+      if (identity.kind === 'supplier' && !isSupplierActive(identity.supplier)) {
+        await fbSignOut(auth).catch(() => {});
+        showToast({
+          type: 'error',
+          title: 'المتجر موقوف من الإدارة',
+          description: 'تم إيقاف هذا المتجر مؤقتاً من قِبل مدير التطبيق. يرجى التواصل مع إدارة المنصة.'
+        });
+        return { success: false, error: 'تم إيقاف هذا المتجر من قِبل مدير التطبيق.' };
+      }
+
+      if (identity.kind === 'employee') {
+        const eligibility = evaluateEmployeeLoginEligibility(identity.supplier, identity.employee);
+        if (!eligibility.allowed) {
+          await fbSignOut(auth).catch(() => {});
+          showToast({
+            type: 'error',
+            title: eligibility.title || 'تعذر تسجيل الدخول',
+            description: eligibility.error
+          });
+          return { success: false, error: eligibility.error };
+        }
       }
 
       if (identity.kind === 'unregistered') {
@@ -1687,27 +2142,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Sync / Seed all local & mock state to Firebase Firestore
+  // Sync / Seed all local & remote state with Firebase Firestore
   const syncAllToFirestore = async (): Promise<void> => {
     setIsSyncingWithFirestore(true);
     try {
+      const syncRes = await ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
+      if (!syncRes.connected) {
+        showToast({
+          type: 'error',
+          title: 'تعذر الاتصال بقاعدة البيانات',
+          description: syncRes.message || 'تعذر الاتصال بقاعدة بيانات Firestore.'
+        });
+        return;
+      }
+
       const res = await firestoreSync.seedInitialDataToFirestore({
-        posClients,
-        suppliers,
-        superAdmin,
-        catalogs,
-        services,
-        orders,
-        depositRequests,
-        loanRepaymentRequests,
-        supplierBankAccounts,
-        accountingEntries,
-        adminAccountingEntries,
-        inviteLinks
+        posClients: posClientsRef.current,
+        suppliers: suppliersRef.current,
+        superAdmin: superAdminRef.current,
+        platformSettings: platformSettingsRef.current,
+        catalogs: catalogsRef.current,
+        services: servicesRef.current,
+        voucherWarehouses: voucherWarehousesRef.current,
+        orders: ordersRef.current,
+        depositRequests: depositRequestsRef.current,
+        loanRepaymentRequests: loanRepaymentRequestsRef.current,
+        supplierBankAccounts: supplierBankAccountsRef.current,
+        accountingEntries: accountingEntriesRef.current,
+        adminAccountingEntries: adminAccountingEntriesRef.current,
+        inviteLinks: inviteLinksRef.current,
       });
 
       if (res.success) {
         setIsFirestoreConnected(true);
+        const nowIso = new Date().toISOString();
+        lastFirestoreSyncAtRef.current = nowIso;
+        setLastFirestoreSyncAt(nowIso);
+        setDatabaseSyncMessage('تمت مزامنة كافة القواعد المحلية وقاعدة بيانات فايربيس بنجاح.');
         triggerConfetti();
         showToast({
           type: 'success',
@@ -1769,12 +2240,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'يرجى إدخال البريد الإلكتروني أولاً' };
     }
 
-    // Ensure database connection is active or probe if needed
-    if (!isFirestoreConnected) {
-      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
-      if (conn.success) {
-        setIsFirestoreConnected(true);
-      }
+    // Ensure database connection is active and synced if needed
+    if (!isFirestoreConnected || !lastFirestoreSyncAtRef.current) {
+      await ensureDatabaseConnectedAndSynced({
+        forceSync: !isFirestoreConnected,
+        silent: true,
+      }).catch(() => {});
     }
 
     // Check if there is an unexpired OTP
@@ -1819,14 +2290,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const verifyLoginOtpAndLogin = async (email: string, password: string, otpCode: string = '') => {
-    // 1. Verify and establish database connectivity if needed
-    if (!isFirestoreConnected) {
-      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
-      if (conn.success) {
-        setIsFirestoreConnected(true);
-      }
-    }
-
     const cleanEmail = normalizeStoreEmail(email);
     const cleanOtp = (otpCode || '').trim();
     const enteredPassword = password.trim();
@@ -1834,6 +2297,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!cleanEmail || !enteredPassword) {
       showToast({ type: 'error', title: 'بيانات غير مكتملة', description: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
       return { success: false, error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' };
+    }
+
+    // 1. Verify and restore database connectivity + sync local rules/data with Firebase before auth
+    const syncRes = await ensureDatabaseConnectedAndSynced({
+      forceSync: !isFirestoreConnected || !lastFirestoreSyncAtRef.current,
+      silent: true,
+    });
+    if (!syncRes.connected) {
+      const connErr = syncRes.message || 'تعذر إتمام الاتصال بقاعدة بيانات Firebase. يرجى التحقق من الشبكة والمحاولة مجدداً.';
+      showToast({
+        type: 'error',
+        title: 'تعذر الاتصال بقاعدة البيانات',
+        description: connErr,
+      });
+      return { success: false, error: connErr };
     }
 
     // 2. Verify OTP only if an OTP was requested for this email or an OTP code was entered
@@ -1859,26 +2337,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     isManualAuthInProgressRef.current = true;
     try {
-      // 3. Refresh account records from Firestore so freshly registered/updated stores, employees, admins & clients resolve accurately
+      // 3. Use freshly reconciled account records (or fetch auth bootstrap if partial)
       let activeSuppliers = suppliersRef.current;
       let activeSuperAdmin = superAdminRef.current;
       let activePosClients = posClientsRef.current;
 
-      const bootData = await bootstrapAuthDataFromFirestore();
-      if (bootData.suppliers && bootData.suppliers.length > 0) {
-        activeSuppliers = bootData.suppliers;
-      }
-      if (bootData.superAdmin) {
-        activeSuperAdmin = {
-          ...activeSuperAdmin,
-          ...bootData.superAdmin,
-          adminAccounts: Array.isArray(bootData.superAdmin.adminAccounts)
-            ? bootData.superAdmin.adminAccounts
-            : activeSuperAdmin.adminAccounts || [],
-        };
-      }
-      if (bootData.posClients && bootData.posClients.length > 0) {
-        activePosClients = bootData.posClients;
+      if (!syncRes.synced) {
+        const bootData = await bootstrapAuthDataFromFirestore();
+        if (bootData.suppliers && bootData.suppliers.length > 0) {
+          activeSuppliers = bootData.suppliers;
+        }
+        if (bootData.superAdmin) {
+          activeSuperAdmin = {
+            ...activeSuperAdmin,
+            ...bootData.superAdmin,
+            adminAccounts: Array.isArray(bootData.superAdmin.adminAccounts)
+              ? bootData.superAdmin.adminAccounts
+              : activeSuperAdmin.adminAccounts || [],
+          };
+        }
+        if (bootData.posClients && bootData.posClients.length > 0) {
+          activePosClients = bootData.posClients;
+        }
       }
 
       // 4. Resolve exact account identity by email (NO substring role escalation, NO fallback to another person's account)
@@ -1929,6 +2409,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Clear any prior Firebase Auth session so it cannot override this sub-admin session
         await fbSignOut(auth).catch(() => {});
       } else if (identity.kind === 'employee') {
+        const eligibility = evaluateEmployeeLoginEligibility(identity.supplier, identity.employee);
+        if (!eligibility.allowed) {
+          showToast({
+            type: 'error',
+            title: eligibility.title || 'تعذر تسجيل الدخول',
+            description: eligibility.error
+          });
+          return {
+            success: false,
+            error: eligibility.error
+          };
+        }
         if (!verifyEmployeeCredentials(identity.employee, enteredPassword)) {
           showToast({
             type: 'error',
@@ -1970,6 +2462,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       } else if (identity.kind === 'supplier') {
+        if (!isSupplierActive(identity.supplier)) {
+          showToast({
+            type: 'error',
+            title: 'المتجر موقوف من الإدارة',
+            description: 'تم إيقاف هذا المتجر مؤقتاً من قِبل مدير التطبيق. يرجى التواصل مع إدارة المنصة.'
+          });
+          return {
+            success: false,
+            error: 'تم إيقاف هذا المتجر من قِبل مدير التطبيق.'
+          };
+        }
         let isSupplierAuthed = false;
         try {
           const cred = await signInWithEmailAndPassword(auth, cleanEmail, enteredPassword);
@@ -2101,11 +2604,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     tradeName?: string;
     supplierId?: string;
   }): Promise<{ success: boolean; error?: string; code?: string }> => {
-    if (!isFirestoreConnected) {
-      const conn = await testConnection(6000).catch(() => ({ success: false, message: '' }));
-      if (conn.success) {
-        setIsFirestoreConnected(true);
-      }
+    const syncRes = await ensureDatabaseConnectedAndSynced({
+      forceSync: !isFirestoreConnected || !lastFirestoreSyncAtRef.current,
+      silent: true,
+    });
+    if (!syncRes.connected) {
+      const connErr = syncRes.message || 'تعذر إتمام الاتصال بقاعدة بيانات Firebase. يرجى المحاولة مجدداً.';
+      showToast({
+        type: 'error',
+        title: 'تعذر الاتصال بقاعدة البيانات',
+        description: connErr,
+      });
+      return { success: false, error: connErr };
     }
     const { name, email, role: chosenRole, phone, tradeName, supplierId } = params;
     const cleanEmail = normalizeStoreEmail(email);
@@ -5605,10 +6115,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     )) return;
     setServices(prev => {
       let oldCatalogId = '';
+      let nextCatalogId = '';
       const updatedList = prev.map(s => {
         if (s.id === id) {
+          if (role !== 'super_admin' && s.supplierId && s.supplierId !== supplier.id) {
+            return s;
+          }
           oldCatalogId = s.catalogId;
-          const updated = { ...s, ...updates };
+          const safeUpdates = sanitizeServiceUpdatesForEmployeePermissions(
+            s,
+            updates,
+            effectiveEmployeePerms,
+            role
+          );
+          const updated = { ...s, ...safeUpdates };
+          nextCatalogId = updated.catalogId;
           firestoreSync.saveService(updated).catch(console.error);
           return updated;
         }
@@ -5616,7 +6137,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       // Recalculate catalog counts if catalog changed
-      if (updates.catalogId && updates.catalogId !== oldCatalogId) {
+      if (nextCatalogId && nextCatalogId !== oldCatalogId) {
         setCatalogs(catList => catList.map(cat => ({
           ...cat,
           serviceCount: updatedList.filter(srv => srv.catalogId === cat.id).length
@@ -6130,6 +6651,117 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  // Super Admin updates store personal/business/bank/fee profile
+  const adminUpdateSupplier = (
+    supplierId: string,
+    updates: Partial<Supplier>
+  ): { success: boolean; error?: string } => {
+    const adminPerms = resolveEffectiveAdminPermissions(currentUser, role);
+    if (role !== 'super_admin' || !adminPerms.canManageSuppliers) {
+      const msg = 'ليس لديك صلاحية إشراف وتعديل بيانات المتاجر.';
+      showToast({ type: 'error', title: 'صلاحية غير ممنوحة', description: msg });
+      return { success: false, error: msg };
+    }
+
+    const targetSup = suppliers.find(s => s.id === supplierId);
+    if (!targetSup) {
+      const msg = 'تعذر العثور على بيانات المتجر المطلوب.';
+      showToast({ type: 'error', title: 'المتجر غير موجود', description: msg });
+      return { success: false, error: msg };
+    }
+
+    if (updates.name !== undefined && !updates.name.trim()) {
+      const msg = 'يرجى إدخال اسم مالك المتجر.';
+      showToast({ type: 'error', title: 'بيانات ناقصة', description: msg });
+      return { success: false, error: msg };
+    }
+
+    if (updates.storeName !== undefined && !updates.storeName.trim()) {
+      const msg = 'يرجى إدخال الاسم التجاري للمتجر.';
+      showToast({ type: 'error', title: 'بيانات ناقصة', description: msg });
+      return { success: false, error: msg };
+    }
+
+    if (updates.email !== undefined) {
+      const cleanEmail = normalizeStoreEmail(updates.email);
+      if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        const msg = 'يرجى إدخال بريد إلكتروني صحيح للمتجر.';
+        showToast({ type: 'error', title: 'بريد غير صحيح', description: msg });
+        return { success: false, error: msg };
+      }
+      if (
+        cleanEmail !== normalizeStoreEmail(targetSup.email) &&
+        isEmailUsedByOtherAccount(cleanEmail, {
+          currentSupplierId: supplierId,
+          suppliers,
+          posClients,
+          superAdminEmail: superAdmin.email,
+          adminAccounts: superAdmin.adminAccounts,
+        })
+      ) {
+        const msg = 'البريد الإلكتروني مستخدم مسبقاً لحساب آخر في المنصة.';
+        showToast({ type: 'error', title: 'تعارض البريد الإلكتروني', description: msg });
+        return { success: false, error: msg };
+      }
+    }
+
+    const normalizedUpdates: Partial<Supplier> = {
+      ...updates,
+      ...(updates.name !== undefined ? { name: updates.name.trim() } : {}),
+      ...(updates.storeName !== undefined ? { storeName: updates.storeName.trim() } : {}),
+      ...(updates.email !== undefined ? { email: normalizeStoreEmail(updates.email) } : {}),
+      ...(updates.phone !== undefined ? { phone: updates.phone.trim() } : {}),
+      ...(updates.country !== undefined ? { country: updates.country.trim() } : {}),
+      ...(updates.city !== undefined ? { city: updates.city.trim() } : {}),
+      ...(updates.socialLinks !== undefined
+        ? { socialLinks: sanitizeSupplierSocialLinks(updates.socialLinks) }
+        : {}),
+      ...(updates.exchangeRateSarPerUsd !== undefined
+        ? { exchangeRateSarPerUsd: normalizeExchangeRateSarPerUsd(updates.exchangeRateSarPerUsd) }
+        : {}),
+    };
+
+    const updatedSup: Supplier = { ...targetSup, ...normalizedUpdates };
+    setSuppliers(prev => prev.map(s => (s.id === supplierId ? updatedSup : s)));
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+
+    showToast({
+      type: 'success',
+      title: 'تم تحديث بيانات المتجر بنجاح',
+      description: `تم حفظ تعديلات الإدارة على متجر "${updatedSup.storeName}" ومزامنتها.`
+    });
+    return { success: true };
+  };
+
+  // Super Admin toggles store active/suspended state
+  const toggleSupplierActiveStatus = (supplierId: string) => {
+    const adminPerms = resolveEffectiveAdminPermissions(currentUser, role);
+    if (role !== 'super_admin' || !adminPerms.canManageSuppliers) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية غير ممنوحة',
+        description: 'ليس لديك صلاحية تفعيل أو إيقاف المتاجر.'
+      });
+      return;
+    }
+
+    const targetSup = suppliers.find(s => s.id === supplierId);
+    if (!targetSup) return;
+
+    const nextActive = !isSupplierActive(targetSup);
+    const updatedSup: Supplier = { ...targetSup, isActive: nextActive };
+    setSuppliers(prev => prev.map(s => (s.id === supplierId ? updatedSup : s)));
+    firestoreSync.saveSupplier(updatedSup).catch(console.error);
+
+    showToast({
+      type: nextActive ? 'success' : 'info',
+      title: nextActive ? 'تم تفعيل المتجر بنجاح' : 'تم إيقاف المتجر مؤقتاً',
+      description: nextActive
+        ? `أصبح متجر "${updatedSup.storeName}" نشطاً ويمكنه وموظفيه تسجيل الدخول الآن.`
+        : `تم تعليق متجر "${updatedSup.storeName}" ولن يتمكن مالكه أو موظفوه من الدخول حتى إعادة التفعيل.`
+    });
+  };
+
   // Super Admin updates global fee
   const updateGlobalFeeConfig = (
     config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }
@@ -6357,6 +6989,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       phone: employeeData.phone.trim(),
       country: employeeData.country?.trim() || undefined,
       isTransferReceiverOnly: employeeData.isTransferReceiverOnly,
+      isActive: true,
       roleTitle: employeeData.roleTitle.trim() || 'موظف مكتب',
       permissions: normalizedPerms,
       createdAt: new Date().toISOString().substring(0, 10)
@@ -6462,6 +7095,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       password: nextPassword,
       phone: (updates.phone ?? targetEmp.phone).trim(),
       roleTitle: (updates.roleTitle ?? targetEmp.roleTitle).trim() || 'موظف مكتب',
+      isActive: updates.isActive !== undefined ? Boolean(updates.isActive) : (targetEmp.isActive ?? true),
       permissions: nextPermissions,
     };
 
@@ -6488,24 +7122,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firestoreSync.saveUser(employeeUser).catch(console.error);
 
     if (currentUser?.employeeId === empId) {
-      setCurrentUser(prev =>
-        prev
-          ? {
-              ...prev,
-              name: mergedEmp.name,
-              email: mergedEmp.email,
-              phone: mergedEmp.phone,
-              roleTitle: mergedEmp.roleTitle,
-              permissions: mergedEmp.permissions
-            }
-          : prev
-      );
+      if (!isEmployeeActive(mergedEmp)) {
+        clearTransientSessionCaches();
+        setCurrentSupplierId('');
+        setCurrentUser(null);
+      } else {
+        setCurrentUser(prev =>
+          prev
+            ? {
+                ...prev,
+                name: mergedEmp.name,
+                email: mergedEmp.email,
+                phone: mergedEmp.phone,
+                roleTitle: mergedEmp.roleTitle,
+                permissions: mergedEmp.permissions
+              }
+            : prev
+        );
+      }
     }
 
     showToast({
       type: 'success',
-      title: 'تم تحديث بيانات الموظف',
-      description: 'تم حفظ تعديلات وصلاحيات الموظف وكلمة المرور بنجاح في النظام.'
+      title: 'تم تحديث بيانات وصلاحيات الموظف',
+      description:
+        mergedEmp.isActive === false
+          ? `تم إيقاف حساب الموظف (${mergedEmp.name}) ومنع دخوله للنظام.`
+          : 'تم حفظ تعديلات وصلاحيات الموظف وكلمة المرور ومزامنتها مع نظام الدخول بنجاح.'
     });
 
     return { success: true };
@@ -6786,11 +7429,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         convertToSar,
         isFirestoreConnected,
         isSyncingWithFirestore,
+        lastFirestoreSyncAt,
+        databaseSyncMessage,
         isSupplierSelectionRequired,
         setIsSupplierSelectionRequired,
         syncAllToFirestore,
         clearUsersSuppliersAndClientsData,
         checkDatabaseConnection,
+        ensureDatabaseConnectedAndSynced,
         isAuthenticated,
         currentUser,
         loginWithGoogle,
@@ -6890,6 +7536,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteDropdownOption,
         addSupplier,
         updateSupplierFeeConfig,
+        adminUpdateSupplier,
+        toggleSupplierActiveStatus,
         updateGlobalFeeConfig,
         adminSettleBank,
         adminTransferToAgent,

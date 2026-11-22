@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { OfficeEmployee } from '../../types';
-import { UserCheck, Shield, Mail, Phone, X, Check, Lock, Gamepad2, HandCoins, Layers, Users, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { UserCheck, Shield, Mail, Phone, X, Check, Lock, Gamepad2, HandCoins, Layers, Users, Eye, EyeOff, AlertCircle, Ban, CheckCircle2 } from 'lucide-react';
 import {
   EMPLOYEE_PERMISSION_PRESETS,
+  isEmployeeActive,
   normalizeEmployeePermissions,
 } from '../../utils/employeePermissions';
 
@@ -12,9 +13,22 @@ interface EditOfficeEmployeeModalProps {
   onClose: () => void;
 }
 
+const PermStatusPill: React.FC<{ allowed: boolean }> = ({ allowed }) => (
+  <span
+    className={`mr-auto px-1.5 py-0.5 rounded text-[9.5px] font-bold border shrink-0 ${
+      allowed
+        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+        : 'bg-rose-500/10 text-rose-300 border-rose-500/25'
+    }`}
+  >
+    {allowed ? 'مسموح' : 'ممنوع'}
+  </span>
+);
+
 export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = ({ employee, onClose }) => {
-  const { updateOfficeEmployee } = useApp();
+  const { updateOfficeEmployee, currentUser } = useApp();
   const initialPerms = normalizeEmployeePermissions(employee.permissions);
+  const isSelf = currentUser?.employeeId === employee.id;
 
   const [name, setName] = useState(employee.name);
   const [email, setEmail] = useState(employee.email);
@@ -22,6 +36,7 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
   const [showPassword, setShowPassword] = useState(false);
   const [phone, setPhone] = useState(employee.phone || '');
   const [roleTitle, setRoleTitle] = useState(employee.roleTitle || 'موظف مكتب');
+  const [isActive, setIsActive] = useState(isEmployeeActive(employee));
   const [formError, setFormError] = useState<string | null>(null);
 
   // 1. الشحن ونوعه
@@ -49,7 +64,7 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
   const [canUpgradeClientTiers, setCanUpgradeClientTiers] = useState(initialPerms.canUpgradeClientTiers);
   const [canViewReports, setCanViewReports] = useState(initialPerms.canViewReports);
 
-  // 7. إضافة الموظفين
+  // 7. إدارة الموظفين
   const [canManageEmployees, setCanManageEmployees] = useState(initialPerms.canManageEmployees);
 
   const applyPreset = (presetPerms: Parameters<typeof normalizeEmployeePermissions>[0]) => {
@@ -85,6 +100,7 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
       ...(password.trim() ? { password: password.trim() } : {}),
       phone: phone.trim(),
       roleTitle: roleTitle.trim() || 'موظف مكتب',
+      isActive: isSelf ? true : isActive,
       permissions: {
         canManageOrders: canManagePlayerIdOrders || canManageAccountOrders || canManageVoucherOrders,
         canManagePlayerIdOrders,
@@ -132,10 +148,11 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
             </div>
             <div>
               <h3 className="font-bold text-base text-white">تعديل بيانات وصلاحيات الموظف</h3>
-              <p className="text-xs text-slate-400">تحديث معلومات الحساب والتصاريح التفصيلية الممنوحة للموظف</p>
+              <p className="text-xs text-slate-400">تحديث معلومات الحساب وحالة الدخول والتصاريح التفصيلية الممنوحة للموظف</p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
           >
@@ -225,12 +242,50 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
             </div>
           </div>
 
+          {/* Employee Account Status Toggle */}
+          <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="font-bold text-white text-xs">حالة حساب الموظف في المتجر</div>
+              <p className="text-[11px] text-slate-400">
+                عند الإيقاف المؤقت يتم منع الموظف فوراً من تسجيل الدخول أو تنفيذ أي عمليات مع الاحتفاظ ببياناته.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsActive(true)}
+                className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  isActive
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>نشط</span>
+              </button>
+              <button
+                type="button"
+                disabled={isSelf}
+                onClick={() => setIsActive(false)}
+                title={isSelf ? 'لا يمكنك إيقاف حسابك أثناء تسجيل الدخول' : 'إيقاف حساب الموظف مؤقتاً'}
+                className={`px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                  !isActive
+                    ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>موقوف</span>
+              </button>
+            </div>
+          </div>
+
           {/* Granular Permissions Matrix */}
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2.5">
               <div className="flex items-center gap-2 font-bold text-amber-400">
                 <Shield className="w-4 h-4 text-amber-400" />
-                <span>تعديل صلاحيات الموظف الدقيقة:</span>
+                <span>تعديل صلاحيات الموظف الدقيقة (مسموح / ممنوع):</span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {EMPLOYEE_PERMISSION_PRESETS.map((preset) => (
@@ -259,12 +314,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManagePlayerIdOrders}
                     onChange={e => setCanManagePlayerIdOrders(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">شحن عبر الأيدي</span>
                     <span className="text-[9.5px] text-slate-400">تنفيذ طلبات الأيدي باللعبة</span>
                   </div>
+                  <PermStatusPill allowed={canManagePlayerIdOrders} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -272,12 +328,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManageAccountOrders}
                     onChange={e => setCanManageAccountOrders(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">شحن عبر الحساب</span>
                     <span className="text-[9.5px] text-slate-400">استلام إيميل/رمز الحساب</span>
                   </div>
+                  <PermStatusPill allowed={canManageAccountOrders} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -285,12 +342,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManageVoucherOrders}
                     onChange={e => setCanManageVoucherOrders(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-amber-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">شحن كود قسيمة</span>
                     <span className="text-[9.5px] text-slate-400">متابعة تسليم كود الفوتشر</span>
                   </div>
+                  <PermStatusPill allowed={canManageVoucherOrders} />
                 </label>
               </div>
             </div>
@@ -307,12 +365,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canReviewCashDeposits}
                     onChange={e => setCanReviewCashDeposits(e.target.checked)}
-                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">طلبات الحوالات والكاش</span>
-                    <span className="text-[9.5px] text-slate-400">اعتماد الإيداعات البنكية المباشرة</span>
+                    <span className="text-[9.5px] text-slate-400">اعتماد الإيداعات المباشرة</span>
                   </div>
+                  <PermStatusPill allowed={canReviewCashDeposits} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -320,12 +379,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canReviewLoanDeposits}
                     onChange={e => setCanReviewLoanDeposits(e.target.checked)}
-                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">طلبات السُّلَف / الرصيد الآجل</span>
-                    <span className="text-[9.5px] text-slate-400">مراجعة واعتماد طلبات السلفة</span>
+                    <span className="text-[9.5px] text-slate-400">مراجعة واعتماد السلفة</span>
                   </div>
+                  <PermStatusPill allowed={canReviewLoanDeposits} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -333,12 +393,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManageBankAccounts}
                     onChange={e => setCanManageBankAccounts(e.target.checked)}
-                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-cyan-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">إدارة الحسابات البنكية</span>
-                    <span className="text-[9.5px] text-slate-400">إضافة الحسابات ومنح ميزة الاستلام</span>
+                    <span className="text-[9.5px] text-slate-400">إضافة الحسابات والاستلام</span>
                   </div>
+                  <PermStatusPill allowed={canManageBankAccounts} />
                 </label>
               </div>
             </div>
@@ -355,12 +416,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canAddCatalogs}
                     onChange={e => setCanAddCatalogs(e.target.checked)}
-                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
-                    <span className="font-bold text-white block text-[11px]">إضافة الكتالوجات</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-bold text-white block text-[11px]">إضافة وتعديل الكتالوجات</span>
                     <span className="text-[9.5px] text-slate-400">إنشاء وتسمية الكتالوجات الجديدة</span>
                   </div>
+                  <PermStatusPill allowed={canAddCatalogs} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -368,12 +430,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canAddServices}
                     onChange={e => setCanAddServices(e.target.checked)}
-                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
-                    <span className="font-bold text-white block text-[11px]">إضافة الخدمات والباقات</span>
-                    <span className="text-[9.5px] text-slate-400">إضافة ألعاب وخدمات باقات جديدة</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-bold text-white block text-[11px]">إضافة وتعديل الخدمات والباقات</span>
+                    <span className="text-[9.5px] text-slate-400">إضافة وتعديل وحذف الألعاب والخدمات</span>
                   </div>
+                  <PermStatusPill allowed={canAddServices} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -381,12 +444,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canEditServicePrices}
                     onChange={e => setCanEditServicePrices(e.target.checked)}
-                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">تحديد وتعديل أسعار الخدمات</span>
                     <span className="text-[9.5px] text-slate-400">ضبط أسعار الباقات والرتب الطبقية</span>
                   </div>
+                  <PermStatusPill allowed={canEditServicePrices} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -394,21 +458,22 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManageVoucherStock}
                     onChange={e => setCanManageVoucherStock(e.target.checked)}
-                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-purple-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">تغذية أكواد القسائم (الفوتشر)</span>
                     <span className="text-[9.5px] text-slate-400">إيداع أكواد جديدة بالمخزون</span>
                   </div>
+                  <PermStatusPill allowed={canManageVoucherStock} />
                 </label>
               </div>
             </div>
 
-            {/* 6 & 7. العملاء والتقارير والترقية وإضافة موظفين */}
+            {/* 6 & 7. العملاء والتقارير والترقية وإدارة الموظفين */}
             <div className="space-y-2 pt-1 border-t border-slate-800/60">
               <div className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
                 <Users className="w-3.5 h-3.5 text-emerald-400" />
-                <span>4. إدارة العملاء والتقارير وإضافة الموظفين:</span>
+                <span>4. إدارة العملاء والتقارير وإدارة الموظفين:</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -416,12 +481,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canViewClients}
                     onChange={e => setCanViewClients(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">الاطلاع على العملاء</span>
                     <span className="text-[9.5px] text-slate-400">استعراض قائمة نقاط البيع</span>
                   </div>
+                  <PermStatusPill allowed={canViewClients} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -429,12 +495,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canUpgradeClientTiers}
                     onChange={e => setCanUpgradeClientTiers(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">ترقية رتب العملاء</span>
                     <span className="text-[9.5px] text-slate-400">تغيير رتبة العميل والميزات</span>
                   </div>
+                  <PermStatusPill allowed={canUpgradeClientTiers} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -442,12 +509,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canViewReports}
                     onChange={e => setCanViewReports(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <span className="font-bold text-white block text-[11px]">عرض التقارير وكشف الحسابات</span>
                     <span className="text-[9.5px] text-slate-400">عرض تقارير العمليات وتصدير PDF</span>
                   </div>
+                  <PermStatusPill allowed={canViewReports} />
                 </label>
 
                 <label className="flex items-center gap-2 p-2 rounded-xl bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
@@ -455,12 +523,13 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
                     type="checkbox"
                     checked={canManageEmployees}
                     onChange={e => setCanManageEmployees(e.target.checked)}
-                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700"
+                    className="w-4 h-4 rounded text-emerald-500 bg-slate-950 border-slate-700 shrink-0"
                   />
-                  <div>
-                    <span className="font-bold text-white block text-[11px]">إضافة موظفين جدد</span>
-                    <span className="text-[9.5px] text-slate-400">إضافة وإدارة صلاحيات الموظفين</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-bold text-white block text-[11px]">إدارة الموظفين والصلاحيات</span>
+                    <span className="text-[9.5px] text-slate-400">إضافة وتعديل صلاحيات الموظفين</span>
                   </div>
+                  <PermStatusPill allowed={canManageEmployees} />
                 </label>
               </div>
             </div>
@@ -503,4 +572,3 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
     </div>
   );
 };
-

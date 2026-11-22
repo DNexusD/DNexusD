@@ -75,8 +75,8 @@ export {
 
 let isNetworkExplicitlyDisabled = false;
 
-export async function enableFirestoreNetwork(): Promise<void> {
-  if (!isNetworkExplicitlyDisabled) return;
+export async function enableFirestoreNetwork(force = false): Promise<void> {
+  if (!force && !isNetworkExplicitlyDisabled) return;
   isNetworkExplicitlyDisabled = false;
   try {
     await enableNetwork(db);
@@ -213,3 +213,25 @@ export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestR
   }
 }
 
+/**
+ * Explicitly re-enable Firestore network (if stalled/disconnected) and establish a live server connection.
+ */
+export async function reconnectFirestore(timeoutMs = 12000): Promise<ConnectionTestResult> {
+  if (isNavigatorOffline()) {
+    return {
+      success: false,
+      message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
+    };
+  }
+
+  await enableFirestoreNetwork(true);
+  let res = await testConnection(timeoutMs);
+  if (res.success || isNavigatorOffline()) {
+    return res;
+  }
+
+  await new Promise((r) => setTimeout(r, 450));
+  await enableFirestoreNetwork(true);
+  res = await testConnection(timeoutMs);
+  return res;
+}
