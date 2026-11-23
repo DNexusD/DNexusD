@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { calculateFeeFromRule, resolveSpecificServiceFeeRule } from '../../utils/pricing';
 import { HandCoins, Gift, X, Check, QrCode, AlertCircle } from 'lucide-react';
 
 interface GrantBalanceOrLoanModalProps {
@@ -8,7 +9,7 @@ interface GrantBalanceOrLoanModalProps {
 }
 
 export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = ({ initialPosId, onClose }) => {
-  const { posClients, supplier, grantSupplierBalanceOrLoan, showToast, formatCurrency, currencyLabel, convertToSar, activeCurrency } = useApp();
+  const { posClients, supplier, superAdmin, grantSupplierBalanceOrLoan, showToast, formatCurrency, currencyLabel, convertToSar, activeCurrency } = useApp();
 
   const storeClients = React.useMemo(
     () => posClients.filter(p => p.supplierId === supplier.id),
@@ -260,6 +261,23 @@ export const GrantBalanceOrLoanModal: React.FC<GrantBalanceOrLoanModalProps> = (
               />
               <span className="absolute left-3 top-2 text-slate-400 text-xs font-semibold">{currencyLabel}</span>
             </div>
+            {(() => {
+              const numericAmountSar = convertToSar(parseFloat(amount) || 0);
+              const rule = resolveSpecificServiceFeeRule({
+                section: 'supplier',
+                serviceKey: supportType === 'loan' ? 'loanGrant' : 'supportGrant',
+                supplier,
+                superAdmin,
+              });
+              const estimatedFee = numericAmountSar > 0 ? calculateFeeFromRule(numericAmountSar, rule) : 0;
+              if (estimatedFee <= 0) return null;
+              return (
+                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 flex items-center justify-between">
+                  <span>رسوم التطبيق على المتجر عند تنفيذ {supportType === 'loan' ? 'شحن السلفة' : 'دعم الرصيد'}:</span>
+                  <strong className="font-mono text-amber-300">{formatCurrency(estimatedFee)}</strong>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Reason Input */}

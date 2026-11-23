@@ -16,6 +16,7 @@ import {
   getClientLoanSummaryForStore,
   isSupplierActive,
 } from '../../utils/storeSupervision';
+import { getEffectivePlatformFeesConfig } from '../../utils/pricing';
 import {
   EMPLOYEE_PERMISSION_BADGES,
   normalizeEmployeePermissions,
@@ -97,6 +98,7 @@ export const AdminStoreSupervisionModal: React.FC<AdminStoreSupervisionModalProp
   onClose,
 }) => {
   const {
+    superAdmin,
     suppliers,
     posClients,
     orders,
@@ -241,6 +243,13 @@ export const AdminStoreSupervisionModal: React.FC<AdminStoreSupervisionModalProp
       ? convertToSar(Math.max(0, Number(editFixedFeeDisplay) || 0))
       : store.fixedFeeAmount ?? 0;
 
+    const currentEffectiveFees = getEffectivePlatformFeesConfig(store, superAdmin);
+    const updatedPrimaryRule = {
+      feeType: editFeeType,
+      percentage: Math.max(0, Number(editFeePercentage) || 0),
+      fixedAmount: fixedFeeSar,
+    };
+
     const result = adminUpdateSupplier(store.id, {
       name: editName,
       storeName: editStoreName,
@@ -251,8 +260,16 @@ export const AdminStoreSupervisionModal: React.FC<AdminStoreSupervisionModalProp
       logoUrl: editLogoUrl.trim() || undefined,
       exchangeRateSarPerUsd: Number(editExchangeRate) || 3.75,
       feeType: editFeeType,
-      feePercentage: Number(editFeePercentage) || 0,
+      feePercentage: Math.max(0, Number(editFeePercentage) || 0),
       fixedFeeAmount: fixedFeeSar,
+      feesConfig: {
+        ...currentEffectiveFees,
+        clientServices: {
+          ...currentEffectiveFees.clientServices,
+          servicePurchase: updatedPrimaryRule,
+          balanceTransfer: updatedPrimaryRule,
+        },
+      },
       bankAccountDetails: {
         bankName: editBankName.trim(),
         accountHolder: editAccountHolder.trim(),

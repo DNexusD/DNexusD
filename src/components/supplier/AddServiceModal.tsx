@@ -962,7 +962,7 @@ export const AddServiceModal: React.FC<AddServiceModalProps> = ({ onClose }) => 
                       <div className="max-h-40 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
                         {targetableClients.map(client => {
                           const isSelected = giftTargetPosIds.includes(client.id);
-                          const clientTierInfo = TIERS_CONFIG[client.tier];
+                          const clientTierInfo = TIERS_CONFIG[client.tier] || TIERS_CONFIG.regular;
                           return (
                             <div
                               key={client.id}

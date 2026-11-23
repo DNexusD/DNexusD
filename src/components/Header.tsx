@@ -65,7 +65,7 @@ export const Header: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-1.5">
                     {posClients.map((client, idx) => {
                       const isSelected = client.id === currentPos.id;
-                      const tier = TIERS_CONFIG[client.tier];
+                      const tier = TIERS_CONFIG[client.tier] || TIERS_CONFIG.regular;
                       const itemKey = client.id ? `${client.id}-${idx}` : `client-${idx}`;
                       return (
                         <button

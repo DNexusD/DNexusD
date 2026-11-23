@@ -9,6 +9,7 @@ import {
   UserRole,
 } from '../types';
 import { isCatalogFreeGifts } from './pricing';
+import { sanitizeSupplierSocialLinks } from './socialLinks';
 
 export const DEFAULT_STATEMENT_TRANSACTION_TYPES: DropdownOptionItem[] = [
   { id: 'st-purchase', value: 'purchase', labelAr: 'مشتريات خدمات', isSystem: true, isActive: true },
@@ -50,6 +51,10 @@ export const DEFAULT_PLATFORM_INTERFACE_SETTINGS: PlatformInterfaceSettings = {
   statementTransactionTypes: DEFAULT_STATEMENT_TRANSACTION_TYPES,
   adminStatementTransactionTypes: DEFAULT_ADMIN_STATEMENT_TRANSACTION_TYPES,
   approvedBankNames: DEFAULT_APPROVED_BANK_NAMES,
+  socialLinks: {
+    whatsapp: '+966500000000',
+    telegram: 'https://t.me/DNexusD_Support',
+  },
 };
 
 export function mergePlatformSettings(
@@ -105,6 +110,12 @@ export function mergePlatformSettings(
       Array.isArray(partial.approvedBankNames) && partial.approvedBankNames.length > 0
         ? partial.approvedBankNames
         : [...DEFAULT_APPROVED_BANK_NAMES],
+    socialLinks:
+      partial.socialLinks && typeof partial.socialLinks === 'object'
+        ? sanitizeSupplierSocialLinks(partial.socialLinks)
+        : partial.socialLinks === null
+        ? undefined
+        : (partial.socialLinks ?? DEFAULT_PLATFORM_INTERFACE_SETTINGS.socialLinks),
     updatedAt: partial.updatedAt,
   };
 }
@@ -137,6 +148,29 @@ export function getCatalogsForPosView(
   return getCatalogsForSupplierView(catalogs, supplierId).filter(
     (c) => canViewGifts || !isCatalogFreeGifts(c)
   );
+}
+
+export interface StoreCatalogQuickItem {
+  catalog: Catalog;
+  serviceCount: number;
+}
+
+export function getRegularCatalogsWithCounts(
+  visibleCatalogs: Catalog[],
+  storeServices: Array<{ catalogId: string }>
+): StoreCatalogQuickItem[] {
+  const counts = new Map<string, number>();
+  for (const srv of storeServices) {
+    if (!srv.catalogId) continue;
+    counts.set(srv.catalogId, (counts.get(srv.catalogId) || 0) + 1);
+  }
+
+  return visibleCatalogs
+    .filter((cat) => !isCatalogFreeGifts(cat))
+    .map((catalog) => ({
+      catalog,
+      serviceCount: counts.get(catalog.id) || 0,
+    }));
 }
 
 export function canSupplierModifyCatalog(

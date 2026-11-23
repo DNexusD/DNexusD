@@ -253,6 +253,37 @@ export interface FeeConfig {
   fixedAmount: number; // e.g. 1.00 SAR
 }
 
+export interface ServiceFeeRule {
+  feeType: 'percentage' | 'fixed' | 'both';
+  percentage: number;
+  fixedAmount: number;
+}
+
+export interface SupplierServiceFeesConfig {
+  /** خدمة دعم الرصيد للعميل (منح رصيد مجاني من المتجر) */
+  supportGrant: ServiceFeeRule;
+  /** خدمة شحن سلفة للعميل (منح سلفة مباشرة من المتجر) */
+  loanGrant: ServiceFeeRule;
+  /** خدمة بيع للعميل (رسوم على المورد عند إتمام البيع للعميل) */
+  saleToClient: ServiceFeeRule;
+}
+
+export interface ClientServiceFeesConfig {
+  /** خدمة طلب شحن رصيد من العميل */
+  depositRequest: ServiceFeeRule;
+  /** خدمة طلب سلفة من العميل */
+  loanRequest: ServiceFeeRule;
+  /** خدمة شراء خدمة من العميل */
+  servicePurchase: ServiceFeeRule;
+  /** خدمة تحويل الرصيد بين العملاء */
+  balanceTransfer?: ServiceFeeRule;
+}
+
+export interface PlatformFeesConfig {
+  supplierServices: SupplierServiceFeesConfig;
+  clientServices: ClientServiceFeesConfig;
+}
+
 export interface OfficeEmployee {
   id: string;
   supplierId: string;
@@ -297,6 +328,7 @@ export interface Supplier {
   feePercentage: number; // Backward compatibility / primary %
   fixedFeeAmount: number; // Primary fixed fee
   feeType: 'percentage' | 'fixed' | 'both';
+  feesConfig?: PlatformFeesConfig; // القسم الأول (خدمات المورد) + القسم الثاني (خدمات عملائه)
   walletBalance: number;
   logoUrl?: string; // رابط شعار المتجر
   country?: string; // الدولة
@@ -323,6 +355,7 @@ export interface SuperAdmin {
   defaultFeePercentage: number; // default 1%
   defaultFixedFeeAmount: number; // default 0.00 or custom SAR
   defaultFeeType: 'percentage' | 'fixed' | 'both';
+  defaultFeesConfig?: PlatformFeesConfig; // الإعدادات العامة المقسمة: خدمات المورد + خدمات عملائه
   bankAccounts: {
     bankName: string;
     iban: string;
@@ -355,6 +388,7 @@ export interface PlatformInterfaceSettings {
   statementTransactionTypes: DropdownOptionItem[];
   adminStatementTransactionTypes: DropdownOptionItem[];
   approvedBankNames: DropdownOptionItem[];
+  socialLinks?: SupplierSocialLinks;
   updatedAt?: string;
 }
 
@@ -507,6 +541,9 @@ export interface DepositRequest {
   receiverConfirmationNote?: string;
   transferReceiptImage?: string; // صورة إيصال الحوالة البنكية بصيغة Base64 Data URL (إلزامية للإيداع)
   transferReceiptFileName?: string; // اسم ملف الصورة المرفق
+  feeAmount?: number; // رسوم التطبيق المحتسبة عند اكتمال الطلب أو المنح
+  feeTargetRole?: 'supplier' | 'client';
+  feeSettledToAdmin?: boolean;
 }
 
 export interface Order {
@@ -540,7 +577,10 @@ export interface Order {
   };
   costPrice: number; // Reseller price from tier
   salePriceToCustomer?: number; // Optional resale price
-  feeAmount: number; // Platform fee
+  feeAmount: number; // Platform fee on client service purchase
+  supplierFeeAmount?: number; // Platform fee on supplier sale to client
+  feeSettledToAdmin?: boolean; // True only after order is completed (after request + fulfillment)
+  heldFromClientAtRequest?: number; // Amount reserved from client wallet when order is pending_supplier
   totalDeducted: number; // costPrice + feeAmount
   isFreeGiftOrder?: boolean;
   deferredFeeAmount?: number;

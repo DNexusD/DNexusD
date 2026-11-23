@@ -1,6 +1,220 @@
-import { AccountTier, Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier, WarehousePurchaseUnit } from '../types';
+import {
+  AccountTier,
+  Catalog,
+  ClientServiceFeesConfig,
+  DigitalService,
+  Order,
+  PlatformFeesConfig,
+  ServiceFeeRule,
+  ServicePackage,
+  SuperAdmin,
+  Supplier,
+  SupplierServiceFeesConfig,
+  WarehousePurchaseUnit,
+} from '../types';
 
 export const ZERO_PRICE_CLIENT_FLOOR_SAR = 0.5;
+
+export type SupplierFeeServiceKey = keyof SupplierServiceFeesConfig;
+export type ClientFeeServiceKey = keyof ClientServiceFeesConfig;
+
+export const DEFAULT_ZERO_FEE_RULE: ServiceFeeRule = {
+  feeType: 'percentage',
+  percentage: 0,
+  fixedAmount: 0,
+};
+
+export const DEFAULT_PRIMARY_FEE_RULE: ServiceFeeRule = {
+  feeType: 'percentage',
+  percentage: 1.0,
+  fixedAmount: 0,
+};
+
+export function normalizeServiceFeeRule(
+  rule?: Partial<ServiceFeeRule> | null,
+  fallback: ServiceFeeRule = DEFAULT_ZERO_FEE_RULE
+): ServiceFeeRule {
+  const feeType =
+    rule?.feeType === 'percentage' || rule?.feeType === 'fixed' || rule?.feeType === 'both'
+      ? rule.feeType
+      : fallback.feeType;
+  const percentage =
+    typeof rule?.percentage === 'number' && Number.isFinite(rule.percentage) && rule.percentage >= 0
+      ? parseFloat(rule.percentage.toFixed(4))
+      : fallback.percentage;
+  const fixedAmount =
+    typeof rule?.fixedAmount === 'number' && Number.isFinite(rule.fixedAmount) && rule.fixedAmount >= 0
+      ? parseFloat(rule.fixedAmount.toFixed(2))
+      : fallback.fixedAmount;
+
+  return {
+    feeType,
+    percentage,
+    fixedAmount,
+  };
+}
+
+export function createDefaultPlatformFeesConfig(
+  legacyPrimaryRule?: Partial<ServiceFeeRule> | null
+): PlatformFeesConfig {
+  const primary = normalizeServiceFeeRule(legacyPrimaryRule, DEFAULT_PRIMARY_FEE_RULE);
+  return {
+    supplierServices: {
+      supportGrant: { ...DEFAULT_ZERO_FEE_RULE },
+      loanGrant: { ...DEFAULT_ZERO_FEE_RULE },
+      saleToClient: { ...DEFAULT_ZERO_FEE_RULE },
+    },
+    clientServices: {
+      depositRequest: { ...DEFAULT_ZERO_FEE_RULE },
+      loanRequest: { ...DEFAULT_ZERO_FEE_RULE },
+      servicePurchase: { ...primary },
+      balanceTransfer: { ...primary },
+    },
+  };
+}
+
+export function normalizePlatformFeesConfig(
+  config?: Partial<PlatformFeesConfig> | null,
+  fallbackConfig?: PlatformFeesConfig
+): PlatformFeesConfig {
+  const base = fallbackConfig || createDefaultPlatformFeesConfig();
+  return {
+    supplierServices: {
+      supportGrant: normalizeServiceFeeRule(config?.supplierServices?.supportGrant, base.supplierServices.supportGrant),
+      loanGrant: normalizeServiceFeeRule(config?.supplierServices?.loanGrant, base.supplierServices.loanGrant),
+      saleToClient: normalizeServiceFeeRule(config?.supplierServices?.saleToClient, base.supplierServices.saleToClient),
+    },
+    clientServices: {
+      depositRequest: normalizeServiceFeeRule(config?.clientServices?.depositRequest, base.clientServices.depositRequest),
+      loanRequest: normalizeServiceFeeRule(config?.clientServices?.loanRequest, base.clientServices.loanRequest),
+      servicePurchase: normalizeServiceFeeRule(config?.clientServices?.servicePurchase, base.clientServices.servicePurchase),
+      balanceTransfer: normalizeServiceFeeRule(
+        config?.clientServices?.balanceTransfer ?? config?.clientServices?.servicePurchase,
+        base.clientServices.balanceTransfer || base.clientServices.servicePurchase
+      ),
+    },
+  };
+}
+
+export function getEffectivePlatformFeesConfig(
+  supplier?: Partial<Supplier> | null,
+  superAdmin?: Partial<SuperAdmin> | null
+): PlatformFeesConfig {
+  const adminLegacyPrimary = normalizeServiceFeeRule(
+    {
+      feeType: superAdmin?.defaultFeeType,
+      percentage: superAdmin?.defaultFeePercentage,
+      fixedAmount: superAdmin?.defaultFixedFeeAmount,
+    },
+    DEFAULT_PRIMARY_FEE_RULE
+  );
+
+  const globalConfig = superAdmin?.defaultFeesConfig
+    ? normalizePlatformFeesConfig(superAdmin.defaultFeesConfig, createDefaultPlatformFeesConfig(adminLegacyPrimary))
+    : createDefaultPlatformFeesConfig(adminLegacyPrimary);
+
+  if (!supplier) {
+    return globalConfig;
+  }
+
+  const hasLegacySupplierPrimary =
+    supplier.feeType !== undefined ||
+    supplier.feePercentage !== undefined ||
+    supplier.fixedFeeAmount !== undefined;
+
+  const supplierLegacyPrimary = hasLegacySupplierPrimary
+    ? normalizeServiceFeeRule(
+        {
+          feeType: supplier.feeType,
+          percentage: supplier.feePercentage,
+          fixedAmount: supplier.fixedFeeAmount,
+        },
+        globalConfig.clientServices.servicePurchase
+      )
+    : globalConfig.clientServices.servicePurchase;
+
+  if (supplier.feesConfig) {
+    return normalizePlatformFeesConfig(supplier.feesConfig, {
+      ...globalConfig,
+      clientServices: {
+        ...globalConfig.clientServices,
+        servicePurchase: supplierLegacyPrimary,
+        balanceTransfer: globalConfig.clientServices.balanceTransfer || supplierLegacyPrimary,
+      },
+    });
+  }
+
+  return {
+    supplierServices: { ...globalConfig.supplierServices },
+    clientServices: {
+      ...globalConfig.clientServices,
+      servicePurchase: supplierLegacyPrimary,
+      balanceTransfer: supplierLegacyPrimary,
+    },
+  };
+}
+
+export function resolveSpecificServiceFeeRule(params: {
+  section: 'supplier' | 'client';
+  serviceKey: SupplierFeeServiceKey | ClientFeeServiceKey;
+  supplier?: Partial<Supplier> | null;
+  superAdmin?: Partial<SuperAdmin> | null;
+}): ServiceFeeRule {
+  const effective = getEffectivePlatformFeesConfig(params.supplier, params.superAdmin);
+  if (params.section === 'supplier') {
+    const key = params.serviceKey as SupplierFeeServiceKey;
+    return effective.supplierServices[key] || DEFAULT_ZERO_FEE_RULE;
+  }
+  const key = params.serviceKey as ClientFeeServiceKey;
+  if (key === 'balanceTransfer') {
+    return effective.clientServices.balanceTransfer || effective.clientServices.servicePurchase;
+  }
+  return effective.clientServices[key] || DEFAULT_ZERO_FEE_RULE;
+}
+
+export function calculateFeeFromRule(
+  amount: number,
+  rule?: Partial<ServiceFeeRule> | null,
+  options?: { capAtAmount?: boolean }
+): number {
+  const safeAmount = typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : 0;
+  if (safeAmount <= 0) return 0;
+
+  const normalized = normalizeServiceFeeRule(rule, DEFAULT_ZERO_FEE_RULE);
+  let fee = 0;
+
+  if (normalized.feeType === 'percentage' || normalized.feeType === 'both') {
+    fee += (safeAmount * normalized.percentage) / 100;
+  }
+  if (normalized.feeType === 'fixed' || normalized.feeType === 'both') {
+    fee += normalized.fixedAmount;
+  }
+
+  const rounded = parseFloat(Math.max(0, fee).toFixed(2));
+  if (options?.capAtAmount) {
+    return parseFloat(Math.min(safeAmount, rounded).toFixed(2));
+  }
+  return rounded;
+}
+
+export function sumPendingUnsettledClientFees(
+  orders: Array<Pick<Order, 'posId' | 'status' | 'feeAmount' | 'feeSettledToAdmin' | 'isFreeGiftOrder'>>,
+  posId: string
+): number {
+  if (!Array.isArray(orders) || !posId) return 0;
+  const total = orders.reduce((sum, order) => {
+    if (
+      order.posId === posId &&
+      (order.status === 'pending_supplier' || order.status === 'in_progress') &&
+      order.feeSettledToAdmin === false &&
+      !order.isFreeGiftOrder
+    ) {
+      return sum + (Number.isFinite(order.feeAmount) && order.feeAmount > 0 ? order.feeAmount : 0);
+    }
+    return sum;
+  }, 0);
+  return parseFloat(total.toFixed(2));
+}
 
 export interface ServicePricingBreakdown {
   originalTierPrice: number;
@@ -50,21 +264,13 @@ export function getEffectiveAppFeePercentage(
   supplier?: Partial<Supplier> | null,
   superAdmin?: Partial<SuperAdmin> | null
 ): number {
-  if (
-    typeof supplier?.feePercentage === 'number' &&
-    Number.isFinite(supplier.feePercentage) &&
-    supplier.feePercentage >= 0
-  ) {
-    return supplier.feePercentage;
-  }
-  if (
-    typeof superAdmin?.defaultFeePercentage === 'number' &&
-    Number.isFinite(superAdmin.defaultFeePercentage) &&
-    superAdmin.defaultFeePercentage >= 0
-  ) {
-    return superAdmin.defaultFeePercentage;
-  }
-  return 1.0;
+  const rule = resolveSpecificServiceFeeRule({
+    section: 'client',
+    serviceKey: 'servicePurchase',
+    supplier,
+    superAdmin,
+  });
+  return rule.percentage;
 }
 
 export function calculateBaseSupplierFee(
@@ -72,19 +278,13 @@ export function calculateBaseSupplierFee(
   supplier?: Partial<Supplier> | null,
   superAdmin?: Partial<SuperAdmin> | null
 ): number {
-  const safeAmount = typeof amount === 'number' && Number.isFinite(amount) && amount > 0 ? amount : 0;
-  let fee = 0;
-  const feeType = supplier?.feeType || superAdmin?.defaultFeeType || 'percentage';
-
-  if (feeType === 'percentage' || feeType === 'both') {
-    const pct = getEffectiveAppFeePercentage(supplier, superAdmin);
-    fee += (safeAmount * pct) / 100;
-  }
-  if (feeType === 'fixed' || feeType === 'both') {
-    const fixed = supplier?.fixedFeeAmount ?? superAdmin?.defaultFixedFeeAmount ?? 0.0;
-    fee += fixed;
-  }
-  return parseFloat(fee.toFixed(2));
+  const rule = resolveSpecificServiceFeeRule({
+    section: 'client',
+    serviceKey: 'servicePurchase',
+    supplier,
+    superAdmin,
+  });
+  return calculateFeeFromRule(amount, rule);
 }
 
 export function isClientEligibleForGiftService(params: {

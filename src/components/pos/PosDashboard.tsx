@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { TIERS_CONFIG, DigitalService } from '../../types';
 import { 
@@ -34,7 +34,12 @@ import {
   Loader2,
   LogOut,
   Trash2,
-  Award
+  Award,
+  Layers,
+  Smartphone,
+  Globe,
+  Ticket,
+  ShoppingBag
 } from 'lucide-react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
@@ -52,7 +57,7 @@ import {
   formatGiftRemainingTimeAr,
   isCatalogFreeGifts,
 } from '../../utils/pricing';
-import { getCatalogsForPosView } from '../../utils/platformSettings';
+import { getCatalogsForPosView, getRegularCatalogsWithCounts } from '../../utils/platformSettings';
 import {
   getPackageAvailableStock,
   getServiceTotalStock,
@@ -98,6 +103,36 @@ export const PosDashboard: React.FC = () => {
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
   const [searchService, setSearchService] = useState('');
   const [showNotificationsPopover, setShowNotificationsPopover] = useState(false);
+  const servicesGridRef = useRef<HTMLDivElement | null>(null);
+
+  const renderCatalogIcon = (iconName?: string, className = 'w-3.5 h-3.5 shrink-0') => {
+    switch ((iconName || '').toLowerCase()) {
+      case 'gamepad':
+      case 'gamepad2':
+        return <Gamepad2 className={className} />;
+      case 'creditcard':
+        return <CreditCard className={className} />;
+      case 'tv':
+        return <Tv className={className} />;
+      case 'sparkles':
+        return <Sparkles className={className} />;
+      case 'smartphone':
+        return <Smartphone className={className} />;
+      case 'globe':
+        return <Globe className={className} />;
+      case 'ticket':
+        return <Ticket className={className} />;
+      case 'shoppingbag':
+        return <ShoppingBag className={className} />;
+      case 'shieldcheck':
+        return <ShieldCheck className={className} />;
+      case 'gift':
+        return <Gift className={className} />;
+      case 'layers':
+      default:
+        return <Layers className={className} />;
+    }
+  };
 
   const clientOrders = useMemo(
     () => filterOrdersForPosClient(orders, currentPos.id),
@@ -113,7 +148,7 @@ export const PosDashboard: React.FC = () => {
   const [copiedPosCode, setCopiedPosCode] = useState(false);
   const [exportingOrderPdfId, setExportingOrderPdfId] = useState<string | null>(null);
 
-  const tier = TIERS_CONFIG[currentPos.tier];
+  const tier = TIERS_CONFIG[currentPos.tier] || TIERS_CONFIG.regular;
   const canReceiveSupplierTransfers = hasSupplierTransferPrivilege(currentPos, supplierBankAccounts);
   const pendingIncomingTransfersCount = canReceiveSupplierTransfers
     ? getIncomingTransfersForPos(depositRequests, currentPos, supplierBankAccounts, {
@@ -339,6 +374,16 @@ export const PosDashboard: React.FC = () => {
     return true;
   });
 
+  const regularCatalogQuickItems = useMemo(
+    () => getRegularCatalogsWithCounts(visibleCatalogs, supplierBaseServices),
+    [visibleCatalogs, supplierBaseServices]
+  );
+
+  const selectedCatalogObj = useMemo(
+    () => regularCatalogQuickItems.find(item => item.catalog.id === selectedCatalogId)?.catalog || null,
+    [regularCatalogQuickItems, selectedCatalogId]
+  );
+
   const filteredServices = supplierBaseServices.filter(srv => {
     const srvCat = catalogs.find(c => c.id === srv.catalogId);
     const isGift = isCatalogFreeGifts(srvCat);
@@ -349,8 +394,8 @@ export const PosDashboard: React.FC = () => {
     }
     if (searchService.trim()) {
       const q = searchService.toLowerCase();
-      const matchName = srv.nameAr.toLowerCase().includes(q);
-      const matchDesc = srv.descriptionAr.toLowerCase().includes(q);
+      const matchName = (srv.nameAr || '').toLowerCase().includes(q);
+      const matchDesc = (srv.descriptionAr || '').toLowerCase().includes(q);
       if (!matchName && !matchDesc) return false;
     }
     return true;
@@ -901,24 +946,95 @@ export const PosDashboard: React.FC = () => {
                 )}
               </div>
               <div className="text-[11px] text-slate-400 px-3 py-2 rounded-xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between sm:justify-center gap-2 shrink-0">
-                <span>النتائج المتاحة:</span>
-                <span className="font-mono font-bold text-amber-400">{filteredServices.length}</span>
+                <span>
+                  {isFreeGiftsSelected
+                    ? 'نتائج الهدايا المجانية:'
+                    : selectedCatalogObj
+                    ? `${selectedCatalogObj.nameAr}:`
+                    : 'النتائج المتاحة:'}
+                </span>
+                <span className="font-mono tabular-nums font-bold text-amber-400">{filteredServices.length}</span>
               </div>
             </div>
 
-            {/* Catalogs & Free Gifts Row */}
-            <div className="flex flex-wrap items-center gap-1.5 text-xs pt-0.5">
+            {/* Catalogs Quick-Navigation Header */}
+            <div className="flex items-center justify-between gap-2 text-[11px] pt-0.5">
+              <div className="flex items-center gap-1.5 font-semibold text-slate-300">
+                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>الكتالوجات للانتقال السريع</span>
+              </div>
+              {selectedCatalogId !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCatalogId('all')}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  عرض جميع الكتالوجات
+                </button>
+              )}
+            </div>
+
+            {/* Catalogs Quick-Navigation Strip & Free Gifts */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap text-xs">
               <button
                 type="button"
-                onClick={() => setSelectedCatalogId('all')}
-                className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
+                onClick={() => {
+                  setSelectedCatalogId('all');
+                  servicesGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }}
+                className={`px-3 py-1.5 min-h-[36px] rounded-xl font-medium transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
                   selectedCatalogId === 'all'
                     ? 'bg-slate-200 text-slate-950 font-bold shadow-sm'
-                    : 'bg-slate-950/80 text-slate-400 border border-slate-800 hover:text-white'
+                    : 'bg-slate-950/80 text-slate-300 border border-slate-800 hover:border-slate-700 hover:text-white'
                 }`}
               >
-                جميع الكتالوجات
+                <Store className={`w-3.5 h-3.5 shrink-0 ${selectedCatalogId === 'all' ? 'text-slate-950' : 'text-amber-400'}`} />
+                <span>جميع الكتالوجات</span>
+                <span
+                  className={`text-[11px] font-mono tabular-nums ${
+                    selectedCatalogId === 'all' ? 'text-slate-800 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  ({supplierBaseServices.length})
+                </span>
               </button>
+
+              {regularCatalogQuickItems.map(({ catalog: cat, serviceCount }) => {
+                const isSelected = selectedCatalogId === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCatalogId(cat.id);
+                      servicesGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }}
+                    title={cat.descriptionAr || cat.nameAr}
+                    className={`px-3 py-1.5 min-h-[36px] rounded-xl font-medium transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                        : 'bg-slate-950/80 text-slate-300 border border-slate-800 hover:border-amber-500/40 hover:text-white'
+                    }`}
+                  >
+                    {renderCatalogIcon(
+                      cat.icon,
+                      isSelected ? 'w-3.5 h-3.5 shrink-0 text-slate-950' : 'w-3.5 h-3.5 shrink-0 text-amber-400'
+                    )}
+                    <span>{cat.nameAr}</span>
+                    <span
+                      className={`text-[11px] font-mono tabular-nums ${
+                        isSelected
+                          ? 'text-slate-900/80 font-bold'
+                          : serviceCount > 0
+                          ? 'text-slate-400'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      ({serviceCount})
+                    </span>
+                  </button>
+                );
+              })}
 
               <button
                 type="button"
@@ -932,8 +1048,9 @@ export const PosDashboard: React.FC = () => {
                     return;
                   }
                   setSelectedCatalogId(freeGiftsTargetId);
+                  servicesGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }}
-                className={`px-3 py-1.5 rounded-xl font-medium transition-colors flex items-center gap-1.5 cursor-pointer ${
+                className={`px-3 py-1.5 min-h-[36px] rounded-xl font-medium transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer ${
                   isFreeGiftsSelected
                     ? 'bg-purple-600 text-white font-bold shadow-sm'
                     : canSeeGiftsInStore
@@ -945,13 +1062,11 @@ export const PosDashboard: React.FC = () => {
                 <span>الهدايا المجانية</span>
                 {canSeeGiftsInStore && freeGiftsCount > 0 && (
                   <span
-                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                      isFreeGiftsSelected
-                        ? 'bg-white/20 text-white'
-                        : 'bg-purple-500/25 text-purple-200'
+                    className={`text-[11px] font-mono tabular-nums font-bold ${
+                      isFreeGiftsSelected ? 'text-white/90' : 'text-purple-200'
                     }`}
                   >
-                    {freeGiftsCount}
+                    ({freeGiftsCount})
                   </span>
                 )}
               </button>
@@ -971,7 +1086,7 @@ export const PosDashboard: React.FC = () => {
           </div>
 
           {/* Services Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div ref={servicesGridRef} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredServices.map(srv => {
               // Get primary package price for this tier including platform fee / free gift / 0.5 SAR floor rules
               const rawPrimaryPkg = srv.packages[0];
@@ -1053,14 +1168,22 @@ export const PosDashboard: React.FC = () => {
                             <img src={srv.imageUrl} alt={srv.nameAr} className="w-full h-full object-cover" />
                           ) : (
                             <>
-                              {isGiftService && <Gift className="w-6 h-6 text-purple-300" />}
-                              {!isGiftService && srv.catalogId === 'cat-games' && <Gamepad2 className="w-6 h-6" />}
-                              {!isGiftService && srv.catalogId === 'cat-cards' && <CreditCard className="w-6 h-6" />}
-                              {!isGiftService && srv.catalogId === 'cat-stream' && <Tv className="w-6 h-6" />}
-                              {!isGiftService && srv.catalogId === 'cat-apps' && <Sparkles className="w-6 h-6" />}
-                              {!isGiftService && srv.catalogId === 'cat-free-gifts' && <Gift className="w-6 h-6 text-purple-400" />}
-                              {!['cat-games', 'cat-cards', 'cat-stream', 'cat-apps', 'cat-free-gifts'].includes(srv.catalogId) && !isGiftService && (
-                                <Gamepad2 className="w-6 h-6" />
+                              {isGiftService ? (
+                                <Gift className="w-6 h-6 text-purple-300" />
+                              ) : (
+                                renderCatalogIcon(
+                                  srvCatalog?.icon ||
+                                    (srv.catalogId === 'cat-games'
+                                      ? 'Gamepad2'
+                                      : srv.catalogId === 'cat-cards'
+                                      ? 'CreditCard'
+                                      : srv.catalogId === 'cat-stream'
+                                      ? 'Tv'
+                                      : srv.catalogId === 'cat-apps'
+                                      ? 'Sparkles'
+                                      : 'Gamepad2'),
+                                  'w-6 h-6'
+                                )
                               )}
                             </>
                           )}
@@ -1084,6 +1207,21 @@ export const PosDashboard: React.FC = () => {
                             )}
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5 flex-wrap">
+                            {srvCatalog && !isGiftService && selectedCatalogId === 'all' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCatalogId(srvCatalog.id);
+                                    servicesGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                  }}
+                                  className="text-slate-300 hover:text-amber-400 transition-colors font-medium cursor-pointer"
+                                >
+                                  {srvCatalog.nameAr}
+                                </button>
+                                <span>·</span>
+                              </>
+                            )}
                             <span>{srv.packages.length} باقات متوفرة</span>
                             <span>·</span>
                             <span className={`${isGiftService ? 'text-purple-300' : 'text-amber-400'} font-medium`}>تسليم فوري</span>

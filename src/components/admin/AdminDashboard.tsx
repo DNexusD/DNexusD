@@ -18,6 +18,15 @@ import {
   filterSuppliersForAdmin,
   isSupplierActive
 } from '../../utils/storeSupervision';
+import {
+  PlatformFeesConfig,
+  ServiceFeeRule,
+} from '../../types';
+import {
+  ClientFeeServiceKey,
+  getEffectivePlatformFeesConfig,
+  SupplierFeeServiceKey,
+} from '../../utils/pricing';
 import { 
   ShieldCheck, 
   Wallet, 
@@ -42,7 +51,9 @@ import {
   Activity,
   Power,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Store,
+  Clock
 } from 'lucide-react';
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 
@@ -133,33 +144,106 @@ export const AdminDashboard: React.FC = () => {
     setActiveNavTab(tab);
   };
 
-  // Settings state for Global fee
-  const [globalFeeType, setGlobalFeeType] = useState<'percentage' | 'fixed' | 'both'>(superAdmin.defaultFeeType || 'percentage');
-  const [globalPercentage, setGlobalPercentage] = useState<number>(superAdmin.defaultFeePercentage);
-  const [globalFixedAmount, setGlobalFixedAmount] = useState<string>(() =>
-    String(Number(convertFromSar(superAdmin.defaultFixedFeeAmount || 0).toFixed(2)))
-  );
-  const [isGlobalFixedDirty, setIsGlobalFixedDirty] = useState(false);
+  type ServiceRuleDraft = {
+    feeType: 'percentage' | 'fixed' | 'both';
+    percentage: number;
+    fixedDisplay: string;
+    fixedSarBase: number;
+    isFixedDirty: boolean;
+  };
 
-  // Settings state for per-supplier fee
-  const [selectedSupplierForFee, setSelectedSupplierForFee] = useState<string>(supplier.id);
-  const activeSelectedSup = suppliers.find(s => s.id === selectedSupplierForFee) || supplier;
-  const [supplierFeeType, setSupplierFeeType] = useState<'percentage' | 'fixed' | 'both'>(activeSelectedSup.feeType || 'percentage');
-  const [supplierPercentage, setSupplierPercentage] = useState<number>(activeSelectedSup.feePercentage ?? 1.0);
-  const [supplierFixedAmount, setSupplierFixedAmount] = useState<string>(() =>
-    String(Number(convertFromSar(activeSelectedSup.fixedFeeAmount ?? 0).toFixed(2)))
+  type PlatformFeesDraft = {
+    supplierServices: Record<SupplierFeeServiceKey, ServiceRuleDraft>;
+    clientServices: Record<ClientFeeServiceKey, ServiceRuleDraft>;
+  };
+
+  const toServiceRuleDraft = (rule: ServiceFeeRule): ServiceRuleDraft => ({
+    feeType: rule.feeType,
+    percentage: rule.percentage ?? 0,
+    fixedDisplay: String(Number(convertFromSar(rule.fixedAmount ?? 0).toFixed(2))),
+    fixedSarBase: rule.fixedAmount ?? 0,
+    isFixedDirty: false,
+  });
+
+  const buildDraftFromConfig = (cfg: PlatformFeesConfig): PlatformFeesDraft => ({
+    supplierServices: {
+      supportGrant: toServiceRuleDraft(cfg.supplierServices.supportGrant),
+      loanGrant: toServiceRuleDraft(cfg.supplierServices.loanGrant),
+      saleToClient: toServiceRuleDraft(cfg.supplierServices.saleToClient),
+    },
+    clientServices: {
+      depositRequest: toServiceRuleDraft(cfg.clientServices.depositRequest),
+      loanRequest: toServiceRuleDraft(cfg.clientServices.loanRequest),
+      servicePurchase: toServiceRuleDraft(cfg.clientServices.servicePurchase),
+      balanceTransfer: toServiceRuleDraft(cfg.clientServices.balanceTransfer || cfg.clientServices.servicePurchase),
+    },
+  });
+
+  const draftRuleToSarRule = (draft: ServiceRuleDraft): ServiceFeeRule => ({
+    feeType: draft.feeType,
+    percentage: Math.max(0, Number(draft.percentage) || 0),
+    fixedAmount: draft.isFixedDirty
+      ? convertToSar(Math.max(0, Number(draft.fixedDisplay) || 0))
+      : (draft.fixedSarBase ?? 0),
+  });
+
+  const draftToPlatformFeesConfig = (draft: PlatformFeesDraft): PlatformFeesConfig => ({
+    supplierServices: {
+      supportGrant: draftRuleToSarRule(draft.supplierServices.supportGrant),
+      loanGrant: draftRuleToSarRule(draft.supplierServices.loanGrant),
+      saleToClient: draftRuleToSarRule(draft.supplierServices.saleToClient),
+    },
+    clientServices: {
+      depositRequest: draftRuleToSarRule(draft.clientServices.depositRequest),
+      loanRequest: draftRuleToSarRule(draft.clientServices.loanRequest),
+      servicePurchase: draftRuleToSarRule(draft.clientServices.servicePurchase),
+      balanceTransfer: draftRuleToSarRule(draft.clientServices.balanceTransfer),
+    },
+  });
+
+  const [feesScope, setFeesScope] = useState<'global' | 'supplier'>('global');
+
+  // Settings state for Global two-section fees
+  const [globalFeesDraft, setGlobalFeesDraft] = useState<PlatformFeesDraft>(() =>
+    buildDraftFromConfig(getEffectivePlatformFeesConfig(undefined, superAdmin))
   );
-  const [isSupplierFixedDirty, setIsSupplierFixedDirty] = useState(false);
+
+  // Settings state for per-supplier two-section fees
+  const [selectedSupplierForFee, setSelectedSupplierForFee] = useState<string>(supplier.id || suppliers[0]?.id || '');
+  const activeSelectedSup = suppliers.find(s => s.id === selectedSupplierForFee) || suppliers[0] || supplier;
+  const [supplierFeesDraft, setSupplierFeesDraft] = useState<PlatformFeesDraft>(() =>
+    buildDraftFromConfig(getEffectivePlatformFeesConfig(activeSelectedSup, superAdmin))
+  );
 
   useEffect(() => {
-    setGlobalFixedAmount(String(Number(convertFromSar(superAdmin.defaultFixedFeeAmount || 0).toFixed(2))));
-    setIsGlobalFixedDirty(false);
-  }, [activeCurrency, activeExchangeRate, superAdmin.defaultFixedFeeAmount]);
+    setGlobalFeesDraft(buildDraftFromConfig(getEffectivePlatformFeesConfig(undefined, superAdmin)));
+  }, [
+    activeCurrency,
+    activeExchangeRate,
+    superAdmin.defaultFeeType,
+    superAdmin.defaultFeePercentage,
+    superAdmin.defaultFixedFeeAmount,
+    superAdmin.defaultFeesConfig,
+  ]);
 
   useEffect(() => {
-    setSupplierFixedAmount(String(Number(convertFromSar(activeSelectedSup.fixedFeeAmount ?? 0).toFixed(2))));
-    setIsSupplierFixedDirty(false);
-  }, [activeCurrency, activeExchangeRate, activeSelectedSup.id, activeSelectedSup.fixedFeeAmount]);
+    if (!selectedSupplierForFee && suppliers[0]?.id) {
+      setSelectedSupplierForFee(suppliers[0].id);
+    }
+  }, [suppliers, selectedSupplierForFee]);
+
+  useEffect(() => {
+    setSupplierFeesDraft(buildDraftFromConfig(getEffectivePlatformFeesConfig(activeSelectedSup, superAdmin)));
+  }, [
+    activeCurrency,
+    activeExchangeRate,
+    activeSelectedSup?.id,
+    activeSelectedSup?.feeType,
+    activeSelectedSup?.feePercentage,
+    activeSelectedSup?.fixedFeeAmount,
+    activeSelectedSup?.feesConfig,
+    superAdmin,
+  ]);
 
   // Add new Supplier Form state
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
@@ -205,15 +289,14 @@ export const AdminDashboard: React.FC = () => {
 
   const handleSaveGlobalFee = (e: React.FormEvent) => {
     e.preventDefault();
-    const fixedSar = isGlobalFixedDirty
-      ? convertToSar(Math.max(0, Number(globalFixedAmount) || 0))
-      : (superAdmin.defaultFixedFeeAmount || 0);
+    const resolvedConfig = draftToPlatformFeesConfig(globalFeesDraft);
+    const primaryRule = resolvedConfig.clientServices.servicePurchase;
     updateGlobalFeeConfig({
-      feeType: globalFeeType,
-      percentage: Number(globalPercentage),
-      fixedAmount: fixedSar
+      feeType: primaryRule.feeType,
+      percentage: primaryRule.percentage,
+      fixedAmount: primaryRule.fixedAmount,
+      defaultFeesConfig: resolvedConfig,
     });
-    setIsGlobalFixedDirty(false);
   };
 
   const handleSaveSupplierFee = (e: React.FormEvent) => {
@@ -227,16 +310,14 @@ export const AdminDashboard: React.FC = () => {
       });
       return;
     }
-    const targetSup = suppliers.find(s => s.id === targetId) || activeSelectedSup;
-    const fixedSar = isSupplierFixedDirty
-      ? convertToSar(Math.max(0, Number(supplierFixedAmount) || 0))
-      : (targetSup?.fixedFeeAmount ?? 0);
+    const resolvedConfig = draftToPlatformFeesConfig(supplierFeesDraft);
+    const primaryRule = resolvedConfig.clientServices.servicePurchase;
     updateSupplierFeeConfig(targetId, {
-      feeType: supplierFeeType,
-      percentage: Number(supplierPercentage),
-      fixedAmount: fixedSar
+      feeType: primaryRule.feeType,
+      percentage: primaryRule.percentage,
+      fixedAmount: primaryRule.fixedAmount,
+      feesConfig: resolvedConfig,
     });
-    setIsSupplierFixedDirty(false);
   };
 
   const handleCreateSupplier = (e: React.FormEvent) => {
@@ -831,230 +912,321 @@ export const AdminDashboard: React.FC = () => {
         </>
       )}
 
-      {/* View 3: Fee Settings (Global vs Per-Supplier) */}
-      {adminSubTab === 'fees' && perms.canManageFees && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
-            {/* Global fee config */}
-            <form onSubmit={handleSaveGlobalFee} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
-              <div>
-                <h3 className="font-bold text-base text-white flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-amber-400" />
-                  <span>ضبط نسبة ومبلغ الرسوم العامة لجميع المتاجر</span>
-                </h3>
-                <p className="text-slate-400 text-[11px] mt-0.5">
-                  تحدد النسبة والمبلغ الثابت المقتطع لصالح محفظة الإدارة على أي عملية بيع أو تحويل، كما تُحتسب هذه النسبة المئوية كرسوم تطبيق من السعر الأصلي للرتبة في خدمات كتالوج الهدايا المجانية.
-                </p>
+      {/* View 3: Two-Section Fee Settings (Global vs Per-Supplier) */}
+      {adminSubTab === 'fees' && perms.canManageFees && (() => {
+        const isGlobalScope = feesScope === 'global';
+        const activeDraft = isGlobalScope ? globalFeesDraft : supplierFeesDraft;
+        const setActiveDraft = isGlobalScope ? setGlobalFeesDraft : setSupplierFeesDraft;
+        const accentColor = isGlobalScope ? 'amber' : 'purple';
+
+        const updateSupplierServiceDraft = (
+          key: SupplierFeeServiceKey,
+          patch: Partial<ServiceRuleDraft>
+        ) => {
+          setActiveDraft(prev => ({
+            ...prev,
+            supplierServices: {
+              ...prev.supplierServices,
+              [key]: { ...prev.supplierServices[key], ...patch },
+            },
+          }));
+        };
+
+        const updateClientServiceDraft = (
+          key: ClientFeeServiceKey,
+          patch: Partial<ServiceRuleDraft>
+        ) => {
+          setActiveDraft(prev => ({
+            ...prev,
+            clientServices: {
+              ...prev.clientServices,
+              [key]: { ...prev.clientServices[key], ...patch },
+            },
+          }));
+        };
+
+        const supplierServiceRows: Array<{
+          key: SupplierFeeServiceKey;
+          title: string;
+          subtitle: string;
+        }> = [
+          {
+            key: 'supportGrant',
+            title: 'خدمة دعم الرصيد للعميل',
+            subtitle: 'تُخصم من المورد وتُودع للإدارة عند منح رصيد مجاني / دعم للعميل',
+          },
+          {
+            key: 'loanGrant',
+            title: 'خدمة شحن سلفة للعميل',
+            subtitle: 'تُخصم من المورد وتُودع للإدارة عند شحن سلفة آجل مباشرة للعميل',
+          },
+          {
+            key: 'saleToClient',
+            title: 'خدمة بيع للعميل',
+            subtitle: 'تُخصم من استحقاق المورد وتُودع للإدارة فقط بعد إتمام الشحن والتسليم',
+          },
+        ];
+
+        const clientServiceRows: Array<{
+          key: ClientFeeServiceKey;
+          title: string;
+          subtitle: string;
+        }> = [
+          {
+            key: 'depositRequest',
+            title: 'خدمة طلب شحن رصيد',
+            subtitle: 'تُخصم من مبلغ الشحن وتُودع للإدارة فقط بعد اعتماد الطلب واكتماله',
+          },
+          {
+            key: 'loanRequest',
+            title: 'خدمة طلب سلفة',
+            subtitle: 'تُخصم وتُودع للإدارة فقط بعد الموافقة على السلفة وقيد الرصيد',
+          },
+          {
+            key: 'servicePurchase',
+            title: 'خدمة شراء خدمة',
+            subtitle: 'تُخصم وتُودع للإدارة فقط بعد إتمام الطلب والشحن بالكامل (وتشمل نسبة الهدايا)',
+          },
+          {
+            key: 'balanceTransfer',
+            title: 'خدمة تحويل رصيد بين العملاء',
+            subtitle: 'تُخصم من المرسل وتُودع للإدارة عند تنفيذ التحويل الفوري',
+          },
+        ];
+
+        const renderServiceFeeCard = (
+          title: string,
+          subtitle: string,
+          rule: ServiceRuleDraft,
+          onChange: (patch: Partial<ServiceRuleDraft>) => void
+        ) => (
+          <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+            <div>
+              <div className="font-bold text-xs text-white">{title}</div>
+              <p className="text-[10.5px] text-slate-400 mt-0.5 leading-relaxed">{subtitle}</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => onChange({ feeType: 'percentage' })}
+                className={`py-1.5 px-2 rounded-lg border text-[11px] text-center transition-colors cursor-pointer ${
+                  rule.feeType === 'percentage'
+                    ? isGlobalScope
+                      ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
+                      : 'bg-purple-500 text-slate-950 font-bold border-purple-500'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                نسبة (%)
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ feeType: 'fixed' })}
+                className={`py-1.5 px-2 rounded-lg border text-[11px] text-center transition-colors cursor-pointer ${
+                  rule.feeType === 'fixed'
+                    ? isGlobalScope
+                      ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
+                      : 'bg-purple-500 text-slate-950 font-bold border-purple-500'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                مبلغ ({currencyLabel})
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ feeType: 'both' })}
+                className={`py-1.5 px-2 rounded-lg border text-[11px] text-center transition-colors cursor-pointer ${
+                  rule.feeType === 'both'
+                    ? isGlobalScope
+                      ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
+                      : 'bg-purple-500 text-slate-950 font-bold border-purple-500'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                نسبة + مبلغ
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              {(rule.feeType === 'percentage' || rule.feeType === 'both') && (
+                <div className={rule.feeType === 'percentage' ? 'col-span-2' : ''}>
+                  <label className="block text-[10.5px] text-slate-400 mb-1">النسبة المئوية (%):</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="25"
+                    value={rule.percentage}
+                    onChange={e => onChange({ percentage: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 font-mono font-bold text-white text-center text-xs"
+                  />
+                </div>
+              )}
+
+              {(rule.feeType === 'fixed' || rule.feeType === 'both') && (
+                <div className={rule.feeType === 'fixed' ? 'col-span-2' : ''}>
+                  <label className="block text-[10.5px] text-slate-400 mb-1">المبلغ المقطوع ({currencyLabel}):</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={rule.fixedDisplay}
+                    onChange={e => onChange({ fixedDisplay: e.target.value, isFixedDirty: true })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 font-mono font-bold text-white text-center text-xs"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+        return (
+          <div className="space-y-4">
+            {/* Scope & Completion Policy Header */}
+            <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-base text-white flex items-center gap-2">
+                    <Percent className={`w-4 h-4 ${accentColor === 'amber' ? 'text-amber-400' : 'text-purple-400'}`} />
+                    <span>إدارة نسب ورسوم التطبيق (قسم خدمات المورد + قسم خدمات عملائه)</span>
+                  </h3>
+                  <p className="text-slate-400 text-[11px] mt-1 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>سياسة التحصيل: لا يتم خصم الرسوم أو إيداعها في حساب مدير التطبيق إلا بعد استكمال الخدمة فعلياً (بعد الطلب وإتمام الشحن أو الاعتماد).</span>
+                  </p>
+                </div>
+
+                {/* Scope Selector: Global vs Specific Store */}
+                <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-slate-950 border border-slate-800 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setFeesScope('global')}
+                    className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      isGlobalScope
+                        ? 'bg-amber-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Percent className="w-3.5 h-3.5" />
+                    <span>الرسوم العامة (للكل)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFeesScope('supplier')}
+                    className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      !isGlobalScope
+                        ? 'bg-purple-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Sliders className="w-3.5 h-3.5" />
+                    <span>تخصيص لمتجر محدد</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">طريقة احتساب الرسوم العامة:</label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setGlobalFeeType('percentage')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        globalFeeType === 'percentage'
-                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      نسبة مئوية (%)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setGlobalFeeType('fixed')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        globalFeeType === 'fixed'
-                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      مبلغ مقطوع ({currencyLabel})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setGlobalFeeType('both')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        globalFeeType === 'both'
-                          ? 'bg-amber-500 text-slate-950 font-bold border-amber-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      نسبة + مبلغ
-                    </button>
+              {!isGlobalScope && (
+                <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-purple-200 font-semibold">
+                    <Store className="w-4 h-4 text-purple-400 shrink-0" />
+                    <span>اختر المتجر المراد تخصيص رسوم خدماته وخدمات عملائه:</span>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {(globalFeeType === 'percentage' || globalFeeType === 'both') && (
-                    <div>
-                      <label className="block text-slate-400 mb-1">النسبة المئوية (%):</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="25"
-                        value={globalPercentage}
-                        onChange={e => setGlobalPercentage(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
-                      />
-                    </div>
-                  )}
-
-                  {(globalFeeType === 'fixed' || globalFeeType === 'both') && (
-                    <div>
-                      <label className="block text-slate-400 mb-1">المبلغ المقطوع ({currencyLabel}):</label>
-                      <input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={globalFixedAmount}
-                        onChange={e => {
-                          setGlobalFixedAmount(e.target.value);
-                          setIsGlobalFixedDirty(true);
-                        }}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
-                >
-                  حفظ وتطبيق الرسوم العامة لجميع المتاجر
-                </button>
-              </div>
-            </form>
-
-            {/* Per-supplier fee override */}
-            <form onSubmit={handleSaveSupplierFee} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
-              <div>
-                <h3 className="font-bold text-base text-white flex items-center gap-2">
-                  <Sliders className="w-4 h-4 text-purple-400" />
-                  <span>تخصيص نسبة ومبلغ الرسوم لكل متجر على حدة</span>
-                </h3>
-                <p className="text-slate-400 text-[11px] mt-0.5">
-                  يمكن تحديد نسبة أو مبلغ رسوم مخصص لمتجر معين يختلف عن النسبة العامة للنظام.
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">اختر المتجر المراد تخصيص رسومه:</label>
                   <select
                     value={selectedSupplierForFee}
-                    onChange={e => {
-                      setSelectedSupplierForFee(e.target.value);
-                      const found = suppliers.find(s => s.id === e.target.value);
-                      if (found) {
-                        setSupplierFeeType(found.feeType || 'percentage');
-                        setSupplierPercentage(found.feePercentage ?? 1.0);
-                        setSupplierFixedAmount(String(Number(convertFromSar(found.fixedFeeAmount ?? 0).toFixed(2))));
-                        setIsSupplierFixedDirty(false);
-                      }
-                    }}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                    onChange={e => setSelectedSupplierForFee(e.target.value)}
+                    className="sm:min-w-[260px] bg-slate-950 border border-purple-500/40 rounded-xl px-3 py-2 text-xs text-white font-semibold"
                   >
                     {suppliers.length === 0 ? (
                       <option value="">لا توجد متاجر مسجلة حالياً</option>
                     ) : (
                       suppliers.map(s => (
-                        <option key={s.id} value={s.id}>{s.name} ({s.storeName})</option>
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.storeName})
+                        </option>
                       ))
                     )}
                   </select>
                 </div>
+              )}
+            </div>
 
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">نوع الرسوم لهذا المتجر:</label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSupplierFeeType('percentage')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        supplierFeeType === 'percentage'
-                          ? 'bg-purple-500 text-slate-950 font-bold border-purple-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      نسبة مئوية (%)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSupplierFeeType('fixed')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        supplierFeeType === 'fixed'
-                          ? 'bg-purple-500 text-slate-950 font-bold border-purple-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      مبلغ مقطوع ({currencyLabel})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSupplierFeeType('both')}
-                      className={`py-1.5 px-2 rounded-lg border text-center transition-colors ${
-                        supplierFeeType === 'both'
-                          ? 'bg-purple-500 text-slate-950 font-bold border-purple-500'
-                          : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      نسبة + مبلغ
-                    </button>
+            {/* Two-Section Form */}
+            <form
+              onSubmit={isGlobalScope ? handleSaveGlobalFee : handleSaveSupplierFee}
+              className="space-y-4"
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Section 1: Supplier Services */}
+                <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3 text-xs">
+                  <div className="border-b border-slate-800 pb-3">
+                    <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                      <Store className="w-4 h-4 text-cyan-400" />
+                      <span>القسم الأول: رسوم خدمات المورد</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      الرسوم المفروضة على المتجر (المورد) عند تنفيذ خدماته لعملائه واستكمالها.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {supplierServiceRows.map(row => (
+                      <React.Fragment key={row.key}>
+                        {renderServiceFeeCard(
+                          row.title,
+                          row.subtitle,
+                          activeDraft.supplierServices[row.key],
+                          patch => updateSupplierServiceDraft(row.key, patch)
+                        )}
+                      </React.Fragment>
+                    ))}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  {(supplierFeeType === 'percentage' || supplierFeeType === 'both') && (
-                    <div>
-                      <label className="block text-slate-400 mb-1">النسبة المئوية (%):</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="25"
-                        value={supplierPercentage}
-                        onChange={e => setSupplierPercentage(Number(e.target.value))}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
-                      />
-                    </div>
-                  )}
+                {/* Section 2: Client Services */}
+                <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3 text-xs">
+                  <div className="border-b border-slate-800 pb-3">
+                    <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                      <Users className="w-4 h-4 text-emerald-400" />
+                      <span>القسم الثاني: رسوم خدمات عملاء المورد</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      الرسوم المفروضة على طلبات وعمليات العملاء عند اكتمال الخدمة أو اعتماد الطلب.
+                    </p>
+                  </div>
 
-                  {(supplierFeeType === 'fixed' || supplierFeeType === 'both') && (
-                    <div>
-                      <label className="block text-slate-400 mb-1">المبلغ المقطوع ({currencyLabel}):</label>
-                      <input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={supplierFixedAmount}
-                        onChange={e => {
-                          setSupplierFixedAmount(e.target.value);
-                          setIsSupplierFixedDirty(true);
-                        }}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono font-bold text-white text-center"
-                      />
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {clientServiceRows.map(row => (
+                      <React.Fragment key={row.key}>
+                        {renderServiceFeeCard(
+                          row.title,
+                          row.subtitle,
+                          activeDraft.clientServices[row.key],
+                          patch => updateClientServiceDraft(row.key, patch)
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
                 </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition-colors"
-                >
-                  حفظ الرسوم المخصصة لهذا المتجر
-                </button>
               </div>
-            </form>
 
+              <button
+                type="submit"
+                disabled={!isGlobalScope && suppliers.length === 0}
+                className={`w-full py-3 rounded-2xl font-bold text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                  isGlobalScope
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                    : 'bg-purple-500 hover:bg-purple-400 text-slate-950'
+                }`}
+              >
+                {isGlobalScope
+                  ? 'حفظ وتطبيق قسمي الرسوم العامة على جميع المتاجر'
+                  : `حفظ وتطبيق قسمي الرسوم المخصصة للمتجر (${activeSelectedSup?.storeName || ''})`}
+              </button>
+            </form>
           </div>
-        </>
-      )}
+        );
+      })()}
 
       {/* Add New Supplier Modal (User's requirement: يمكن ان يضيف ممولين) */}
       {showAddSupplierModal && (

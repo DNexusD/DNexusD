@@ -66,6 +66,7 @@
         "feePercentage": { "type": "number" },
         "fixedFeeAmount": { "type": "number" },
         "feeType": { "type": "string", "enum": ["percentage", "fixed", "both"] },
+        "feesConfig": { "type": "object" },
         "walletBalance": { "type": "number" },
         "createdAt": { "type": "string" },
         "logoUrl": { "type": "string" },
@@ -90,6 +91,7 @@
         "defaultFeePercentage": { "type": "number" },
         "defaultFixedFeeAmount": { "type": "number" },
         "defaultFeeType": { "type": "string", "enum": ["percentage", "fixed", "both"] },
+        "defaultFeesConfig": { "type": "object" },
         "adminAccounts": { "type": "array" }
       },
       "required": ["name", "email", "walletBalance"]
@@ -116,6 +118,9 @@
         "costPrice": { "type": "number" },
         "salePriceToCustomer": { "type": "number" },
         "feeAmount": { "type": "number" },
+        "supplierFeeAmount": { "type": "number" },
+        "feeSettledToAdmin": { "type": "boolean" },
+        "heldFromClientAtRequest": { "type": "number" },
         "totalDeducted": { "type": "number" },
         "isFreeGiftOrder": { "type": "boolean" },
         "deferredFeeAmount": { "type": "number" },
@@ -168,7 +173,10 @@
         "receiverConfirmedByName": { "type": "string" },
         "receiverConfirmationNote": { "type": "string" },
         "transferReceiptImage": { "type": "string" },
-        "transferReceiptFileName": { "type": "string" }
+        "transferReceiptFileName": { "type": "string" },
+        "feeAmount": { "type": "number" },
+        "feeTargetRole": { "type": "string", "enum": ["supplier", "client"] },
+        "feeSettledToAdmin": { "type": "boolean" }
       },
       "required": ["id", "posId", "posCode", "supplierId", "amount", "status", "date"]
     },

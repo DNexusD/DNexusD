@@ -31,7 +31,8 @@ import {
   VoucherWarehouse,
   TierPrices,
   WarehousePurchaseUnit,
-  CurrencyCode
+  CurrencyCode,
+  PlatformFeesConfig
 } from '../types';
 import {
   convertCurrencyToSar,
@@ -94,12 +95,17 @@ import {
 } from '../utils/bankAccounts';
 import {
   appendUsedGiftServiceId,
-  calculateBaseSupplierFee,
+  calculateFeeFromRule,
   calculateServicePurchasePricing,
+  createDefaultPlatformFeesConfig,
   evaluateClientGiftServiceStatus,
+  getEffectivePlatformFeesConfig,
   isCatalogFreeGifts,
+  normalizePlatformFeesConfig,
   resolveGiftClaimFeePayment,
+  resolveSpecificServiceFeeRule,
   settlePendingGiftFeesOnRecharge,
+  sumPendingUnsettledClientFees,
 } from '../utils/pricing';
 import { sanitizeSupplierSocialLinks } from '../utils/socialLinks';
 import {
@@ -440,10 +446,10 @@ interface AppContextType {
   deleteDropdownOption: (listKey: PlatformDropdownListKey, optionId: string) => void;
   
   addSupplier: (newSup: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => void;
-  updateSupplierFeeConfig: (supplierId: string, config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
+  updateSupplierFeeConfig: (supplierId: string, config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number; feesConfig?: PlatformFeesConfig }) => void;
   adminUpdateSupplier: (supplierId: string, updates: Partial<Supplier>) => { success: boolean; error?: string };
   toggleSupplierActiveStatus: (supplierId: string) => void;
-  updateGlobalFeeConfig: (config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }) => void;
+  updateGlobalFeeConfig: (config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number; defaultFeesConfig?: PlatformFeesConfig }) => void;
   adminSettleBank: (amount: number, bankIban: string) => void;
   adminTransferToAgent: (targetPosCode: string, amount: number) => void;
   addOfficeEmployee: (employeeData: {
@@ -993,8 +999,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clearEntityPendingSync(colKey, docId);
         }
 
-        const sortByDateDesc = <T extends { date: string }>(items: T[]) =>
-          [...items].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const sortByDateDesc = <T extends { date?: string }>(items: T[]) =>
+          [...items].sort(
+            (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+          );
 
         const sortedOrders = sortByDateDesc(ordersRec.merged);
         const sortedDeposits = sortByDateDesc(depositsRec.merged);
@@ -1361,7 +1369,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       snapshot.forEach(docSnap => {
         remoteOrders.push(docSnap.data() as Order);
       });
-      remoteOrders.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      remoteOrders.sort(
+        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+      );
       setOrders(remoteOrders);
     }, (err) => {
       handleSnapshotError(err, OperationType.LIST, 'orders', handleTransientOffline);
@@ -1373,7 +1383,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       snapshot.forEach(docSnap => {
         remoteDeps.push(docSnap.data() as DepositRequest);
       });
-      remoteDeps.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      remoteDeps.sort(
+        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+      );
       setDepositRequests(remoteDeps);
     }, (err) => {
       handleSnapshotError(err, OperationType.LIST, 'depositRequests', handleTransientOffline);
@@ -1421,8 +1433,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSuppliers(syncedSuppliers);
 
       if (syncedSuppliers.length > 0) {
-        setCurrentUser(prevUser => {
-          if (!prevUser) return prevUser;
+        const prevUser = currentUserRef.current;
+        if (prevUser) {
           const cleanPrevEmail = normalizeStoreEmail(prevUser.email);
           if (prevUser.role === 'supplier') {
             const ownerSup = syncedSuppliers.find(
@@ -1433,67 +1445,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             );
             if (ownerSup && isSupplierActive(ownerSup)) {
               setCurrentSupplierId(ownerSup.id);
-              return {
-                ...prevUser,
-                name: ownerSup.name,
-                associatedId: ownerSup.id,
-              };
+              setCurrentUser(curr =>
+                curr
+                  ? {
+                      ...curr,
+                      name: ownerSup.name,
+                      associatedId: ownerSup.id,
+                    }
+                  : curr
+              );
+            } else {
+              // Store removed, suspended, or email reassigned -> revoke stale store session
+              clearTransientSessionCaches();
+              setCurrentSupplierId('');
+              setCurrentUser(null);
             }
-            // Store removed, suspended, or email reassigned -> revoke stale store session
-            clearTransientSessionCaches();
-            setCurrentSupplierId('');
-            return null;
-          }
-          if (prevUser.role === 'employee') {
+          } else if (prevUser.role === 'employee') {
             const targetSup = syncedSuppliers.find(
               s => s.id === (prevUser.supplierId || prevUser.associatedId)
             );
             if (!targetSup || !isSupplierActive(targetSup)) {
               clearTransientSessionCaches();
               setCurrentSupplierId('');
-              return null;
-            }
-            // If email now belongs to store owner, upgrade to store owner
-            if (normalizeStoreEmail(targetSup.email) === cleanPrevEmail) {
+              setCurrentUser(null);
+            } else if (normalizeStoreEmail(targetSup.email) === cleanPrevEmail) {
+              // If email now belongs to store owner, upgrade to store owner
               setRole('supplier');
               setCurrentSupplierId(targetSup.id);
-              return {
-                ...prevUser,
-                role: 'supplier',
-                name: targetSup.name,
-                associatedId: targetSup.id,
-                supplierId: undefined,
-                employeeId: undefined,
-                roleTitle: undefined,
-                permissions: undefined
-              };
+              setCurrentUser(curr =>
+                curr
+                  ? {
+                      ...curr,
+                      role: 'supplier',
+                      name: targetSup.name,
+                      associatedId: targetSup.id,
+                      supplierId: undefined,
+                      employeeId: undefined,
+                      roleTitle: undefined,
+                      permissions: undefined,
+                    }
+                  : curr
+              );
+            } else {
+              const syncedEmp = (targetSup.employees || []).find(
+                e =>
+                  (prevUser.employeeId && e.id === prevUser.employeeId) ||
+                  normalizeStoreEmail(e.email) === cleanPrevEmail
+              );
+              if (!syncedEmp || !isEmployeeActive(syncedEmp)) {
+                // Employee removed or suspended by store owner -> revoke session immediately
+                clearTransientSessionCaches();
+                setCurrentSupplierId('');
+                setCurrentUser(null);
+              } else {
+                setCurrentSupplierId(targetSup.id);
+                setCurrentUser(curr =>
+                  curr
+                    ? {
+                        ...curr,
+                        name: syncedEmp.name,
+                        email: normalizeStoreEmail(syncedEmp.email),
+                        phone: syncedEmp.phone,
+                        associatedId: targetSup.id,
+                        supplierId: targetSup.id,
+                        employeeId: syncedEmp.id,
+                        roleTitle: syncedEmp.roleTitle,
+                        permissions: normalizeEmployeePermissions(syncedEmp.permissions),
+                      }
+                    : curr
+                );
+              }
             }
-            const syncedEmp = (targetSup.employees || []).find(
-              e =>
-                (prevUser.employeeId && e.id === prevUser.employeeId) ||
-                normalizeStoreEmail(e.email) === cleanPrevEmail
-            );
-            if (!syncedEmp || !isEmployeeActive(syncedEmp)) {
-              // Employee removed or suspended by store owner -> revoke session immediately
-              clearTransientSessionCaches();
-              setCurrentSupplierId('');
-              return null;
-            }
-            setCurrentSupplierId(targetSup.id);
-            return {
-              ...prevUser,
-              name: syncedEmp.name,
-              email: normalizeStoreEmail(syncedEmp.email),
-              phone: syncedEmp.phone,
-              associatedId: targetSup.id,
-              supplierId: targetSup.id,
-              employeeId: syncedEmp.id,
-              roleTitle: syncedEmp.roleTitle,
-              permissions: normalizeEmployeePermissions(syncedEmp.permissions)
-            };
           }
-          return prevUser;
-        });
+        }
       }
     }, (err) => {
       handleSnapshotError(err, OperationType.LIST, 'suppliers', handleTransientOffline);
@@ -1505,7 +1529,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       snapshot.forEach(docSnap => {
         remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
       });
-      remoteReqs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      remoteReqs.sort(
+        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+      );
       setLoanRepaymentRequests(remoteReqs);
     }, (err) => {
       handleSnapshotError(err, OperationType.LIST, 'loanRepaymentRequests', handleTransientOffline);
@@ -1622,7 +1648,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
       const syncedEntries = Array.from(entryMap.values()).sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
       );
       setAccountingEntries(syncedEntries);
     }, (err) => {
@@ -1639,7 +1665,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
       const syncedAdmEntries = Array.from(admMap.values()).sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
       );
       setAdminAccountingEntries(syncedAdmEntries);
     }, (err) => {
@@ -2867,10 +2893,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // Fee calculation supporting percentage, fixed amount, or both
+  // Fee calculation supporting percentage, fixed amount, or both (defaults to client balanceTransfer rule)
   const calculateFee = (amount: number, targetSup?: Supplier) => {
-    const activeSup = targetSup || supplier;
-    return calculateBaseSupplierFee(amount, activeSup);
+    const activeSup = targetSup || currentPosSupplier || supplier;
+    const transferRule = resolveSpecificServiceFeeRule({
+      section: 'client',
+      serviceKey: 'balanceTransfer',
+      supplier: activeSup,
+      superAdmin,
+    });
+    return calculateFeeFromRule(amount, transferRule);
   };
 
   // Execute purchase
@@ -2918,7 +2950,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
-    const activeOrderSupplier = currentPosSupplier || supplier;
+    const activeOrderSupplier = suppliers.find(s => s.id === liveService.supplierId) || currentPosSupplier || supplier;
     const pricing = calculateServicePurchasePricing({
       pkg: effectivePkg,
       clientTier: currentPos.tier,
@@ -2934,6 +2966,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unitPrice = pricing.unitPrice;
     const feeAmount = pricing.feeAmount;
     const totalDeduction = pricing.totalAmount;
+
+    const supplierSaleRule = resolveSpecificServiceFeeRule({
+      section: 'supplier',
+      serviceKey: 'saleToClient',
+      supplier: activeOrderSupplier,
+      superAdmin,
+    });
+    const supplierFeeAmount = unitPrice > 0
+      ? calculateFeeFromRule(unitPrice, supplierSaleRule, { capAtAmount: true })
+      : 0;
 
     // 2.5 If this is a Free Gift catalog service, enforce targeting, expiration period, and merchant max uses per client
     const giftStatus = evaluateClientGiftServiceStatus({
@@ -2972,19 +3014,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 3. Balance verification for non-gift wallet purchases (free gifts are allowed even if wallet < app fee; fee is deferred silently)
+    // Determine whether fulfillment completes immediately (voucher_code) or waits for supplier fulfillment (player_id / account_login)
+    const initialStatus: Order['status'] = deliveryMethod === 'player_id'
+      ? 'pending_supplier'
+      : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
+    const isCompletedImmediately = initialStatus === 'completed';
+
+    // 3. Balance verification for non-gift wallet purchases (includes pending unsettled order fees so client cannot overcommit)
+    const pendingUnsettledFees = sumPendingUnsettledClientFees(orders, currentPos.id);
+    const availablePosBalance = parseFloat((currentPos.walletBalance - pendingUnsettledFees).toFixed(2));
     if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet') {
-      if (currentPos.walletBalance < totalDeduction) {
+      if (availablePosBalance < totalDeduction) {
         showToast({
           type: 'error',
           title: 'الرصيد غير كافٍ',
-          description: `الرصيد غير كافٍ! رصيد محفظتك (${formatCurrency(currentPos.walletBalance)}) لا يكفي لإتمام العملية (${formatCurrency(totalDeduction)}). يرجى إعادة شحن المحفظة.`
+          description: `الرصيد المتاح (${formatCurrency(Math.max(0, availablePosBalance))}) لا يكفي لإتمام العملية (${formatCurrency(totalDeduction)}). يرجى إعادة شحن المحفظة.`
         });
         return { success: false, error: 'insufficient_balance' };
       }
     }
 
-    const giftFeeResolution = pricing.isFreeGiftApplied
+    // Completion-only settlement:
+    // - If completed immediately (voucher_code): deduct client price + fee (or resolve gift fee) AND settle admin/supplier wallets now.
+    // - If pending_supplier (player_id / account_login): reserve ONLY unitPrice (heldFromClient) until supplier completes the charge;
+    //   NO fee deduction from client/supplier and NO deposit into SuperAdmin wallet until completeSupplierOrder().
+    const heldFromClientAtRequest = !pricing.isFreeGiftApplied && paymentMethod === 'wallet' ? unitPrice : 0;
+
+    const giftFeeResolution = isCompletedImmediately && pricing.isFreeGiftApplied
       ? resolveGiftClaimFeePayment({
           isFreeGiftApplied: true,
           walletBalance: currentPos.walletBalance,
@@ -2993,18 +3049,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
       : null;
 
-    const actualWalletDeduction = pricing.isFreeGiftApplied
-      ? giftFeeResolution!.walletDeductionNow
-      : (paymentMethod === 'wallet' ? totalDeduction : 0);
-    const adminFeeCollectedNow = pricing.isFreeGiftApplied
-      ? giftFeeResolution!.walletDeductionNow
-      : feeAmount;
-    const deferredFeeAdded = pricing.isFreeGiftApplied
+    const clientFeeCollectedNow = isCompletedImmediately
+      ? (pricing.isFreeGiftApplied
+          ? giftFeeResolution!.walletDeductionNow
+          : feeAmount)
+      : 0;
+
+    const actualWalletDeduction = isCompletedImmediately
+      ? (pricing.isFreeGiftApplied
+          ? giftFeeResolution!.walletDeductionNow
+          : (paymentMethod === 'wallet' ? totalDeduction : 0))
+      : heldFromClientAtRequest;
+
+    const deferredFeeAdded = isCompletedImmediately && pricing.isFreeGiftApplied
       ? giftFeeResolution!.deferredFeeAdded
       : 0;
-    const nextPendingGiftFees = pricing.isFreeGiftApplied
+    const nextPendingGiftFees = isCompletedImmediately && pricing.isFreeGiftApplied
       ? giftFeeResolution!.newPendingGiftFees
       : (currentPos.pendingGiftFees || 0);
+
+    const supplierFeeCollectedNow = isCompletedImmediately ? supplierFeeAmount : 0;
+    const adminTotalFeeCollectedNow = isCompletedImmediately
+      ? parseFloat((clientFeeCollectedNow + supplierFeeCollectedNow).toFixed(2))
+      : 0;
+    const supplierNetCreditNow = isCompletedImmediately
+      ? parseFloat(Math.max(0, unitPrice - supplierFeeCollectedNow).toFixed(2))
+      : 0;
 
     // 4. Handle stock & voucher code assignment/deduction atomically
     const stockDeduction = deductPackageStock({
@@ -3057,8 +3127,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const remainingCount = nextWh.codes.length;
       if (remainingCount <= threshold) {
         addNotification({
-          supplierId: supplier.id,
-          supplierName: supplier.name,
+          supplierId: activeOrderSupplier.id,
+          supplierName: activeOrderSupplier.name,
           targetRole: 'supplier',
           title: remainingCount === 0
             ? `نفد مخزون فئة ${nextWh.categoryName} (${nextWh.nameAr}) ⚠️`
@@ -3080,13 +3150,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const now = new Date();
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
 
-    // If delivery is Player ID, dispatch order with the ID to the "المتجر" (supplier) to complete via in-game charge
-    const initialStatus = deliveryMethod === 'player_id' 
-      ? 'pending_supplier' 
-      : (deliveryMethod === 'account_login' ? 'pending_supplier' : 'completed');
-
     const nextUsedGiftServiceIds =
-      pricing.isFreeGiftApplied && giftStatus.usedCount + 1 >= giftStatus.maxUses
+      isCompletedImmediately && pricing.isFreeGiftApplied && giftStatus.usedCount + 1 >= giftStatus.maxUses
         ? appendUsedGiftServiceId(currentPos.usedGiftServiceIds, liveService.id)
         : currentPos.usedGiftServiceIds;
 
@@ -3103,7 +3168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       posId: currentPos.id,
       posCode: currentPos.posCode,
       posName: currentPos.tradeName,
-      supplierId: supplier.id,
+      supplierId: activeOrderSupplier.id,
       serviceId: liveService.id,
       serviceName: liveService.nameAr,
       packageId: effectivePkg.id,
@@ -3120,12 +3185,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       costPrice: unitPrice,
       salePriceToCustomer: resalePrice || totalDeduction * 1.15,
       feeAmount,
-      totalDeducted: pricing.isFreeGiftApplied ? actualWalletDeduction : totalDeduction,
+      supplierFeeAmount: supplierFeeAmount > 0 ? supplierFeeAmount : undefined,
+      feeSettledToAdmin: isCompletedImmediately,
+      heldFromClientAtRequest: heldFromClientAtRequest > 0 ? heldFromClientAtRequest : undefined,
+      totalDeducted: actualWalletDeduction,
       isFreeGiftOrder: pricing.isFreeGiftApplied || undefined,
       deferredFeeAmount: deferredFeeAdded > 0 ? deferredFeeAdded : undefined,
       deferredFeeSettled: deferredFeeAdded > 0 ? false : undefined,
       paymentMethod,
       status: initialStatus,
+      completedAt: isCompletedImmediately ? formattedDate : undefined,
       customerName: customerName || 'عميل مباشر',
       customerPhone: customerPhone || '',
       supplierNotes: deliveryMethod === 'player_id' 
@@ -3134,7 +3203,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const nextPosWalletBalance = parseFloat((currentPos.walletBalance - actualWalletDeduction).toFixed(2));
-    const nextPosTotalSpent = parseFloat((currentPos.totalSpent + unitPrice).toFixed(2));
+    const nextPosTotalSpent = isCompletedImmediately
+      ? parseFloat((currentPos.totalSpent + unitPrice).toFixed(2))
+      : currentPos.totalSpent;
     const nextPosOrdersCount = currentPos.ordersCount + 1;
 
     // Update client balances, pending gift fees, and completed gift visibility
@@ -3150,22 +3221,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }));
 
-    // Add collected fee to Super Admin's wallet (deferred fees are added upon wallet recharge)
-    if (adminFeeCollectedNow > 0) {
+    // Add collected fee to Super Admin's wallet ONLY when order completes immediately
+    if (adminTotalFeeCollectedNow > 0) {
       setSuperAdmin(prev => ({
         ...prev,
-        walletBalance: parseFloat((prev.walletBalance + adminFeeCollectedNow).toFixed(2))
+        walletBalance: parseFloat((prev.walletBalance + adminTotalFeeCollectedNow).toFixed(2))
       }));
     }
 
-    // Update Supplier revenue/balance
-    setSuppliers(prev => prev.map(s => {
-      if (s.id !== supplier.id) return s;
-      return {
-        ...s,
-        walletBalance: parseFloat((s.walletBalance + unitPrice).toFixed(2))
-      };
-    }));
+    // Update Supplier revenue/balance ONLY when order completes immediately
+    if (supplierNetCreditNow > 0) {
+      setSuppliers(prev => prev.map(s => {
+        if (s.id !== activeOrderSupplier.id) return s;
+        return {
+          ...s,
+          walletBalance: parseFloat((s.walletBalance + supplierNetCreditNow).toFixed(2))
+        };
+      }));
+    }
 
     // Add to Orders
     setOrders(prev => [newOrder, ...prev]);
@@ -3173,7 +3246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Record Accounting Entries for POS client
     const newAccountingEntries: AccountingEntry[] = [];
     const balanceAfterPurchase = !pricing.isFreeGiftApplied && paymentMethod === 'wallet'
-      ? parseFloat((currentPos.walletBalance - unitPrice).toFixed(2))
+      ? parseFloat((currentPos.walletBalance - heldFromClientAtRequest).toFixed(2))
       : currentPos.walletBalance;
 
     const purchaseTag = pricing.isFreeGiftApplied
@@ -3188,97 +3261,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'purchase',
       referenceId: orderId,
       posId: currentPos.id,
-      supplierId: supplier.id,
-      description: (deliveryMethod === 'player_id'
-        ? `طلب شحن عبر الأيدي (${deliveryDetails.playerId}): ${service.nameAr} - ${pkg.name} (${currentPos.tier}) - أُرسل للمتجر للشحن من اللعبة`
-        : `شراء خدمة: ${service.nameAr} - ${pkg.name} (${currentPos.tier}) من المتجر ${supplier.name}`) + purchaseTag,
-      debit: unitPrice,
+      supplierId: activeOrderSupplier.id,
+      description: (!isCompletedImmediately
+        ? `حجز قيمة طلب (${deliveryMethod === 'player_id' ? `شحن أيدي: ${deliveryDetails.playerId}` : 'شحن حساب'}): ${service.nameAr} - ${pkg.name} (${currentPos.tier}) لحين اكتمال التنفيذ`
+        : `شراء خدمة: ${service.nameAr} - ${pkg.name} (${currentPos.tier}) من المتجر ${activeOrderSupplier.name}`) + purchaseTag,
+      debit: heldFromClientAtRequest,
       credit: 0,
       balanceAfter: balanceAfterPurchase,
       serviceName: service.nameAr,
       customerName: customerName || 'عميل مباشر'
     });
 
-    if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet' && feeAmount > 0) {
-      const balanceAfterFee = parseFloat((balanceAfterPurchase - feeAmount).toFixed(2));
-      newAccountingEntries.push({
-        id: `acc-${Date.now()}-2`,
-        date: formattedDate,
-        type: 'fee',
-        referenceId: orderId,
-        posId: currentPos.id,
-        supplierId: supplier.id,
-        description: pricing.isZeroPriceFloorApplied
-          ? `رسوم الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س)`
-          : `رسوم منصة تطبيق على عملية الشراء (${feeAmount.toFixed(2)} ر.س)`,
-        debit: feeAmount,
-        credit: 0,
-        balanceAfter: balanceAfterFee
-      });
-    } else if (pricing.isFreeGiftApplied && actualWalletDeduction > 0) {
-      const balanceAfterFee = parseFloat((balanceAfterPurchase - actualWalletDeduction).toFixed(2));
-      newAccountingEntries.push({
-        id: `acc-${Date.now()}-2`,
-        date: formattedDate,
-        type: 'fee',
-        referenceId: orderId,
-        posId: currentPos.id,
-        supplierId: supplier.id,
-        description: `رسوم تطبيق على عملية (${service.nameAr})`,
-        debit: actualWalletDeduction,
-        credit: 0,
-        balanceAfter: balanceAfterFee
-      });
-    }
+    if (isCompletedImmediately) {
+      if (!pricing.isFreeGiftApplied && paymentMethod === 'wallet' && feeAmount > 0) {
+        const balanceAfterFee = parseFloat((balanceAfterPurchase - feeAmount).toFixed(2));
+        newAccountingEntries.push({
+          id: `acc-${Date.now()}-2`,
+          date: formattedDate,
+          type: 'fee',
+          referenceId: orderId,
+          posId: currentPos.id,
+          supplierId: activeOrderSupplier.id,
+          description: pricing.isZeroPriceFloorApplied
+            ? `رسوم الحد الأدنى للعملية الصفرية (${feeAmount.toFixed(2)} ر.س)`
+            : `رسوم خدمة شراء خدمة (${feeAmount.toFixed(2)} ر.س)`,
+          debit: feeAmount,
+          credit: 0,
+          balanceAfter: balanceAfterFee
+        });
+      } else if (pricing.isFreeGiftApplied && clientFeeCollectedNow > 0) {
+        const balanceAfterFee = parseFloat((balanceAfterPurchase - clientFeeCollectedNow).toFixed(2));
+        newAccountingEntries.push({
+          id: `acc-${Date.now()}-2`,
+          date: formattedDate,
+          type: 'fee',
+          referenceId: orderId,
+          posId: currentPos.id,
+          supplierId: activeOrderSupplier.id,
+          description: `رسوم تطبيق على عملية (${service.nameAr})`,
+          debit: clientFeeCollectedNow,
+          credit: 0,
+          balanceAfter: balanceAfterFee
+        });
+      }
 
-    if (resalePrice && resalePrice > unitPrice) {
-      newAccountingEntries.push({
-        id: `acc-${Date.now()}-3`,
-        date: formattedDate,
-        type: 'sale',
-        referenceId: orderId,
-        posId: currentPos.id,
-        supplierId: supplier.id,
-        description: `بيع للزبون (${customerName || 'مباشر'}) بقيمة ${resalePrice.toFixed(2)} ر.س (هامش ربح: ${(resalePrice - unitPrice).toFixed(2)} ر.س)`,
-        debit: 0,
-        credit: resalePrice,
-        balanceAfter: nextPosWalletBalance,
-        serviceName: service.nameAr,
-        customerName: customerName || 'عميل مباشر'
-      });
+      if (resalePrice && resalePrice > unitPrice) {
+        newAccountingEntries.push({
+          id: `acc-${Date.now()}-3`,
+          date: formattedDate,
+          type: 'sale',
+          referenceId: orderId,
+          posId: currentPos.id,
+          supplierId: activeOrderSupplier.id,
+          description: `بيع للزبون (${customerName || 'مباشر'}) بقيمة ${resalePrice.toFixed(2)} ر.س (هامش ربح: ${(resalePrice - unitPrice).toFixed(2)} ر.س)`,
+          debit: 0,
+          credit: resalePrice,
+          balanceAfter: nextPosWalletBalance,
+          serviceName: service.nameAr,
+          customerName: customerName || 'عميل مباشر'
+        });
+      }
     }
 
     setAccountingEntries(prev => [...newAccountingEntries, ...prev]);
 
-    // Record entry in Admin Accounting Statement only when fee is actually collected now
-    let newAdminAccEntry: AdminAccountingEntry | null = null;
-    if (adminFeeCollectedNow > 0) {
-      const adminBalAfter = parseFloat((superAdmin.walletBalance + adminFeeCollectedNow).toFixed(2));
-      newAdminAccEntry = {
-        id: `adm-acc-${Date.now()}-fee`,
-        date: formattedDate,
-        type: 'fee_collected',
-        referenceId: orderId,
-        supplierId: supplier.id,
-        supplierName: `${supplier.name} (${supplier.storeName})`,
-        serviceId: service.id,
-        serviceName: service.nameAr,
-        posId: currentPos.id,
-        posCode: currentPos.posCode,
-        posName: currentPos.tradeName,
-        description: pricing.isFreeGiftApplied
-          ? `تحصيل رسوم هدية مجانية (${pricing.appFeePercentageApplied}% من ${pricing.originalTierPrice.toFixed(2)} ر.س = ${adminFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
-          : pricing.isZeroPriceFloorApplied
-          ? `تحصيل الحد الأدنى للعملية الصفرية (${adminFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
-          : `تحصيل رسوم منصة (${adminFeeCollectedNow.toFixed(2)} ر.س) على عملية شراء: ${service.nameAr} - ${pkg.name}`,
-        grossAmount: pricing.isFreeGiftApplied ? pricing.originalTierPrice : unitPrice,
-        feeAmount: adminFeeCollectedNow,
-        debit: 0,
-        credit: adminFeeCollectedNow,
-        balanceAfter: adminBalAfter,
-        notes: `تم الخصم من محفظة العميل (${currentPos.tradeName}) وتحويل الرسوم لمحفظة الإدارة`
-      };
-      setAdminAccountingEntries(prev => [newAdminAccEntry!, ...prev]);
+    // Record entry in Admin Accounting Statement ONLY when completed & fee collected now
+    const newAdminAccEntries: AdminAccountingEntry[] = [];
+    if (isCompletedImmediately && adminTotalFeeCollectedNow > 0) {
+      let runningAdminBal = superAdmin.walletBalance;
+      if (clientFeeCollectedNow > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + clientFeeCollectedNow).toFixed(2));
+        newAdminAccEntries.push({
+          id: `adm-acc-${Date.now()}-fee`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: orderId,
+          supplierId: activeOrderSupplier.id,
+          supplierName: `${activeOrderSupplier.name} (${activeOrderSupplier.storeName})`,
+          serviceId: service.id,
+          serviceName: service.nameAr,
+          posId: currentPos.id,
+          posCode: currentPos.posCode,
+          posName: currentPos.tradeName,
+          description: pricing.isFreeGiftApplied
+            ? `تحصيل رسوم هدية مجانية (${pricing.appFeePercentageApplied}% من ${pricing.originalTierPrice.toFixed(2)} ر.س = ${clientFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+            : pricing.isZeroPriceFloorApplied
+            ? `تحصيل الحد الأدنى للعملية الصفرية (${clientFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`
+            : `تحصيل رسوم خدمة شراء خدمة من العميل (${clientFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`,
+          grossAmount: pricing.isFreeGiftApplied ? pricing.originalTierPrice : unitPrice,
+          feeAmount: clientFeeCollectedNow,
+          debit: 0,
+          credit: clientFeeCollectedNow,
+          balanceAfter: runningAdminBal,
+          notes: `تم الخصم من محفظة العميل (${currentPos.tradeName}) بعد اكتمال الخدمة`
+        });
+      }
+      if (supplierFeeCollectedNow > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + supplierFeeCollectedNow).toFixed(2));
+        newAdminAccEntries.push({
+          id: `adm-acc-${Date.now()}-supfee`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: orderId,
+          supplierId: activeOrderSupplier.id,
+          supplierName: `${activeOrderSupplier.name} (${activeOrderSupplier.storeName})`,
+          serviceId: service.id,
+          serviceName: service.nameAr,
+          posId: currentPos.id,
+          posCode: currentPos.posCode,
+          posName: currentPos.tradeName,
+          description: `تحصيل رسوم خدمة بيع للعميل على المورد (${supplierFeeCollectedNow.toFixed(2)} ر.س): ${service.nameAr} - ${pkg.name}`,
+          grossAmount: unitPrice,
+          feeAmount: supplierFeeCollectedNow,
+          debit: 0,
+          credit: supplierFeeCollectedNow,
+          balanceAfter: runningAdminBal,
+          notes: `تم الخصم من استحقاق المورد (${activeOrderSupplier.storeName}) بعد اكتمال الخدمة`
+        });
+      }
+      setAdminAccountingEntries(prev => [...newAdminAccEntries, ...prev]);
     }
 
     // Persist to Firebase Firestore
@@ -3291,17 +3392,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pendingGiftFees: nextPendingGiftFees,
       usedGiftServiceIds: nextUsedGiftServiceIds,
     }).catch(console.error);
-    firestoreSync.saveSupplier({
-      ...supplier,
-      walletBalance: parseFloat((supplier.walletBalance + unitPrice).toFixed(2))
-    }).catch(console.error);
-    if (adminFeeCollectedNow > 0) {
+    if (supplierNetCreditNow > 0) {
+      firestoreSync.saveSupplier({
+        ...activeOrderSupplier,
+        walletBalance: parseFloat((activeOrderSupplier.walletBalance + supplierNetCreditNow).toFixed(2))
+      }).catch(console.error);
+    }
+    if (adminTotalFeeCollectedNow > 0) {
       firestoreSync.saveSuperAdmin({
         ...superAdmin,
-        walletBalance: parseFloat((superAdmin.walletBalance + adminFeeCollectedNow).toFixed(2))
+        walletBalance: parseFloat((superAdmin.walletBalance + adminTotalFeeCollectedNow).toFixed(2))
       }).catch(console.error);
-      if (newAdminAccEntry) {
-        firestoreSync.saveAdminAccountingEntry(newAdminAccEntry).catch(console.error);
+      for (const admEnt of newAdminAccEntries) {
+        firestoreSync.saveAdminAccountingEntry(admEnt).catch(console.error);
       }
     }
     for (const ent of newAccountingEntries) {
@@ -3314,8 +3417,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const supOrderCurrency = normalizeCurrencyCode(activeOrderSupplier?.preferredCurrency);
     const supOrderAmountText = formatCurrencyAmount(unitPrice, supOrderCurrency, activeExchangeRate);
     addNotification({
-      supplierId: supplier.id,
-      supplierName: supplier.name,
+      supplierId: activeOrderSupplier.id,
+      supplierName: activeOrderSupplier.name,
       posId: currentPos.id,
       posName: currentPos.tradeName,
       posCode: currentPos.posCode,
@@ -3343,11 +3446,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : 'catalogs'
     });
 
-    if (deliveryMethod === 'player_id') {
+    if (!isCompletedImmediately) {
       showToast({
         type: 'info',
-        title: 'تم إرسال الطلب مع الأيدي إلى المتجر',
-        description: `تم إرسال الأيدي (${deliveryDetails.playerId}) للمتجر بنجاح ليكمل الشحن من داخل اللعبة. سيتم إشعارك فور اكتمال الشحن.`
+        title: deliveryMethod === 'player_id' ? 'تم إرسال الطلب مع الأيدي إلى المتجر' : 'تم إرسال طلب شحن الحساب إلى المتجر',
+        description: deliveryMethod === 'player_id'
+          ? `تم إرسال الأيدي (${deliveryDetails.playerId}) للمتجر للشحن من داخل اللعبة. لا تُخصم رسوم التطبيق حتى اكتمال الشحن.`
+          : `تم إرسال بيانات الحساب للمتجر للتنفيذ. لا تُخصم رسوم التطبيق حتى اكتمال الشحن.`
       });
     } else if (pricing.isFreeGiftApplied) {
       showToast({
@@ -3396,7 +3501,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'self_transfer' };
     }
 
-    const feeAmount = calculateFee(amount, supplier);
+    const feeAmount = calculateFee(amount, currentPosSupplier || supplier);
     const totalDeducted = amount + feeAmount;
 
     if (currentPos.walletBalance < totalDeducted) {
@@ -4245,6 +4350,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Approve deposit request by supplier (handles cash deposits and loan approvals)
+  // Fees (depositRequest / loanRequest) are deducted from client recharge and deposited to SuperAdmin ONLY upon completion (approval)
   const approveDepositRequest = (depositId: string) => {
     const dep = depositRequests.find(d => d.id === depositId);
     if (!dep || dep.status !== 'pending') return;
@@ -4254,23 +4360,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLoan ? effectiveEmployeePerms.canReviewLoanDeposits : effectiveEmployeePerms.canReviewCashDeposits,
       isLoan ? 'ليس لديك صلاحية اعتماد طلبات السُّلَف.' : 'ليس لديك صلاحية اعتماد طلبات الحوالات والإيداعات.'
     )) return;
+
+    const depSupplier = suppliers.find(s => s.id === dep.supplierId) || supplier;
+    const feeRule = resolveSpecificServiceFeeRule({
+      section: 'client',
+      serviceKey: isLoan ? 'loanRequest' : 'depositRequest',
+      supplier: depSupplier,
+      superAdmin,
+    });
+    const serviceFeeAmount = calculateFeeFromRule(dep.amount, feeRule, { capAtAmount: true });
+    const netRechargeToClient = parseFloat(Math.max(0, dep.amount - serviceFeeAmount).toFixed(2));
+
     const approvedNotes = isLoan
       ? 'تمت الموافقة على طلب السلفة وقيد الرصيد الآجل في المحفظة'
       : 'تمت الموافقة ومطابقة الحوالة البنكية بنجاح';
 
-    const updatedDep: DepositRequest = { ...dep, status: 'approved', notes: approvedNotes };
+    const updatedDep: DepositRequest = {
+      ...dep,
+      status: 'approved',
+      notes: approvedNotes,
+      feeAmount: serviceFeeAmount > 0 ? serviceFeeAmount : undefined,
+      feeTargetRole: serviceFeeAmount > 0 ? 'client' : undefined,
+      feeSettledToAdmin: true,
+    };
     setDepositRequests(prev => prev.map(d => d.id === depositId ? updatedDep : d));
 
     const targetPos = posClients.find(p => p.id === dep.posId);
     const depositSettlement = targetPos
       ? settlePendingGiftFeesOnRecharge({
           currentWalletBalance: targetPos.walletBalance,
-          rechargeAmount: dep.amount,
+          rechargeAmount: netRechargeToClient,
           pendingGiftFees: targetPos.pendingGiftFees,
         })
       : {
           settledFeeAmount: 0,
-          finalWalletBalance: dep.amount,
+          finalWalletBalance: netRechargeToClient,
           remainingPendingGiftFees: 0,
         };
     const newBal = depositSettlement.finalWalletBalance;
@@ -4295,45 +4419,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const now = new Date();
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
+    const clientBalBeforeFee = parseFloat(((targetPos?.walletBalance ?? 0) + dep.amount).toFixed(2));
+    const clientBalAfterServiceFee = parseFloat(((targetPos?.walletBalance ?? 0) + netRechargeToClient).toFixed(2));
 
-    const depAccEntry: AccountingEntry = {
-      id: `acc-${Date.now()}-dep`,
-      date: formattedDate,
-      type: 'deposit',
-      referenceId: dep.id,
-      posId: dep.posId,
-      supplierId: supplier.id,
-      description: isLoan
-        ? `إيداع سلفة رصيد آجل معتمدة من المتجر (${supplier.name}) ${dep.loanReason ? `[سبب السلفة: ${dep.loanReason}]` : ''}`
-        : `إيداع رصيد مسبق في المحفظة عبر حوالة بنكية (${dep.bankName} - رقم الحوالة: ${dep.transferNumber})`,
-      debit: 0,
-      credit: dep.amount,
-      balanceAfter: newBal
-    };
-    setAccountingEntries(prev => [depAccEntry, ...prev]);
-    firestoreSync.saveAccountingEntry(depAccEntry).catch(console.error);
+    const clientAccEntries: AccountingEntry[] = [
+      {
+        id: `acc-${Date.now()}-dep`,
+        date: formattedDate,
+        type: 'deposit',
+        referenceId: dep.id,
+        posId: dep.posId,
+        supplierId: depSupplier.id,
+        description: isLoan
+          ? `إيداع سلفة رصيد آجل معتمدة من المتجر (${depSupplier.name}) ${dep.loanReason ? `[سبب السلفة: ${dep.loanReason}]` : ''}`
+          : `إيداع رصيد مسبق في المحفظة عبر حوالة بنكية (${dep.bankName} - رقم الحوالة: ${dep.transferNumber})`,
+        debit: 0,
+        credit: dep.amount,
+        balanceAfter: clientBalBeforeFee
+      }
+    ];
+    if (serviceFeeAmount > 0) {
+      clientAccEntries.push({
+        id: `acc-${Date.now()}-dep-fee`,
+        date: formattedDate,
+        type: 'fee',
+        referenceId: dep.id,
+        posId: dep.posId,
+        supplierId: depSupplier.id,
+        description: isLoan
+          ? `رسوم منصة على طلب السلفة (${serviceFeeAmount.toFixed(2)} ر.س)`
+          : `رسوم منصة على طلب شحن الرصيد (${serviceFeeAmount.toFixed(2)} ر.س)`,
+        debit: serviceFeeAmount,
+        credit: 0,
+        balanceAfter: clientBalAfterServiceFee
+      });
+    }
+    setAccountingEntries(prev => [...clientAccEntries, ...prev]);
+    for (const ent of clientAccEntries) {
+      firestoreSync.saveAccountingEntry(ent).catch(console.error);
+    }
 
     let nextAdminBalAfter = superAdmin.walletBalance;
+    const totalFeeToAdmin = parseFloat((serviceFeeAmount + depositSettlement.settledFeeAmount).toFixed(2));
     const nextAdminEntries: AdminAccountingEntry[] = [];
 
-    if (depositSettlement.settledFeeAmount > 0) {
-      nextAdminBalAfter = parseFloat((superAdmin.walletBalance + depositSettlement.settledFeeAmount).toFixed(2));
-      setSuperAdmin(prev => ({
-        ...prev,
-        walletBalance: nextAdminBalAfter,
-      }));
-      firestoreSync.saveSuperAdmin({
-        ...superAdmin,
-        walletBalance: nextAdminBalAfter,
-      }).catch(console.error);
+    if (serviceFeeAmount > 0) {
+      nextAdminBalAfter = parseFloat((nextAdminBalAfter + serviceFeeAmount).toFixed(2));
+      const serviceFeeAdminEntry: AdminAccountingEntry = {
+        id: `adm-acc-${Date.now()}-dep-fee`,
+        date: formattedDate,
+        type: 'fee_collected',
+        referenceId: dep.id,
+        supplierId: depSupplier.id,
+        supplierName: `${depSupplier.name} (${depSupplier.storeName})`,
+        posId: dep.posId,
+        posCode: dep.posCode,
+        posName: dep.posName,
+        description: isLoan
+          ? `تحصيل رسوم خدمة طلب سلفة من العميل (${serviceFeeAmount.toFixed(2)} ر.س): ${dep.posName}`
+          : `تحصيل رسوم خدمة طلب شحن رصيد من العميل (${serviceFeeAmount.toFixed(2)} ر.س): ${dep.posName}`,
+        grossAmount: dep.amount,
+        feeAmount: serviceFeeAmount,
+        debit: 0,
+        credit: serviceFeeAmount,
+        balanceAfter: nextAdminBalAfter,
+        notes: `تم الخصم عند اعتماد الطلب واكتمال الشحن للعميل (${dep.posName})`
+      };
+      nextAdminEntries.push(serviceFeeAdminEntry);
+      firestoreSync.saveAdminAccountingEntry(serviceFeeAdminEntry).catch(console.error);
+    }
 
+    if (depositSettlement.settledFeeAmount > 0) {
+      nextAdminBalAfter = parseFloat((nextAdminBalAfter + depositSettlement.settledFeeAmount).toFixed(2));
       const settledFeeAdminEntry: AdminAccountingEntry = {
         id: `adm-acc-${Date.now()}-gift-dep`,
         date: formattedDate,
         type: 'fee_collected',
         referenceId: dep.id,
-        supplierId: dep.supplierId,
-        supplierName: `${supplier.name} (${supplier.storeName})`,
+        supplierId: depSupplier.id,
+        supplierName: `${depSupplier.name} (${depSupplier.storeName})`,
         posId: dep.posId,
         posCode: dep.posCode,
         posName: dep.posName,
@@ -4349,14 +4513,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firestoreSync.saveAdminAccountingEntry(settledFeeAdminEntry).catch(console.error);
     }
 
+    if (totalFeeToAdmin > 0) {
+      setSuperAdmin(prev => ({
+        ...prev,
+        walletBalance: parseFloat((prev.walletBalance + totalFeeToAdmin).toFixed(2)),
+      }));
+      firestoreSync.saveSuperAdmin({
+        ...superAdmin,
+        walletBalance: parseFloat((superAdmin.walletBalance + totalFeeToAdmin).toFixed(2)),
+      }).catch(console.error);
+    }
+
     // Record in Admin accounting log
     nextAdminEntries.unshift({
       id: `adm-acc-${Date.now()}-dep`,
       date: formattedDate,
       type: 'deposit_received',
       referenceId: dep.id,
-      supplierId: dep.supplierId,
-      supplierName: `${supplier.name} (${supplier.storeName})`,
+      supplierId: depSupplier.id,
+      supplierName: `${depSupplier.name} (${depSupplier.storeName})`,
       posId: dep.posId,
       posCode: dep.posCode,
       posName: dep.posName,
@@ -4368,27 +4543,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       debit: 0,
       credit: 0,
       balanceAfter: nextAdminBalAfter,
-      notes: `معتمد من المتجر ${supplier.name} لنقطة البيع ${dep.posName}`
+      notes: `معتمد من المتجر ${depSupplier.name} لنقطة البيع ${dep.posName}`
     });
     setAdminAccountingEntries(prev => [...nextAdminEntries, ...prev]);
 
     triggerConfetti();
     const depClientCurrency = normalizeCurrencyCode(targetPos?.preferredCurrency);
-    const depClientAmtText = formatCurrencyAmount(dep.amount, depClientCurrency, activeExchangeRate);
+    const depClientAmtText = formatCurrencyAmount(netRechargeToClient, depClientCurrency, activeExchangeRate);
     addNotification({
       posId: dep.posId,
-      supplierId: dep.supplierId,
-      supplierName: supplier.name,
+      supplierId: depSupplier.id,
+      supplierName: depSupplier.name,
       title: isLoan ? 'تمت الموافقة على طلب السلفة' : 'تم شحن المحفظة بنجاح',
       message: isLoan
-        ? `وافق المتجر ${supplier.name} على طلب السلفة بقيمة ${depClientAmtText} وقيدها في محفظتك.`
-        : `تم اعتماد إيداع ${depClientAmtText} في محفظتك من المتجر ${supplier.name}.`,
+        ? `وافق المتجر ${depSupplier.name} على طلب السلفة وقيد ${depClientAmtText} في محفظتك.`
+        : `تم اعتماد إيداع ${depClientAmtText} في محفظتك من المتجر ${depSupplier.name}.`,
       type: 'deposit'
     });
     showToast({
       type: 'success',
       title: isLoan ? 'تم اعتماد السلفة وقيد الرصيد بنجاح' : 'تم اعتماد طلب الإيداع وحفظه في القواعد الثلاث',
-      description: isLoan
+      description: serviceFeeAmount > 0
+        ? `تم قيد ${formatCurrency(netRechargeToClient)} لمحفظة ${dep.posName} وتحصيل رسوم التطبيق (${formatCurrency(serviceFeeAmount)}).`
+        : isLoan
         ? `تم إضافة رصيد سلفة بقيمة ${formatCurrency(dep.amount)} لمحفظة ${dep.posName} وتسجيلها في القيود المالية وقواعد البيانات.`
         : `تم شحن رصيد ${formatCurrency(dep.amount)} لمحفظة ${dep.posName} وتوثيقه في كافة القواعد المرتبطة.`
     });
@@ -4417,6 +4594,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'يرجى إدخال مبلغ صحيح أكبر من الصفر.' };
     }
 
+    // Supplier fee rule (Section 1: Supplier Services -> supportGrant / loanGrant)
+    const supplierGrantRule = resolveSpecificServiceFeeRule({
+      section: 'supplier',
+      serviceKey: isLoan ? 'loanGrant' : 'supportGrant',
+      supplier,
+      superAdmin,
+    });
+    const supplierFeeAmount = calculateFeeFromRule(params.amount, supplierGrantRule);
+
     const reasonText = params.reason.trim() || (isLoan ? 'منح سلفة / رصيد آجل مباشر من المتجر' : 'منح رصيد مجاني / دعم من المتجر');
     const now = new Date();
     const formattedDate = now.toISOString().replace('T', ' ').substring(0, 16);
@@ -4436,7 +4622,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'approved',
       requestType: params.supportType,
       loanReason: reasonText,
-      notes: isLoan ? `منح سلفة معتمدة مباشرة: ${reasonText}` : `منح رصيد مجاني مدعوم: ${reasonText}`
+      notes: isLoan ? `منح سلفة معتمدة مباشرة: ${reasonText}` : `منح رصيد مجاني مدعوم: ${reasonText}`,
+      feeAmount: supplierFeeAmount > 0 ? supplierFeeAmount : undefined,
+      feeTargetRole: supplierFeeAmount > 0 ? 'supplier' : undefined,
+      feeSettledToAdmin: true,
     };
 
     setDepositRequests(prev => [newDep, ...prev]);
@@ -4463,6 +4652,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       walletBalance: newBal,
       pendingGiftFees: depositSettlement.remainingPendingGiftFees,
     }).catch(console.error);
+
+    // Deduct supplier service fee from supplier wallet when completed
+    if (supplierFeeAmount > 0) {
+      const nextSupplierBal = parseFloat((supplier.walletBalance - supplierFeeAmount).toFixed(2));
+      setSuppliers(prev => prev.map(s => (s.id === supplier.id ? { ...s, walletBalance: nextSupplierBal } : s)));
+      firestoreSync.saveSupplier({
+        ...supplier,
+        walletBalance: nextSupplierBal,
+      }).catch(console.error);
+    }
+
+    // Credit supplier service fee + settled client gift fees to SuperAdmin wallet & log entries
+    const totalFeeToAdmin = parseFloat((supplierFeeAmount + depositSettlement.settledFeeAmount).toFixed(2));
+    if (totalFeeToAdmin > 0) {
+      let runningAdminBal = superAdmin.walletBalance;
+      const grantAdminEntries: AdminAccountingEntry[] = [];
+
+      if (supplierFeeAmount > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + supplierFeeAmount).toFixed(2));
+        const supGrantFeeEntry: AdminAccountingEntry = {
+          id: `adm-acc-${Date.now()}-grt-sup`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: grantId,
+          supplierId: supplier.id,
+          supplierName: `${supplier.name} (${supplier.storeName})`,
+          posId: client.id,
+          posCode: client.posCode,
+          posName: client.tradeName,
+          description: isLoan
+            ? `تحصيل رسوم خدمة شحن سلفة للعميل على المورد (${supplierFeeAmount.toFixed(2)} ر.س) للعميل ${client.tradeName}`
+            : `تحصيل رسوم خدمة دعم الرصيد للعميل على المورد (${supplierFeeAmount.toFixed(2)} ر.س) للعميل ${client.tradeName}`,
+          grossAmount: params.amount,
+          feeAmount: supplierFeeAmount,
+          debit: 0,
+          credit: supplierFeeAmount,
+          balanceAfter: runningAdminBal,
+          notes: `مكتمل ومنفذ من المتجر (${supplier.storeName})`
+        };
+        grantAdminEntries.push(supGrantFeeEntry);
+        firestoreSync.saveAdminAccountingEntry(supGrantFeeEntry).catch(console.error);
+      }
+
+      if (depositSettlement.settledFeeAmount > 0) {
+        runningAdminBal = parseFloat((runningAdminBal + depositSettlement.settledFeeAmount).toFixed(2));
+        const giftSettledEntry: AdminAccountingEntry = {
+          id: `adm-acc-${Date.now()}-grt-gift`,
+          date: formattedDate,
+          type: 'fee_collected',
+          referenceId: grantId,
+          supplierId: supplier.id,
+          supplierName: `${supplier.name} (${supplier.storeName})`,
+          posId: client.id,
+          posCode: client.posCode,
+          posName: client.tradeName,
+          description: `تحصيل رسوم تطبيق مؤجلة (${depositSettlement.settledFeeAmount.toFixed(2)} ر.س) بعد دعم محفظة ${client.tradeName}`,
+          grossAmount: depositSettlement.settledFeeAmount,
+          feeAmount: depositSettlement.settledFeeAmount,
+          debit: 0,
+          credit: depositSettlement.settledFeeAmount,
+          balanceAfter: runningAdminBal,
+          notes: `خصم تلقائي عند إضافة الرصيد لمحفظة العميل`
+        };
+        grantAdminEntries.push(giftSettledEntry);
+        firestoreSync.saveAdminAccountingEntry(giftSettledEntry).catch(console.error);
+      }
+
+      setAdminAccountingEntries(prev => [...grantAdminEntries, ...prev]);
+      setSuperAdmin(prev => ({
+        ...prev,
+        walletBalance: parseFloat((prev.walletBalance + totalFeeToAdmin).toFixed(2)),
+      }));
+      firestoreSync.saveSuperAdmin({
+        ...superAdmin,
+        walletBalance: parseFloat((superAdmin.walletBalance + totalFeeToAdmin).toFixed(2)),
+      }).catch(console.error);
+    }
 
     const accEntry: AccountingEntry = {
       id: `acc-${Date.now()}-grant`,
@@ -4497,7 +4763,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: isLoan ? 'تم منح السلفة وقيد الرصيد بنجاح' : 'تم منح الرصيد المجاني بنجاح',
-      description: `تم إضافة مبلغ ${formatCurrency(params.amount)} لمحفظة العميل (${client.tradeName}) بنجاح.`
+      description: supplierFeeAmount > 0
+        ? `تم إضافة مبلغ ${formatCurrency(params.amount)} لمحفظة العميل (${client.tradeName}) واحتساب رسوم الخدمة (${formatCurrency(supplierFeeAmount)}).`
+        : `تم إضافة مبلغ ${formatCurrency(params.amount)} لمحفظة العميل (${client.tradeName}) بنجاح.`
     });
 
     return { success: true };
@@ -5159,10 +5427,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Supplier / المتجر completing an order that needed manual fulfillment via Game ID
+  // Supplier / المتجر completing an order that needed manual fulfillment via Game ID or Account Login
+  // Fees & Supplier/Admin settlement occur ONLY here after fulfillment completes.
   const completeSupplierOrder = (orderId: string, notes?: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
-    if (!targetOrder) return;
+    if (!targetOrder || targetOrder.status === 'completed' || targetOrder.status === 'failed') return;
     if (!assertEmployeePermission(
       isOrderVisibleToEmployee(targetOrder, effectiveEmployeePerms, role),
       'ليس لديك صلاحية تنفيذ هذا النوع من الطلبات.'
@@ -5172,11 +5441,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? `تم الشحن بنجاح من داخل اللعبة باستخدام الأيدي (${targetOrder?.deliveryDetails.playerId || ''})`
       : 'تم إتمام الشحن وتفعيل الخدمة بنجاح من المتجر';
 
+    const nowFormatted = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const orderService = services.find(s => s.id === targetOrder.serviceId);
+    const orderCatalog = orderService ? catalogs.find(c => c.id === orderService.catalogId) : undefined;
+    const isGiftOrder = Boolean(targetOrder.isFreeGiftOrder || isCatalogFreeGifts(orderCatalog));
+    const targetPos = posClients.find(p => p.id === targetOrder.posId);
+    const orderSupplier = suppliers.find(s => s.id === targetOrder.supplierId) || supplier;
+
+    let clientFeeCollectedNow = 0;
+    let deferredAdded = 0;
+    let nextPosWalletBalance = targetPos?.walletBalance ?? 0;
+    let nextPendingGiftFees = targetPos?.pendingGiftFees ?? 0;
+    let supplierFeeCollectedNow = 0;
+    let supplierNetCredit = 0;
+    const needsAdminSettlement = targetOrder.feeSettledToAdmin === false;
+
+    if (needsAdminSettlement) {
+      if (isGiftOrder) {
+        const giftFeeRes = resolveGiftClaimFeePayment({
+          isFreeGiftApplied: true,
+          walletBalance: targetPos?.walletBalance ?? 0,
+          feeAmount: targetOrder.feeAmount || 0,
+          existingPendingFees: targetPos?.pendingGiftFees ?? 0,
+        });
+        clientFeeCollectedNow = giftFeeRes.walletDeductionNow;
+        deferredAdded = giftFeeRes.deferredFeeAdded;
+        nextPosWalletBalance = giftFeeRes.newWalletBalance;
+        nextPendingGiftFees = giftFeeRes.newPendingGiftFees;
+      } else if (targetOrder.paymentMethod === 'wallet') {
+        const plannedFee = Math.max(0, targetOrder.feeAmount || 0);
+        clientFeeCollectedNow = targetPos
+          ? parseFloat(Math.min(Math.max(0, targetPos.walletBalance), plannedFee).toFixed(2))
+          : plannedFee;
+        nextPosWalletBalance = targetPos
+          ? parseFloat((targetPos.walletBalance - clientFeeCollectedNow).toFixed(2))
+          : 0;
+      } else {
+        clientFeeCollectedNow = Math.max(0, targetOrder.feeAmount || 0);
+      }
+
+      const supplierSaleRule = resolveSpecificServiceFeeRule({
+        section: 'supplier',
+        serviceKey: 'saleToClient',
+        supplier: orderSupplier,
+        superAdmin,
+      });
+      const resolvedSupFee = typeof targetOrder.supplierFeeAmount === 'number'
+        ? targetOrder.supplierFeeAmount
+        : (targetOrder.costPrice > 0 ? calculateFeeFromRule(targetOrder.costPrice, supplierSaleRule, { capAtAmount: true }) : 0);
+      supplierFeeCollectedNow = Math.max(0, resolvedSupFee);
+      supplierNetCredit = parseFloat(Math.max(0, (targetOrder.costPrice || 0) - supplierFeeCollectedNow).toFixed(2));
+    }
+
+    const updatedTotalDeducted = needsAdminSettlement
+      ? parseFloat(((targetOrder.heldFromClientAtRequest ?? (isGiftOrder ? 0 : targetOrder.costPrice)) + clientFeeCollectedNow).toFixed(2))
+      : targetOrder.totalDeducted;
+
     const updatedOrder: Order = {
       ...targetOrder,
       status: 'completed',
       supplierNotes: notes || defaultNote,
-      completedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      completedAt: nowFormatted,
+      feeSettledToAdmin: true,
+      supplierFeeAmount: supplierFeeCollectedNow > 0 ? supplierFeeCollectedNow : targetOrder.supplierFeeAmount,
+      totalDeducted: updatedTotalDeducted,
+      deferredFeeAmount: deferredAdded > 0 ? deferredAdded : targetOrder.deferredFeeAmount,
+      deferredFeeSettled: deferredAdded > 0 ? false : targetOrder.deferredFeeSettled,
       deliveryDetails: {
         ...targetOrder.deliveryDetails,
         inGameChargeStatus: 'completed_in_game'
@@ -5186,26 +5516,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setOrders(prev => prev.map(o => o.id === orderId ? updatedOrder : o));
     firestoreSync.saveOrder(updatedOrder).catch(console.error);
 
-    // If this completed order is a Free Gift, mark it as used so it hides from the client's store view
-    const orderService = services.find(s => s.id === targetOrder.serviceId);
-    const orderCatalog = orderService ? catalogs.find(c => c.id === orderService.catalogId) : undefined;
-    if (targetOrder.isFreeGiftOrder || isCatalogFreeGifts(orderCatalog)) {
-      setPosClients(prev => prev.map(p => {
-        if (p.id !== targetOrder.posId) return p;
-        const updatedPos: POSClient = {
-          ...p,
-          usedGiftServiceIds: appendUsedGiftServiceId(p.usedGiftServiceIds, targetOrder.serviceId),
+    if (targetPos) {
+      const nextUsedGifts = isGiftOrder
+        ? appendUsedGiftServiceId(targetPos.usedGiftServiceIds, targetOrder.serviceId)
+        : targetPos.usedGiftServiceIds;
+      const nextTotalSpent = needsAdminSettlement
+        ? parseFloat((targetPos.totalSpent + (targetOrder.costPrice || 0)).toFixed(2))
+        : targetPos.totalSpent;
+
+      const updatedPos: POSClient = {
+        ...targetPos,
+        walletBalance: needsAdminSettlement ? nextPosWalletBalance : targetPos.walletBalance,
+        pendingGiftFees: needsAdminSettlement ? nextPendingGiftFees : targetPos.pendingGiftFees,
+        totalSpent: nextTotalSpent,
+        usedGiftServiceIds: nextUsedGifts,
+      };
+      setPosClients(prev => prev.map(p => (p.id === targetPos.id ? updatedPos : p)));
+      firestoreSync.savePosClient(updatedPos).catch(console.error);
+    }
+
+    if (needsAdminSettlement) {
+      if (supplierNetCredit > 0) {
+        const nextSupBalance = parseFloat((orderSupplier.walletBalance + supplierNetCredit).toFixed(2));
+        setSuppliers(prev => prev.map(s => (s.id === orderSupplier.id ? { ...s, walletBalance: nextSupBalance } : s)));
+        firestoreSync.saveSupplier({ ...orderSupplier, walletBalance: nextSupBalance }).catch(console.error);
+      }
+
+      const clientEntriesToAdd: AccountingEntry[] = [];
+      if (clientFeeCollectedNow > 0 && (targetOrder.paymentMethod === 'wallet' || isGiftOrder)) {
+        const feeEntry: AccountingEntry = {
+          id: `acc-${Date.now()}-cmp-fee`,
+          date: nowFormatted,
+          type: 'fee',
+          referenceId: targetOrder.id,
+          posId: targetOrder.posId,
+          supplierId: orderSupplier.id,
+          description: `رسوم منصة على إتمام الطلب #${targetOrder.id} (${targetOrder.serviceName})`,
+          debit: clientFeeCollectedNow,
+          credit: 0,
+          balanceAfter: nextPosWalletBalance,
+          serviceName: targetOrder.serviceName,
+          customerName: targetOrder.customerName || 'عميل مباشر',
         };
-        firestoreSync.savePosClient(updatedPos).catch(console.error);
-        return updatedPos;
-      }));
+        clientEntriesToAdd.push(feeEntry);
+      }
+      if (targetOrder.salePriceToCustomer && targetOrder.salePriceToCustomer > targetOrder.costPrice) {
+        clientEntriesToAdd.push({
+          id: `acc-${Date.now()}-cmp-sale`,
+          date: nowFormatted,
+          type: 'sale',
+          referenceId: targetOrder.id,
+          posId: targetOrder.posId,
+          supplierId: orderSupplier.id,
+          description: `بيع للزبون (${targetOrder.customerName || 'مباشر'}) بقيمة ${targetOrder.salePriceToCustomer.toFixed(2)} ر.س`,
+          debit: 0,
+          credit: targetOrder.salePriceToCustomer,
+          balanceAfter: nextPosWalletBalance,
+          serviceName: targetOrder.serviceName,
+          customerName: targetOrder.customerName || 'عميل مباشر',
+        });
+      }
+      if (clientEntriesToAdd.length > 0) {
+        setAccountingEntries(prev => [...clientEntriesToAdd, ...prev]);
+        for (const ce of clientEntriesToAdd) {
+          firestoreSync.saveAccountingEntry(ce).catch(console.error);
+        }
+      }
+
+      const totalAdminFeeNow = parseFloat((clientFeeCollectedNow + supplierFeeCollectedNow).toFixed(2));
+      if (totalAdminFeeNow > 0) {
+        let runningAdminBal = superAdmin.walletBalance;
+        const nextAdminEntries: AdminAccountingEntry[] = [];
+
+        if (clientFeeCollectedNow > 0) {
+          runningAdminBal = parseFloat((runningAdminBal + clientFeeCollectedNow).toFixed(2));
+          nextAdminEntries.push({
+            id: `adm-acc-${Date.now()}-cmp-cfee`,
+            date: nowFormatted,
+            type: 'fee_collected',
+            referenceId: targetOrder.id,
+            supplierId: orderSupplier.id,
+            supplierName: `${orderSupplier.name} (${orderSupplier.storeName})`,
+            serviceId: targetOrder.serviceId,
+            serviceName: targetOrder.serviceName,
+            posId: targetOrder.posId,
+            posCode: targetOrder.posCode,
+            posName: targetOrder.posName,
+            description: `تحصيل رسوم خدمة شراء خدمة من العميل (${clientFeeCollectedNow.toFixed(2)} ر.س) بعد اكتمال الشحن: ${targetOrder.serviceName}`,
+            grossAmount: targetOrder.costPrice,
+            feeAmount: clientFeeCollectedNow,
+            debit: 0,
+            credit: clientFeeCollectedNow,
+            balanceAfter: runningAdminBal,
+            notes: `تم الخصم من العميل (${targetOrder.posName}) وإيداع الرسوم لمحفظة الإدارة بعد اكتمال الخدمة`
+          });
+        }
+
+        if (supplierFeeCollectedNow > 0) {
+          runningAdminBal = parseFloat((runningAdminBal + supplierFeeCollectedNow).toFixed(2));
+          nextAdminEntries.push({
+            id: `adm-acc-${Date.now()}-cmp-sfee`,
+            date: nowFormatted,
+            type: 'fee_collected',
+            referenceId: targetOrder.id,
+            supplierId: orderSupplier.id,
+            supplierName: `${orderSupplier.name} (${orderSupplier.storeName})`,
+            serviceId: targetOrder.serviceId,
+            serviceName: targetOrder.serviceName,
+            posId: targetOrder.posId,
+            posCode: targetOrder.posCode,
+            posName: targetOrder.posName,
+            description: `تحصيل رسوم خدمة بيع للعميل على المورد (${supplierFeeCollectedNow.toFixed(2)} ر.س) بعد اكتمال الشحن: ${targetOrder.serviceName}`,
+            grossAmount: targetOrder.costPrice,
+            feeAmount: supplierFeeCollectedNow,
+            debit: 0,
+            credit: supplierFeeCollectedNow,
+            balanceAfter: runningAdminBal,
+            notes: `تم الخصم من استحقاق المورد (${orderSupplier.storeName}) بعد اكتمال الشحن`
+          });
+        }
+
+        setAdminAccountingEntries(prev => [...nextAdminEntries, ...prev]);
+        setSuperAdmin(prev => ({
+          ...prev,
+          walletBalance: parseFloat((prev.walletBalance + totalAdminFeeNow).toFixed(2)),
+        }));
+        firestoreSync.saveSuperAdmin({
+          ...superAdmin,
+          walletBalance: parseFloat((superAdmin.walletBalance + totalAdminFeeNow).toFixed(2)),
+        }).catch(console.error);
+        for (const ae of nextAdminEntries) {
+          firestoreSync.saveAdminAccountingEntry(ae).catch(console.error);
+        }
+      }
     }
 
     triggerConfetti();
     addNotification({
       posId: targetOrder.posId,
-      supplierId: supplier.id,
-      supplierName: supplier.name,
+      supplierId: orderSupplier.id,
+      supplierName: orderSupplier.name,
       title: 'مكتمل: تم تنفيذ طلبك',
       message: `تم إتمام تنفيذ الطلب #${targetOrder.id} (${targetOrder.serviceName}) بنجاح.`,
       type: 'order_status',
@@ -5222,14 +5672,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const rejectSupplierOrder = (orderId: string, reason?: string) => {
     const targetOrder = orders.find(o => o.id === orderId);
-    if (!targetOrder) return;
+    if (!targetOrder || targetOrder.status === 'failed' || targetOrder.status === 'completed') return;
     if (!assertEmployeePermission(
       isOrderVisibleToEmployee(targetOrder, effectiveEmployeePerms, role),
       'ليس لديك صلاحية إلغاء هذا النوع من الطلبات.'
     )) return;
 
-    // Refund customer & cancel any unpaid deferred gift fee associated with this rejected order
-    const refundAmount = targetOrder.totalDeducted || 0;
+    // If order used completion-only settlement (feeSettledToAdmin === false), no fee was deducted and nothing reached SuperAdmin/Supplier.
+    // Refund ONLY heldFromClientAtRequest (or legacy totalDeducted for pre-existing orders).
+    const refundAmount = targetOrder.feeSettledToAdmin === false
+      ? (targetOrder.heldFromClientAtRequest ?? (targetOrder.isFreeGiftOrder ? 0 : targetOrder.costPrice) ?? 0)
+      : (targetOrder.totalDeducted || 0);
     const cancelDeferredFee =
       targetOrder.deferredFeeAmount && !targetOrder.deferredFeeSettled
         ? targetOrder.deferredFeeAmount
@@ -5275,7 +5728,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'إلغاء طلب وإعادة الرصيد',
       message: targetOrder.isFreeGiftOrder
         ? `تم إلغاء الطلب #${targetOrder.id}. السبب: ${reason || 'تعذر التنفيذ'}`
-        : `تم إلغاء الطلب #${targetOrder.id} واسترداد ${formatCurrencyAmount(targetOrder.totalDeducted, refundClientCurrency, activeExchangeRate)} إلى محفظتك. السبب: ${reason || 'تعذر التنفيذ'}`,
+        : `تم إلغاء الطلب #${targetOrder.id} واسترداد ${formatCurrencyAmount(refundAmount, refundClientCurrency, activeExchangeRate)} إلى محفظتك. السبب: ${reason || 'تعذر التنفيذ'}`,
       type: 'order_status',
       orderId: targetOrder.id
     });
@@ -5285,7 +5738,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'تم إلغاء الطلب وإعادة الرصيد',
       description: targetOrder.isFreeGiftOrder
         ? `تم إلغاء الطلب #${targetOrder.id}.`
-        : `تم إلغاء الطلب واسترداد ${formatCurrency(targetOrder.totalDeducted)} لمحفظة العميل.`
+        : `تم إلغاء الطلب واسترداد ${formatCurrency(refundAmount)} لمحفظة العميل.`
     });
   };
 
@@ -6394,8 +6847,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Add Supplier by Super Admin
   const addSupplier = (newSupData: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => {
     const newId = `sup-${Date.now()}`;
+    const defaultConfig = getEffectivePlatformFeesConfig(
+      {
+        feeType: newSupData.feeType,
+        feePercentage: newSupData.feePercentage,
+        fixedFeeAmount: newSupData.fixedFeeAmount,
+        feesConfig: newSupData.feesConfig,
+      },
+      superAdmin
+    );
     const newSup: Supplier = {
       ...newSupData,
+      feesConfig: defaultConfig,
       id: newId,
       walletBalance: 0,
       createdAt: new Date().toISOString().substring(0, 10)
@@ -6409,18 +6872,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Super Admin updates specific supplier fee
+  // Super Admin updates specific supplier fee (supports two-section PlatformFeesConfig + legacy sync)
   const updateSupplierFeeConfig = (
     supplierId: string, 
-    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }
+    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number; feesConfig?: PlatformFeesConfig }
   ) => {
     const targetSup = suppliers.find(s => s.id === supplierId);
+    const normalizedFeesConfig = config.feesConfig
+      ? normalizePlatformFeesConfig(config.feesConfig)
+      : normalizePlatformFeesConfig({
+          ...getEffectivePlatformFeesConfig(targetSup, superAdmin),
+          clientServices: {
+            ...getEffectivePlatformFeesConfig(targetSup, superAdmin).clientServices,
+            servicePurchase: {
+              feeType: config.feeType,
+              percentage: config.percentage,
+              fixedAmount: config.fixedAmount,
+            },
+            balanceTransfer: {
+              feeType: config.feeType,
+              percentage: config.percentage,
+              fixedAmount: config.fixedAmount,
+            },
+          },
+        });
+
+    const primaryPurchaseRule = normalizedFeesConfig.clientServices.servicePurchase;
     const updatedSup = targetSup
       ? {
           ...targetSup,
-          feeType: config.feeType,
-          feePercentage: config.percentage,
-          fixedFeeAmount: config.fixedAmount
+          feeType: primaryPurchaseRule.feeType,
+          feePercentage: primaryPurchaseRule.percentage,
+          fixedFeeAmount: primaryPurchaseRule.fixedAmount,
+          feesConfig: normalizedFeesConfig,
         }
       : null;
 
@@ -6428,9 +6912,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (s.id !== supplierId) return s;
       return {
         ...s,
-        feeType: config.feeType,
-        feePercentage: config.percentage,
-        fixedFeeAmount: config.fixedAmount
+        feeType: primaryPurchaseRule.feeType,
+        feePercentage: primaryPurchaseRule.percentage,
+        fixedFeeAmount: primaryPurchaseRule.fixedAmount,
+        feesConfig: normalizedFeesConfig,
       };
     }));
     if (updatedSup) {
@@ -6439,7 +6924,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast({
       type: 'success',
       title: 'تم تحديث رسوم المتجر',
-      description: `تم ضبط رسوم المتجر: نوع (${config.feeType}) نسبة (${config.percentage}%) ومبلغ مقطوع (${formatCurrency(config.fixedAmount)}).`
+      description: `تم حفظ إعدادات الرسوم المخصصة للمتجر (قسم خدمات المورد وقسم خدمات عملائه) بنجاح.`
     });
   };
 
@@ -6554,15 +7039,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Super Admin updates global fee
+  // Super Admin updates global fee (supports two-section PlatformFeesConfig + legacy sync)
   const updateGlobalFeeConfig = (
-    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number }
+    config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number; defaultFeesConfig?: PlatformFeesConfig }
   ) => {
+    const baseGlobal = createDefaultPlatformFeesConfig({
+      feeType: config.feeType,
+      percentage: config.percentage,
+      fixedAmount: config.fixedAmount,
+    });
+    const normalizedGlobalFees = config.defaultFeesConfig
+      ? normalizePlatformFeesConfig(config.defaultFeesConfig, baseGlobal)
+      : normalizePlatformFeesConfig({
+          ...getEffectivePlatformFeesConfig(undefined, superAdmin),
+          clientServices: {
+            ...getEffectivePlatformFeesConfig(undefined, superAdmin).clientServices,
+            servicePurchase: {
+              feeType: config.feeType,
+              percentage: config.percentage,
+              fixedAmount: config.fixedAmount,
+            },
+            balanceTransfer: {
+              feeType: config.feeType,
+              percentage: config.percentage,
+              fixedAmount: config.fixedAmount,
+            },
+          },
+        });
+
+    const primaryPurchaseRule = normalizedGlobalFees.clientServices.servicePurchase;
     const nextAdmin: SuperAdmin = {
       ...superAdmin,
-      defaultFeeType: config.feeType,
-      defaultFeePercentage: config.percentage,
-      defaultFixedFeeAmount: config.fixedAmount
+      defaultFeeType: primaryPurchaseRule.feeType,
+      defaultFeePercentage: primaryPurchaseRule.percentage,
+      defaultFixedFeeAmount: primaryPurchaseRule.fixedAmount,
+      defaultFeesConfig: normalizedGlobalFees,
     };
     setSuperAdmin(nextAdmin);
     firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
@@ -6570,9 +7081,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Update all suppliers with global default and sync to Firestore
     const updatedSuppliers = suppliers.map(s => ({
       ...s,
-      feeType: config.feeType,
-      feePercentage: config.percentage,
-      fixedFeeAmount: config.fixedAmount
+      feeType: primaryPurchaseRule.feeType,
+      feePercentage: primaryPurchaseRule.percentage,
+      fixedFeeAmount: primaryPurchaseRule.fixedAmount,
+      feesConfig: normalizedGlobalFees,
     }));
     setSuppliers(updatedSuppliers);
     updatedSuppliers.forEach(s => {
@@ -6581,8 +7093,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     showToast({
       type: 'success',
-      title: 'تم تحديث النسبة والمبلغ العام',
-      description: `تم تطبيق الإعدادات العامة على جميع المتاجر: نسبة ${config.percentage}% ومبلغ ${formatCurrency(config.fixedAmount)}.`
+      title: 'تم تحديث الرسوم العامة لجميع المتاجر',
+      description: `تم حفظ وتطبيق إعدادات الرسوم العامة (قسم خدمات المورد وقسم خدمات عملائه) على كافة المتاجر بنجاح.`
     });
   };
 

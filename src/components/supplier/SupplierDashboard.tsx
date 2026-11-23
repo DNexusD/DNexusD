@@ -2796,7 +2796,7 @@ export const SupplierDashboard: React.FC = () => {
               </div>
             ) : (
               storeClients.map(client => {
-              const currentTier = TIERS_CONFIG[client.tier];
+              const currentTier = TIERS_CONFIG[client.tier] || TIERS_CONFIG.regular;
 
               return (
                 <div key={client.id} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">

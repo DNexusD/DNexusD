@@ -27,7 +27,14 @@ import {
   Smartphone,
   Globe,
   ShieldCheck,
+  MessageCircle,
+  Link2,
+  Share2,
+  ExternalLink,
 } from 'lucide-react';
+import { SOCIAL_PLATFORM_META, sanitizeSupplierSocialLinks } from '../../utils/socialLinks';
+import { SupplierCustomSocialLink, SupplierSocialLinks } from '../../types';
+import { SupplierContactLinks } from '../common/SupplierContactLinks';
 
 const ICON_OPTIONS = [
   { value: 'Layers', label: 'كتالوج عام', Icon: Layers },
@@ -79,9 +86,62 @@ export const AdminInterfaceSettingsView: React.FC = () => {
   // Local state for interface settings
   const [localSettings, setLocalSettings] = useState<PlatformInterfaceSettings>(platformSettings);
 
+  const [socialLinksDraft, setSocialLinksDraft] = useState<SupplierSocialLinks>(() => ({
+    whatsapp: platformSettings.socialLinks?.whatsapp || '',
+    telegram: platformSettings.socialLinks?.telegram || '',
+    instagram: platformSettings.socialLinks?.instagram || '',
+    facebook: platformSettings.socialLinks?.facebook || '',
+    x: platformSettings.socialLinks?.x || '',
+    tiktok: platformSettings.socialLinks?.tiktok || '',
+    youtube: platformSettings.socialLinks?.youtube || '',
+    snapchat: platformSettings.socialLinks?.snapchat || '',
+    website: platformSettings.socialLinks?.website || '',
+    customLinks: platformSettings.socialLinks?.customLinks ? [...platformSettings.socialLinks.customLinks] : [],
+  }));
+
+  const [newCustomTitle, setNewCustomTitle] = useState('');
+  const [newCustomUrl, setNewCustomUrl] = useState('');
+
   useEffect(() => {
     setLocalSettings(platformSettings);
+    setSocialLinksDraft({
+      whatsapp: platformSettings.socialLinks?.whatsapp || '',
+      telegram: platformSettings.socialLinks?.telegram || '',
+      instagram: platformSettings.socialLinks?.instagram || '',
+      facebook: platformSettings.socialLinks?.facebook || '',
+      x: platformSettings.socialLinks?.x || '',
+      tiktok: platformSettings.socialLinks?.tiktok || '',
+      youtube: platformSettings.socialLinks?.youtube || '',
+      snapchat: platformSettings.socialLinks?.snapchat || '',
+      website: platformSettings.socialLinks?.website || '',
+      customLinks: platformSettings.socialLinks?.customLinks ? [...platformSettings.socialLinks.customLinks] : [],
+    });
   }, [platformSettings]);
+
+  const handleAddCustomSocialLink = () => {
+    if (!newCustomTitle.trim() || !newCustomUrl.trim()) {
+      showToast({ type: 'error', title: 'بيانات غير مكتملة', description: 'يرجى إدخال مسمى الرابط والرابط الإلكتروني.' });
+      return;
+    }
+    const newLink: SupplierCustomSocialLink = {
+      id: `custom-${Date.now()}`,
+      label: newCustomTitle.trim(),
+      url: newCustomUrl.trim(),
+    };
+    setSocialLinksDraft(prev => ({
+      ...prev,
+      customLinks: [...(prev.customLinks || []), newLink],
+    }));
+    setNewCustomTitle('');
+    setNewCustomUrl('');
+  };
+
+  const handleRemoveCustomSocialLink = (linkId: string) => {
+    setSocialLinksDraft(prev => ({
+      ...prev,
+      customLinks: (prev.customLinks || []).filter(l => l.id !== linkId),
+    }));
+  };
 
   const fixedCatalogs = useMemo(
     () => catalogs.filter((c) => Boolean(c.isFixedByAdmin || c.supplierId === 'all')),

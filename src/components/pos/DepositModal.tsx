@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { calculateFeeFromRule, resolveSpecificServiceFeeRule } from '../../utils/pricing';
 import { getActiveBankAccountsForDeposit } from '../../utils/bankAccounts';
 import { getActiveDropdownOptions } from '../../utils/platformSettings';
 import {
@@ -33,7 +34,7 @@ interface DepositModalProps {
 }
 
 export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
-  const { currentPosSupplier, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertToSar } = useApp();
+  const { currentPosSupplier, superAdmin, supplierBankAccounts, platformSettings, submitDepositRequest, currentPos, showToast, activeCurrency, activeExchangeRate, currencyLabel, convertToSar, formatCurrency } = useApp();
 
   const approvedBankOptions = useMemo(
     () => getActiveDropdownOptions(platformSettings.approvedBankNames),
@@ -637,6 +638,24 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                 </div>
               </div>
 
+              {(() => {
+                const amountSar = typeof amount === 'number' && amount > 0 ? convertToSar(amount) : 0;
+                const depRule = resolveSpecificServiceFeeRule({
+                  section: 'client',
+                  serviceKey: 'depositRequest',
+                  supplier: currentPosSupplier,
+                  superAdmin,
+                });
+                const estimatedDepFee = amountSar > 0 ? calculateFeeFromRule(amountSar, depRule, { capAtAmount: true }) : 0;
+                if (estimatedDepFee <= 0) return null;
+                return (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-amber-500/30 text-[11px] text-slate-300 flex items-center justify-between gap-2">
+                    <span>رسوم طلب شحن الرصيد (تُخصم فقط عند اعتماد الطلب):</span>
+                    <strong className="font-mono text-amber-300">{formatCurrency(estimatedDepFee)}</strong>
+                  </div>
+                );
+              })()}
+
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200 leading-relaxed">
                 * سيتم إرسال طلب الشحن إلى المتجر {currentPosSupplier.name}
                 {selectedAccount?.canReceiveSupplierTransfers
@@ -707,6 +726,24 @@ export const DepositModal: React.FC<DepositModalProps> = ({ onClose }) => {
                   />
                 </div>
               </div>
+
+              {(() => {
+                const amountSar = typeof amount === 'number' && amount > 0 ? convertToSar(amount) : 0;
+                const loanRule = resolveSpecificServiceFeeRule({
+                  section: 'client',
+                  serviceKey: 'loanRequest',
+                  supplier: currentPosSupplier,
+                  superAdmin,
+                });
+                const estimatedLoanFee = amountSar > 0 ? calculateFeeFromRule(amountSar, loanRule, { capAtAmount: true }) : 0;
+                if (estimatedLoanFee <= 0) return null;
+                return (
+                  <div className="p-3 rounded-xl bg-slate-950 border border-cyan-500/30 text-[11px] text-slate-300 flex items-center justify-between gap-2">
+                    <span>رسوم طلب السلفة (تُخصم فقط بعد الموافقة وقيد الرصيد):</span>
+                    <strong className="font-mono text-cyan-300">{formatCurrency(estimatedLoanFee)}</strong>
+                  </div>
+                );
+              })()}
 
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-300 space-y-1">
                 <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">

@@ -138,7 +138,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
   // Current tier pricing calculation (with 0.5 SAR zero-price floor & Free Gifts admin fee % rule)
   const currentTier = currentPos.tier;
-  const currentTierInfo = TIERS_CONFIG[currentTier];
+  const currentTierInfo = TIERS_CONFIG[currentTier] || TIERS_CONFIG.regular;
   const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
   const giftStatus = evaluateClientGiftServiceStatus({
     service: liveService,

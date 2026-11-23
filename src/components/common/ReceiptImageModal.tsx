@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Download,
-  ExternalLink,
   Image as ImageIcon,
   Maximize2,
   Minimize2,
@@ -12,6 +11,18 @@ import {
   Landmark,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+
+function isSafeReceiptImageUrl(url?: string | null): url is string {
+  if (!url) return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('data:image/')) return true;
+  if (lower.startsWith('blob:') || lower.startsWith('https://') || lower.startsWith('http://') || trimmed.startsWith('/')) {
+    return true;
+  }
+  return false;
+}
 
 export interface ReceiptImageModalProps {
   isOpen: boolean;
@@ -43,7 +54,7 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
   const { formatCurrency } = useApp();
   const [isZoomed, setIsZoomed] = useState(false);
 
-  if (!isOpen || !imageUrl) return null;
+  if (!isOpen || !isSafeReceiptImageUrl(imageUrl)) return null;
 
   const handleDownload = () => {
     try {
@@ -58,16 +69,6 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
     }
   };
 
-  const handleOpenNewTab = () => {
-    // Open in separate window/tab safely
-    const win = window.open();
-    if (win) {
-      win.document.write(
-        `<body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;height:100vh;"><img src="${imageUrl}" style="max-width:100%;max-height:100%;object-fit:contain;" alt="إيصال الحوالة" /></body>`
-      );
-    }
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md overflow-y-auto"
@@ -75,7 +76,11 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
       aria-modal="true"
       aria-label="معاينة إيصال الحوالة البنكية"
     >
-      <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-auto text-slate-100 flex flex-col max-h-[92vh]">
+      <div
+        className={`relative w-full bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-auto text-slate-100 flex flex-col transition-all ${
+          isZoomed ? 'max-w-[96vw] max-h-[96vh]' : 'max-w-3xl max-h-[92vh]'
+        }`}
+      >
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/90 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -114,14 +119,6 @@ export const ReceiptImageModal: React.FC<ReceiptImageModalProps> = ({
               title="تحميل صورة الإيصال"
             >
               <Download className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenNewTab}
-              className="hidden sm:flex p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
-              title="فتح في نافذة مستقلة"
-            >
-              <ExternalLink className="w-4 h-4" />
             </button>
             <button
               type="button"

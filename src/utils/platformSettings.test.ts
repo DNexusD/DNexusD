@@ -6,6 +6,7 @@ import {
   getActiveDropdownOptions,
   getCatalogsForPosView,
   getCatalogsForSupplierView,
+  getRegularCatalogsWithCounts,
   matchesAdminStatementTransactionType,
   matchesStatementTransactionType,
   mergePlatformSettings,
@@ -97,6 +98,19 @@ test('getCatalogsForSupplierView shows fixed admin catalogs to all suppliers and
   assert.deepEqual(
     posWithGifts.map((c) => c.id),
     ['cat-fixed-1', 'cat-sup-1', 'cat-fixed-gift']
+  );
+
+  const quickItems = getRegularCatalogsWithCounts(posWithGifts, [
+    { catalogId: 'cat-fixed-1' },
+    { catalogId: 'cat-fixed-1' },
+    { catalogId: 'cat-fixed-gift' },
+  ]);
+  assert.deepEqual(
+    quickItems.map((item) => ({ id: item.catalog.id, count: item.serviceCount })),
+    [
+      { id: 'cat-fixed-1', count: 2 },
+      { id: 'cat-sup-1', count: 0 },
+    ]
   );
 });
 

@@ -3,21 +3,26 @@ import assert from 'node:assert/strict';
 import {
   appendUsedGiftServiceId,
   calculateBaseSupplierFee,
+  calculateFeeFromRule,
   calculateServicePurchasePricing,
   computeGiftExpiresAt,
+  createDefaultPlatformFeesConfig,
   evaluateClientGiftServiceStatus,
   formatGiftRemainingTimeAr,
   getEffectiveAppFeePercentage,
+  getEffectivePlatformFeesConfig,
   getPackageTierPrice,
   hasClientUsedGiftService,
   isCatalogFreeGifts,
   isClientEligibleForGiftService,
   resolveGiftClaimFeePayment,
+  resolveSpecificServiceFeeRule,
   settlePendingGiftFeesOnRecharge,
+  sumPendingUnsettledClientFees,
   validateFreeGiftWalletBalance,
   ZERO_PRICE_CLIENT_FLOOR_SAR,
 } from './pricing';
-import { Catalog, DigitalService, ServicePackage, SuperAdmin, Supplier } from '../types';
+import { Catalog, DigitalService, PlatformFeesConfig, ServicePackage, SuperAdmin, Supplier } from '../types';
 
 const sampleSupplier: Partial<Supplier> = {
   feeType: 'percentage',
@@ -665,3 +670,93 @@ test('evaluateClientGiftServiceStatus deactivates gift after merchant visibility
   assert.equal(afterExpiry.isActive, false);
   assert.equal(afterExpiry.inactiveReason, 'expired');
 });
+
+test('Two-section PlatformFeesConfig resolves global vs store-specific rules for all supplier & client services', () => {
+  const globalConfig: PlatformFeesConfig = {
+    supplierServices: {
+      supportGrant: { feeType: 'fixed', percentage: 0, fixedAmount: 2 },
+      loanGrant: { feeType: 'percentage', percentage: 1.5, fixedAmount: 0 },
+      saleToClient: { feeType: 'percentage', percentage: 0.5, fixedAmount: 0 },
+    },
+    clientServices: {
+      depositRequest: { feeType: 'fixed', percentage: 0, fixedAmount: 3 },
+      loanRequest: { feeType: 'both', percentage: 2, fixedAmount: 1 },
+      servicePurchase: { feeType: 'percentage', percentage: 1.5, fixedAmount: 0 },
+      balanceTransfer: { feeType: 'fixed', percentage: 0, fixedAmount: 1 },
+    },
+  };
+
+  const adminWithSections: Partial<SuperAdmin> = {
+    defaultFeeType: 'percentage',
+    defaultFeePercentage: 1.5,
+    defaultFixedFeeAmount: 0,
+    defaultFeesConfig: globalConfig,
+  };
+
+  // Store without custom feesConfig inherits global sections
+  const inheritedSupplier: Partial<Supplier> = { id: 'sup-inherited' };
+  const inheritedEffective = getEffectivePlatformFeesConfig(inheritedSupplier, adminWithSections);
+  assert.deepEqual(inheritedEffective.supplierServices.supportGrant, globalConfig.supplierServices.supportGrant);
+  assert.deepEqual(inheritedEffective.clientServices.depositRequest, globalConfig.clientServices.depositRequest);
+
+  // Store with custom two-section feesConfig overrides both sections independently
+  const customSupplier: Partial<Supplier> = {
+    id: 'sup-custom',
+    feeType: 'percentage',
+    feePercentage: 2.0,
+    fixedFeeAmount: 0,
+    feesConfig: {
+      supplierServices: {
+        supportGrant: { feeType: 'percentage', percentage: 3, fixedAmount: 0 },
+        loanGrant: { feeType: 'fixed', percentage: 0, fixedAmount: 5 },
+        saleToClient: { feeType: 'both', percentage: 1, fixedAmount: 0.25 },
+      },
+      clientServices: {
+        depositRequest: { feeType: 'percentage', percentage: 0.5, fixedAmount: 0 },
+        loanRequest: { feeType: 'fixed', percentage: 0, fixedAmount: 4 },
+        servicePurchase: { feeType: 'percentage', percentage: 2.0, fixedAmount: 0 },
+        balanceTransfer: { feeType: 'percentage', percentage: 0.25, fixedAmount: 0 },
+      },
+    },
+  };
+
+  const supSaleRule = resolveSpecificServiceFeeRule({
+    section: 'supplier',
+    serviceKey: 'saleToClient',
+    supplier: customSupplier,
+    superAdmin: adminWithSections,
+  });
+  assert.equal(calculateFeeFromRule(200, supSaleRule), 2.25); // 1% of 200 (2.00) + 0.25
+
+  const clientLoanRule = resolveSpecificServiceFeeRule({
+    section: 'client',
+    serviceKey: 'loanRequest',
+    supplier: customSupplier,
+    superAdmin: adminWithSections,
+  });
+  assert.equal(calculateFeeFromRule(500, clientLoanRule, { capAtAmount: true }), 4);
+  assert.equal(calculateFeeFromRule(2, clientLoanRule, { capAtAmount: true }), 2);
+
+  // Default zero fees for new per-service rules when no defaultFeesConfig is set
+  const defaultCfg = createDefaultPlatformFeesConfig({ feeType: 'percentage', percentage: 1, fixedAmount: 0 });
+  assert.equal(defaultCfg.supplierServices.supportGrant.percentage, 0);
+  assert.equal(defaultCfg.clientServices.depositRequest.fixedAmount, 0);
+  assert.equal(defaultCfg.clientServices.servicePurchase.percentage, 1);
+});
+
+test('sumPendingUnsettledClientFees reserves fees only for unsettled non-gift pending orders', () => {
+  const orders = [
+    { posId: 'pos-1', status: 'pending_supplier' as const, feeAmount: 2.5, feeSettledToAdmin: false, isFreeGiftOrder: false },
+    { posId: 'pos-1', status: 'in_progress' as const, feeAmount: 1.25, feeSettledToAdmin: false, isFreeGiftOrder: false },
+    // Completed or failed or already settled or gift orders should NOT reserve extra balance
+    { posId: 'pos-1', status: 'completed' as const, feeAmount: 5, feeSettledToAdmin: true, isFreeGiftOrder: false },
+    { posId: 'pos-1', status: 'failed' as const, feeAmount: 3, feeSettledToAdmin: false, isFreeGiftOrder: false },
+    { posId: 'pos-1', status: 'pending_supplier' as const, feeAmount: 1, feeSettledToAdmin: false, isFreeGiftOrder: true },
+    { posId: 'pos-2', status: 'pending_supplier' as const, feeAmount: 10, feeSettledToAdmin: false, isFreeGiftOrder: false },
+  ];
+
+  assert.equal(sumPendingUnsettledClientFees(orders, 'pos-1'), 3.75);
+  assert.equal(sumPendingUnsettledClientFees(orders, 'pos-2'), 10);
+  assert.equal(sumPendingUnsettledClientFees(orders, 'pos-3'), 0);
+});
+
