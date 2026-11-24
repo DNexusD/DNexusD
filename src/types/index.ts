@@ -254,6 +254,7 @@ export interface POSClient {
   posUpgradeStatus?: PosUpgradeStatus; // حالة موافقة العميل على الترقية إلى نقطة بيع معتمدة
   posUpgradeRequestedAt?: string; // تاريخ إرسال طلب الترقية إلى نقطة بيع
   posUpgradeRespondedAt?: string; // تاريخ رد العميل على طلب الترقية
+  appearanceSettings?: PageAppearanceSettings; // إعدادات إظهار/إخفاء عناصر صفحة العميل
 }
 
 export interface FeeConfig {
@@ -355,6 +356,15 @@ export interface Supplier {
   preferredCurrency?: CurrencyCode; // العملة النشطة المفضلة للتاجر (SAR / USD)
   exchangeRateSarPerUsd?: number; // سعر الصرف المحدد من التاجر: 1 دولار أمريكي = X ريال سعودي
   isActive?: boolean; // حالة تفعيل المتجر (يتم التحكم بها من مدير التطبيق)
+  appearanceSettings?: PageAppearanceSettings; // إعدادات إظهار/إخفاء عناصر صفحة التاجر
+}
+
+export type AppearancePortalRole = 'super_admin' | 'supplier' | 'pos_client';
+
+export interface PageAppearanceSettings {
+  hiddenElements: Record<string, boolean>;
+  compactMode?: boolean;
+  updatedAt?: string;
 }
 
 export interface SuperAdmin {
@@ -371,6 +381,7 @@ export interface SuperAdmin {
     accountHolder: string;
   }[];
   adminAccounts?: AdminAccount[];
+  appearanceSettings?: PageAppearanceSettings; // إعدادات إظهار/إخفاء عناصر صفحة مدير التطبيق
 }
 
 export interface DropdownOptionItem {

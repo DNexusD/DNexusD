@@ -34,8 +34,13 @@ import {
   TierPrices,
   WarehousePurchaseUnit,
   CurrencyCode,
-  PlatformFeesConfig
+  PlatformFeesConfig,
+  AppearancePortalRole,
+  PageAppearanceSettings
 } from '../types';
+import {
+  normalizeAppearanceSettings
+} from '../utils/appearanceSettings';
 import {
   convertCurrencyToSar,
   convertSarToCurrency,
@@ -429,6 +434,12 @@ interface AppContextType {
   deletePosClient: (posId: string) => Promise<{ success: boolean; error?: string }>;
   updatePosProfile: (posId: string, updates: Partial<POSClient>) => void;
   updateSupplierProfile: (supplierId: string, updates: Partial<Supplier>) => void;
+  getMyAppearanceSettings: (portal: AppearancePortalRole) => PageAppearanceSettings;
+  updateMyAppearanceSettings: (
+    portal: AppearancePortalRole,
+    nextSettings: PageAppearanceSettings,
+    options?: { silent?: boolean }
+  ) => void;
   createInviteLink: (
     params: { targetTier: AccountTier; features?: InviteLinkFeatures; label?: string } | AccountTier
   ) => InviteLink;
@@ -6934,6 +6945,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const [scopedAppearanceMap, setScopedAppearanceMap] = useState<Record<string, PageAppearanceSettings>>(() => {
+    try {
+      const raw = localStorage.getItem('digipos_scoped_appearance_map');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const getMyAppearanceSettings = (portal: AppearancePortalRole): PageAppearanceSettings => {
+    if (portal === 'pos_client') {
+      return normalizeAppearanceSettings(exposedCurrentPos?.appearanceSettings);
+    }
+    if (portal === 'supplier') {
+      if (role === 'employee' && currentUser?.employeeId) {
+        const empKey = `emp:${currentUser.employeeId}`;
+        if (scopedAppearanceMap[empKey]) {
+          return normalizeAppearanceSettings(scopedAppearanceMap[empKey]);
+        }
+      }
+      return normalizeAppearanceSettings(supplier?.appearanceSettings);
+    }
+    if (currentUser?.adminAccountId) {
+      const admKey = `adm:${currentUser.adminAccountId}`;
+      if (scopedAppearanceMap[admKey]) {
+        return normalizeAppearanceSettings(scopedAppearanceMap[admKey]);
+      }
+    }
+    return normalizeAppearanceSettings(superAdmin?.appearanceSettings);
+  };
+
+  const updateMyAppearanceSettings = (
+    portal: AppearancePortalRole,
+    nextSettings: PageAppearanceSettings,
+    options?: { silent?: boolean }
+  ) => {
+    const normalized: PageAppearanceSettings = {
+      ...normalizeAppearanceSettings(nextSettings),
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (portal === 'pos_client') {
+      if (isSupplierPosPreviewMode) {
+        showToast({
+          type: 'info',
+          title: 'وضع الاطلاع فقط',
+          description: 'لا يمكن تعديل مظهر صفحة نقطة البيع أثناء وضع المعاينة من المتجر.',
+        });
+        return;
+      }
+      const targetClient = posClients.find(p => p.id === exposedCurrentPos.id) || exposedCurrentPos;
+      if (!targetClient?.id) return;
+      const updatedClient: POSClient = {
+        ...targetClient,
+        appearanceSettings: normalized,
+      };
+      setPosClients(prev => prev.map(p => (p.id === targetClient.id ? updatedClient : p)));
+      firestoreSync.savePosClient(updatedClient).catch(console.error);
+    } else if (portal === 'supplier') {
+      if (role === 'employee' && currentUser?.employeeId) {
+        const empKey = `emp:${currentUser.employeeId}`;
+        setScopedAppearanceMap(prev => {
+          const nextMap = { ...prev, [empKey]: normalized };
+          try {
+            localStorage.setItem('digipos_scoped_appearance_map', JSON.stringify(nextMap));
+          } catch {
+            // ignore storage quota errors
+          }
+          return nextMap;
+        });
+      } else {
+        const targetSup = suppliers.find(s => s.id === supplier.id) || supplier;
+        if (!targetSup?.id) return;
+        const updatedSup: Supplier = {
+          ...targetSup,
+          appearanceSettings: normalized,
+        };
+        setSuppliers(prev => prev.map(s => (s.id === targetSup.id ? updatedSup : s)));
+        firestoreSync.saveSupplier(updatedSup).catch(console.error);
+      }
+    } else if (portal === 'super_admin') {
+      if (currentUser?.adminAccountId) {
+        const admKey = `adm:${currentUser.adminAccountId}`;
+        setScopedAppearanceMap(prev => {
+          const nextMap = { ...prev, [admKey]: normalized };
+          try {
+            localStorage.setItem('digipos_scoped_appearance_map', JSON.stringify(nextMap));
+          } catch {
+            // ignore storage quota errors
+          }
+          return nextMap;
+        });
+      } else {
+        const nextAdmin: SuperAdmin = {
+          ...superAdmin,
+          appearanceSettings: normalized,
+        };
+        setSuperAdmin(nextAdmin);
+        firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+      }
+    }
+
+    if (!options?.silent) {
+      showToast({
+        type: 'success',
+        title: 'تم حفظ إعدادات مظهر الصفحة',
+        description: 'تم تطبيق التغييرات على العناصر المرئية في صفحتك وحفظها بنجاح.',
+      });
+    }
+  };
+
   // Create invite link with pre-assigned tier and features
   const createInviteLink = (
     params: { targetTier: AccountTier; features?: InviteLinkFeatures; label?: string } | AccountTier
@@ -8823,6 +8947,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deletePosClient,
         updatePosProfile,
         updateSupplierProfile,
+        getMyAppearanceSettings,
+        updateMyAppearanceSettings,
         createInviteLink,
         toggleInviteLinkActiveStatus,
         deleteInviteLink,

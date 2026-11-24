@@ -61,8 +61,14 @@ import {
   Ban,
   Power,
   Trash2,
-  BadgeCheck
+  BadgeCheck,
+  Sliders
 } from 'lucide-react';
+import { AppearanceControlModal } from '../common/AppearanceControlModal';
+import {
+  getAppearanceVisibilitySummary,
+  isPageElementVisible,
+} from '../../utils/appearanceSettings';
 import {
   ClientAccreditationFilter,
   canSupplierInspectPosInterface,
@@ -153,8 +159,15 @@ export const SupplierDashboard: React.FC = () => {
     setActiveCurrency,
     updateSupplierExchangeRate,
     formatCurrency,
-    logout
+    logout,
+    getMyAppearanceSettings,
+    updateMyAppearanceSettings
   } = useApp();
+
+  const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const supplierAppearance = getMyAppearanceSettings('supplier');
+  const supplierAppearanceSummary = getAppearanceVisibilitySummary('supplier', supplierAppearance);
+  const isSupplierElVisible = (key: string) => isPageElementVisible(supplierAppearance, key);
 
   const supplierCatalogs = useMemo(
     () => getCatalogsForSupplierView(catalogs, supplier.id),
@@ -696,10 +709,10 @@ export const SupplierDashboard: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className={supplierAppearance.compactMode ? 'space-y-4' : 'space-y-6'}>
       
       {/* Admin Global Interface Notice for Suppliers */}
-      {platformSettings.showSupplierInterfaceNotice && platformSettings.supplierInterfaceNotice.trim() && (
+      {isSupplierElVisible('supplier_admin_notice') && platformSettings.showSupplierInterfaceNotice && platformSettings.supplierInterfaceNotice.trim() && (
         <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/60 via-slate-900 to-slate-900 border border-purple-500/40 flex items-start gap-3 text-xs shadow-lg">
           <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0">
             <Bell className="w-4 h-4" />
@@ -762,6 +775,7 @@ export const SupplierDashboard: React.FC = () => {
                 </div>
 
                 {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
+                {isSupplierElVisible('supplier_role_badge') && (
                 <div className="text-xs text-slate-300 flex items-center gap-2 flex-wrap">
                   {activeEmployee ? (
                     <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs">
@@ -802,11 +816,14 @@ export const SupplierDashboard: React.FC = () => {
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
 
             {/* Bottom Row: QR & ID Bar + Social Links */}
+            {(isSupplierElVisible('supplier_qr_id_bar') || (isSupplierElVisible('supplier_social_links') && supplier.socialLinks)) && (
             <div className="flex flex-wrap items-center gap-3 pt-1">
+              {isSupplierElVisible('supplier_qr_id_bar') && (
               <div className="flex items-center gap-2 bg-slate-950/70 px-2.5 py-1.5 rounded-xl border border-slate-800/80 w-fit shrink-0">
                 <button
                   type="button"
@@ -843,15 +860,19 @@ export const SupplierDashboard: React.FC = () => {
 
                 <span className="font-mono text-amber-400 font-bold tracking-wider select-all text-xs">{supplier.id}</span>
               </div>
+              )}
 
-              {supplier.socialLinks && (
+              {isSupplierElVisible('supplier_social_links') && supplier.socialLinks && (
                 <SupplierContactLinks socialLinks={supplier.socialLinks} className="pt-0" />
               )}
             </div>
+            )}
           </div>
 
           {/* Quick Actions */}
           <div className="flex flex-wrap items-center gap-2">
+            {isSupplierElVisible('supplier_quick_actions') && (
+              <>
             {(isStoreOwner || perms.canAddCatalogs) && (
               <button
                 onClick={() => {
@@ -962,6 +983,24 @@ export const SupplierDashboard: React.FC = () => {
                 </span>
               )}
             </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowAppearanceModal(true)}
+              data-testid="supplier-appearance-control-btn"
+              className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/35 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              title="التحكم بمظهر الصفحة وإخفاء أو إظهار العناصر"
+            >
+              <Sliders className="w-4 h-4 text-amber-400" />
+              <span>مظهر الصفحة</span>
+              {supplierAppearanceSummary.hidden > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-mono text-[10px] font-black">
+                  {supplierAppearanceSummary.hidden} مخفي
+                </span>
+              )}
+            </button>
 
             <button
               type="button"
@@ -976,7 +1015,7 @@ export const SupplierDashboard: React.FC = () => {
         </div>
 
         {/* Supplier KPIs */}
-        {(isStoreOwner || perms.canManagePlayerIdOrders || perms.canReviewCashDeposits || perms.canViewClients || perms.canUpgradeClientTiers) && (
+        {isSupplierElVisible('supplier_kpi_cards') && (isStoreOwner || perms.canManagePlayerIdOrders || perms.canReviewCashDeposits || perms.canViewClients || perms.canUpgradeClientTiers) && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-800/80 text-xs">
             {(isStoreOwner || perms.canManagePlayerIdOrders) && (
               <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800">
@@ -1035,6 +1074,7 @@ export const SupplierDashboard: React.FC = () => {
         )}
 
         {/* Store Currency Switcher & Exchange Rate Config Bar */}
+        {isSupplierElVisible('supplier_currency_bar') && (
         <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <div className="flex items-center gap-1.5 text-amber-300 font-bold">
@@ -1110,10 +1150,11 @@ export const SupplierDashboard: React.FC = () => {
             </form>
           )}
         </div>
+        )}
       </div>
 
       {/* Low-stock warning alert banner */}
-      {lowStockCount > 0 && (isStoreOwner || perms.canManageVoucherStock) && (
+      {isSupplierElVisible('supplier_low_stock_alert') && lowStockCount > 0 && (isStoreOwner || perms.canManageVoucherStock) && (
         <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-rose-950/60 via-amber-950/30 to-slate-900 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg animate-in fade-in">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -1329,7 +1370,7 @@ export const SupplierDashboard: React.FC = () => {
       {subTab === 'catalogs' && isEmployeeTabAllowed('catalogs', perms, role) && (
         <div className="space-y-6">
           {/* Executive Summary Card of Code Stock for Packages & Categories */}
-          {(isStoreOwner || perms.canManageVoucherStock) && (
+          {isSupplierElVisible('supplier_stock_summary_card') && (isStoreOwner || perms.canManageVoucherStock) && (
           <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3.5 text-xs shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
@@ -1407,6 +1448,7 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           {/* Catalogs Pills */}
+          {isSupplierElVisible('supplier_catalogs_grid') && (
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             {supplierCatalogs.map(cat => {
               const catServices = supplierServices.filter(s => s.catalogId === cat.id);
@@ -1465,6 +1507,7 @@ export const SupplierDashboard: React.FC = () => {
               );
             })}
           </div>
+          )}
 
           {/* Services with 5-tier table representation */}
           <div className="space-y-4">
@@ -3709,6 +3752,15 @@ export const SupplierDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Page Appearance & Element Visibility Modal */}
+      <AppearanceControlModal
+        isOpen={showAppearanceModal}
+        onClose={() => setShowAppearanceModal(false)}
+        portal="supplier"
+        settings={supplierAppearance}
+        onChange={(next, opts) => updateMyAppearanceSettings('supplier', next, opts)}
+      />
 
     </div>
   );

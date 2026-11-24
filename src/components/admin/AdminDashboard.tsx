@@ -56,6 +56,11 @@ import {
   Clock
 } from 'lucide-react';
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
+import { AppearanceControlModal } from '../common/AppearanceControlModal';
+import {
+  getAppearanceVisibilitySummary,
+  isPageElementVisible,
+} from '../../utils/appearanceSettings';
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -90,8 +95,15 @@ export const AdminDashboard: React.FC = () => {
     convertFromSar,
     convertToSar,
     formatCurrency,
-    logout
+    logout,
+    getMyAppearanceSettings,
+    updateMyAppearanceSettings
   } = useApp();
+
+  const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const adminAppearance = getMyAppearanceSettings('super_admin');
+  const adminAppearanceSummary = getAppearanceVisibilitySummary('super_admin', adminAppearance);
+  const isAdminElVisible = (key: string) => isPageElementVisible(adminAppearance, key);
 
   const perms = resolveEffectiveAdminPermissions(currentUser, role);
   const canViewAdminWallet = perms.canViewStatement || perms.canSettleAdminWallet;
@@ -395,7 +407,7 @@ export const AdminDashboard: React.FC = () => {
   const supplierInviteUrl = 'https://digipos.app/register-supplier?admin_token=AUTH-SUP-2026';
 
   return (
-    <div className="space-y-6">
+    <div className={adminAppearance.compactMode ? 'space-y-4' : 'space-y-6'}>
       
       {/* Top Admin Banner */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-4 sm:p-6 shadow-xl">
@@ -422,7 +434,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {perms.canManageSuppliers && (
+            {isAdminElVisible('admin_header_actions') && perms.canManageSuppliers && (
               <>
                 <button
                   onClick={() => setShowAddSupplierModal(true)}
@@ -444,6 +456,22 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               type="button"
+              onClick={() => setShowAppearanceModal(true)}
+              data-testid="admin-appearance-control-btn"
+              className="px-3.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/35 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              title="التحكم بمظهر الصفحة وإخفاء أو إظهار العناصر"
+            >
+              <Sliders className="w-3.5 h-3.5 text-purple-400" />
+              <span>مظهر الصفحة</span>
+              {adminAppearanceSummary.hidden > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full bg-purple-500 text-slate-950 font-mono text-[10px] font-black">
+                  {adminAppearanceSummary.hidden} مخفي
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={logout}
               className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
               title="تسجيل الخروج والعودة لشاشة الدخول"
@@ -455,7 +483,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* Central Wallet & Platform Stats */}
-        {(canViewAdminWallet || perms.canManageSuppliers || perms.canManageFees) && (
+        {isAdminElVisible('admin_kpi_cards') && (canViewAdminWallet || perms.canManageSuppliers || perms.canManageFees) && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-5 border-t border-slate-800/80">
             {canViewAdminWallet && (
               <div className="p-4 rounded-2xl bg-slate-950 border border-purple-500/30 space-y-1">
@@ -571,7 +599,7 @@ export const AdminDashboard: React.FC = () => {
           </button>
         )}
 
-        {perms.canClearSystemData && (
+        {isAdminElVisible('admin_reset_button') && perms.canClearSystemData && (
           <button
             type="button"
             data-testid="admin-reset-system-btn"
@@ -604,7 +632,7 @@ export const AdminDashboard: React.FC = () => {
       {adminSubTab === 'overview' && (perms.canManageSuppliers || perms.canSettleAdminWallet) && (
         <>
           {/* Admin Wallet Usage Operations */}
-          {perms.canSettleAdminWallet && (
+          {isAdminElVisible('admin_wallet_actions') && perms.canSettleAdminWallet && (
             <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -679,7 +707,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               {/* Search & Status Filters */}
-              {suppliers.length > 0 && (
+              {isAdminElVisible('admin_store_filters') && suppliers.length > 0 && (
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
                   <div className="relative flex-1">
                     <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -710,7 +738,11 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               )}
 
-              {suppliers.length === 0 ? (
+              {!isAdminElVisible('admin_stores_grid') ? (
+                <div className="p-5 rounded-2xl bg-slate-950/70 border border-slate-800 text-center text-slate-400">
+                  تم إخفاء قائمة وبطاقات المتاجر من إعدادات مظهر الصفحة. يمكنك إظهارها من زر «مظهر الصفحة» أعلى الشاشة.
+                </div>
+              ) : suppliers.length === 0 ? (
                 <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center text-slate-400">
                   لا توجد متاجر أو ممولون مسجلون حالياً. يمكنك إضافة متجر جديد من زر &quot;إضافة ممول / متجر جديد&quot;.
                 </div>
@@ -1577,6 +1609,15 @@ export const AdminDashboard: React.FC = () => {
           onClose={() => setSupervisedStoreState(null)}
         />
       )}
+
+      {/* Page Appearance & Element Visibility Modal */}
+      <AppearanceControlModal
+        isOpen={showAppearanceModal}
+        onClose={() => setShowAppearanceModal(false)}
+        portal="super_admin"
+        settings={adminAppearance}
+        onChange={(next, opts) => updateMyAppearanceSettings('super_admin', next, opts)}
+      />
 
     </div>
   );

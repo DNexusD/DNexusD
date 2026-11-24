@@ -43,8 +43,14 @@ import {
   BadgeCheck,
   Eye,
   ArrowRight,
-  XCircle
+  XCircle,
+  Sliders
 } from 'lucide-react';
+import { AppearanceControlModal } from '../common/AppearanceControlModal';
+import {
+  getAppearanceVisibilitySummary,
+  isPageElementVisible,
+} from '../../utils/appearanceSettings';
 import { QRCodeSVG } from 'qrcode.react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
@@ -113,7 +119,14 @@ export const PosDashboard: React.FC = () => {
     closeSupplierPosPreview,
     respondToPosUpgrade,
     logout,
+    getMyAppearanceSettings,
+    updateMyAppearanceSettings,
   } = useApp();
+
+  const [showAppearanceModal, setShowAppearanceModal] = useState(false);
+  const posAppearance = getMyAppearanceSettings('pos_client');
+  const posAppearanceSummary = getAppearanceVisibilitySummary('pos_client', posAppearance);
+  const isPosElVisible = (key: string) => isPageElementVisible(posAppearance, key);
 
   const [selectedCatalogId, setSelectedCatalogId] = useState<string>('all');
   const [searchService, setSearchService] = useState('');
@@ -427,7 +440,7 @@ export const PosDashboard: React.FC = () => {
   });
 
   return (
-    <div className="space-y-6">
+    <div className={posAppearance.compactMode ? 'space-y-4' : 'space-y-6'}>
 
       {/* Supplier Read-Only Accredited POS Interface Inspection Banner */}
       {isSupplierPosPreviewMode && (
@@ -512,7 +525,7 @@ export const PosDashboard: React.FC = () => {
       )}
 
       {/* Admin Global Interface Notice for POS & Clients */}
-      {platformSettings.showPosInterfaceNotice && platformSettings.posInterfaceNotice.trim() && (
+      {isPosElVisible('pos_admin_notice') && platformSettings.showPosInterfaceNotice && platformSettings.posInterfaceNotice.trim() && (
         <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/60 via-slate-900 to-slate-900 border border-cyan-500/40 flex items-start gap-3 text-xs shadow-lg">
           <div className="w-8 h-8 rounded-xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shrink-0">
             <Bell className="w-4 h-4" />
@@ -597,7 +610,7 @@ export const PosDashboard: React.FC = () => {
       )}
 
       {/* Active Special Client Features Banner (Accredited POS, Gifts, Free Offers, Loans & Bonus Privileges) */}
-      {(isAccreditedPos || canSeeGiftsInStore || currentPos.canGetBonus || currentPos.canRequestLoans) && (
+      {isPosElVisible('pos_special_features') && (isAccreditedPos || canSeeGiftsInStore || currentPos.canGetBonus || currentPos.canRequestLoans) && (
         <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-950/40 via-amber-950/30 to-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -740,33 +753,41 @@ export const PosDashboard: React.FC = () => {
               </div>
             </div>
 
+            {(isPosElVisible('pos_contact_meta') || isPosElVisible('pos_supplier_social')) && (
             <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 text-xs text-slate-400 pt-1">
-              <span className="flex items-center gap-1">
-                <Phone className="w-3.5 h-3.5 text-slate-500" />
-                <span dir="ltr">{currentPos.phone}</span>
-              </span>
-
-              {currentPos.servicePhone && (
+              {isPosElVisible('pos_contact_meta') && (
                 <>
+                  <span className="flex items-center gap-1">
+                    <Phone className="w-3.5 h-3.5 text-slate-500" />
+                    <span dir="ltr">{currentPos.phone}</span>
+                  </span>
+
+                  {currentPos.servicePhone && (
+                    <>
+                      <span>·</span>
+                      <span className="flex items-center gap-1 text-amber-300/90 bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20">
+                        <Headphones className="w-3.5 h-3.5 text-amber-400" />
+                        <span>هاتف الخدمات: <span dir="ltr" className="font-mono font-medium">{currentPos.servicePhone}</span></span>
+                      </span>
+                    </>
+                  )}
+
                   <span>·</span>
-                  <span className="flex items-center gap-1 text-amber-300/90 bg-amber-500/10 px-2 py-0.5 rounded-md border border-amber-500/20">
-                    <Headphones className="w-3.5 h-3.5 text-amber-400" />
-                    <span>هاتف الخدمات: <span dir="ltr" className="font-mono font-medium">{currentPos.servicePhone}</span></span>
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-slate-500" />
+                    <span>{currentPos.country} · {currentPos.city}</span>
+                  </span>
+                  <span>·</span>
+                  <span className="text-slate-400">
+                    المتجر التابع له: <strong className="text-amber-400">{currentPosSupplier.name} ({currentPosSupplier.storeName})</strong>
                   </span>
                 </>
               )}
-
-              <span>·</span>
-              <span className="flex items-center gap-1">
-                <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                <span>{currentPos.country} · {currentPos.city}</span>
-              </span>
-              <span>·</span>
-              <span className="text-slate-400">
-                المتجر التابع له: <strong className="text-amber-400">{currentPosSupplier.name} ({currentPosSupplier.storeName})</strong>
-              </span>
-              <SupplierContactLinks socialLinks={currentPosSupplier.socialLinks} showPrefixDot />
+              {isPosElVisible('pos_supplier_social') && (
+                <SupplierContactLinks socialLinks={currentPosSupplier.socialLinks} showPrefixDot={isPosElVisible('pos_contact_meta')} />
+              )}
             </div>
+            )}
           </div>
 
           {/* POS Code & QR Action + Tier Badge + Client Notifications & Logout */}
@@ -909,6 +930,7 @@ export const PosDashboard: React.FC = () => {
               </div>
               )}
 
+              {isPosElVisible('pos_qr_and_code') && (
               <button
                 onClick={() => setShowQrModal(true)}
                 className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors"
@@ -916,6 +938,7 @@ export const PosDashboard: React.FC = () => {
               >
                 <QrCode className="w-4 h-4 text-amber-400" />
               </button>
+              )}
 
               {!isSupplierPosPreviewMode && (
                 <button
@@ -925,6 +948,24 @@ export const PosDashboard: React.FC = () => {
                 >
                   <Edit3 className="w-3.5 h-3.5 text-amber-400" />
                   <span>تعديل البيانات</span>
+                </button>
+              )}
+
+              {!isSupplierPosPreviewMode && (
+                <button
+                  type="button"
+                  onClick={() => setShowAppearanceModal(true)}
+                  data-testid="pos-appearance-control-btn"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/35 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+                  title="التحكم بمظهر الصفحة وإخفاء أو إظهار العناصر"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                  <span>مظهر الصفحة</span>
+                  {posAppearanceSummary.hidden > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-mono text-[10px] font-black">
+                      {posAppearanceSummary.hidden} مخفي
+                    </span>
+                  )}
                 </button>
               )}
 
@@ -952,6 +993,7 @@ export const PosDashboard: React.FC = () => {
             </div>
 
             {/* POS Code: 3 letters - 5 digits */}
+            {isPosElVisible('pos_qr_and_code') && (
             <div className="flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
               <span className="text-slate-400 text-[10px]">المعرّف:</span>
               <span className="font-mono font-bold text-amber-300 tracking-wider">
@@ -969,10 +1011,12 @@ export const PosDashboard: React.FC = () => {
                 )}
               </button>
             </div>
+            )}
           </div>
         </div>
 
         {/* Wallet Balance Strip & Action Buttons */}
+        {isPosElVisible('pos_wallet_strip') && (
         <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
@@ -1014,6 +1058,7 @@ export const PosDashboard: React.FC = () => {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* Main Tab Navigation inside POS view */}
@@ -1091,8 +1136,10 @@ export const PosDashboard: React.FC = () => {
       {activeNavTab === 'store' && (
         <div className="space-y-6">
           {/* Catalogs Horizontal Selector, Free Gifts & Search */}
+          {(isPosElVisible('pos_search_box') || isPosElVisible('pos_catalog_strip')) && (
           <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3 shadow-sm">
             {/* Search Input Row */}
+            {isPosElVisible('pos_search_box') && (
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -1125,8 +1172,11 @@ export const PosDashboard: React.FC = () => {
                 <span className="font-mono tabular-nums font-bold text-amber-400">{filteredServices.length}</span>
               </div>
             </div>
+            )}
 
             {/* Catalogs Quick-Navigation Header */}
+            {isPosElVisible('pos_catalog_strip') && (
+            <>
             <div className="flex items-center justify-between gap-2 text-[11px] pt-0.5">
               <div className="flex items-center gap-1.5 font-semibold text-slate-300">
                 <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -1240,9 +1290,13 @@ export const PosDashboard: React.FC = () => {
                 )}
               </button>
             </div>
+            </>
+            )}
           </div>
+          )}
 
           {/* Tier Pricing Explainer Card */}
+          {isPosElVisible('pos_tier_explainer') && (
           <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
               <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${tier.badgeColor} ${tier.textColor}`}>
@@ -1253,6 +1307,7 @@ export const PosDashboard: React.FC = () => {
               </span>
             </div>
           </div>
+          )}
 
           {/* Services Grid */}
           <div ref={servicesGridRef} className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2073,6 +2128,17 @@ export const PosDashboard: React.FC = () => {
       {/* Edit POS Profile Modal */}
       {!isSupplierPosPreviewMode && showEditProfileModal && (
         <EditPosProfileModal onClose={() => setShowEditProfileModal(false)} />
+      )}
+
+      {/* Page Appearance & Element Visibility Modal */}
+      {!isSupplierPosPreviewMode && (
+        <AppearanceControlModal
+          isOpen={showAppearanceModal}
+          onClose={() => setShowAppearanceModal(false)}
+          portal="pos_client"
+          settings={posAppearance}
+          onChange={(next, opts) => updateMyAppearanceSettings('pos_client', next, opts)}
+        />
       )}
 
     </div>

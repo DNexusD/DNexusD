@@ -56,7 +56,8 @@
         "accreditedByName": { "type": "string" },
         "posUpgradeStatus": { "type": "string", "enum": ["none", "pending_client_approval", "approved", "declined"] },
         "posUpgradeRequestedAt": { "type": "string" },
-        "posUpgradeRespondedAt": { "type": "string" }
+        "posUpgradeRespondedAt": { "type": "string" },
+        "appearanceSettings": { "type": "object" }
       },
       "required": ["id", "posCode", "tradeName", "ownerName", "phone", "supplierId", "tier", "walletBalance"]
     },
@@ -83,7 +84,8 @@
         "employees": { "type": "array" },
         "preferredCurrency": { "type": "string", "enum": ["SAR", "USD"] },
         "exchangeRateSarPerUsd": { "type": "number" },
-        "isActive": { "type": "boolean" }
+        "isActive": { "type": "boolean" },
+        "appearanceSettings": { "type": "object" }
       },
       "required": ["id", "name", "storeName", "phone", "email", "walletBalance"]
     },
@@ -99,7 +101,8 @@
         "defaultFixedFeeAmount": { "type": "number" },
         "defaultFeeType": { "type": "string", "enum": ["percentage", "fixed", "both"] },
         "defaultFeesConfig": { "type": "object" },
-        "adminAccounts": { "type": "array" }
+        "adminAccounts": { "type": "array" },
+        "appearanceSettings": { "type": "object" }
       },
       "required": ["name", "email", "walletBalance"]
     },
