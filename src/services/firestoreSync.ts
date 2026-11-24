@@ -2,17 +2,31 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromCache,
   getDocFromServer,
   getDocs,
+  getDocsFromCache,
   getDocsFromServer,
   query,
   where,
   setDoc,
   deleteDoc,
   writeBatch,
-  DocumentReference
+  DocumentReference,
+  Query
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import {
+  db,
+  handleFirestoreError,
+  OperationType,
+  isTransientFirestoreError,
+  recoverFirestoreInstance
+} from './firebase';
+import {
+  isFirestoreCacheMissError,
+  isFirestoreInternalAssertionError,
+  isNavigatorOffline,
+} from '../utils/firestoreConnectivity';
 import {
   POSClient,
   Supplier,
@@ -49,20 +63,96 @@ function sanitizeData<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
 }
 
-async function getDocPreferServer(ref: DocumentReference) {
+async function getDocPreferServer(buildRef: () => DocumentReference) {
   try {
-    return await getDocFromServer(ref);
-  } catch {
-    return await getDoc(ref);
+    return await getDocFromServer(buildRef());
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await getDocFromServer(buildRef());
+    }
+    try {
+      return await getDocFromCache(buildRef());
+    } catch (cacheErr) {
+      if (isFirestoreCacheMissError(cacheErr)) {
+        throw err;
+      }
+      throw cacheErr;
+    }
   }
 }
 
 async function getDocsPreferServer(colName: string) {
-  const colRef = collection(db, colName);
   try {
-    return await getDocsFromServer(colRef);
-  } catch {
-    return await getDocs(colRef);
+    return await getDocsFromServer(collection(db, colName));
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await getDocsFromServer(collection(db, colName));
+    }
+    try {
+      return await getDocsFromCache(collection(db, colName));
+    } catch (cacheErr) {
+      if (isFirestoreCacheMissError(cacheErr)) {
+        throw err;
+      }
+      throw cacheErr;
+    }
+  }
+}
+
+async function getDocsQueryPreferServer(buildQuery: () => Query) {
+  try {
+    return await getDocsFromServer(buildQuery());
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await getDocsFromServer(buildQuery());
+    }
+    try {
+      return await getDocsFromCache(buildQuery());
+    } catch (cacheErr) {
+      if (isFirestoreCacheMissError(cacheErr)) {
+        throw err;
+      }
+      throw cacheErr;
+    }
+  }
+}
+
+async function safeGetDocFromServer(pathSegments: [string, string]) {
+  try {
+    return await getDocFromServer(doc(db, pathSegments[0], pathSegments[1]));
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await getDocFromServer(doc(db, pathSegments[0], pathSegments[1]));
+    }
+    throw err;
+  }
+}
+
+async function safeGetDocsFromServer(colName: string) {
+  try {
+    return await getDocsFromServer(collection(db, colName));
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await getDocsFromServer(collection(db, colName));
+    }
+    throw err;
+  }
+}
+
+async function withFirestoreRecovery<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      await recoverFirestoreInstance();
+      return await op();
+    }
+    throw err;
   }
 }
 
@@ -81,6 +171,66 @@ function mapDocsById<T extends { id?: string }>(
 }
 
 export const firestoreSync = {
+  // Authoritative server-only identity fetch for post-login & session restoration.
+  // Never relies on local memory cache so role & store routing strictly reflect Firestore state.
+  async fetchAuthoritativeIdentityDataFromFirestore(
+    email: string,
+    uid?: string
+  ): Promise<{
+    connected: boolean;
+    superAdmin: Partial<SuperAdmin> | null;
+    suppliers: Supplier[] | null;
+    posClients: POSClient[] | null;
+    userDoc: AuthUser | null;
+    error?: unknown;
+  }> {
+    const cleanEmail = normalizeStoreEmail(email);
+    try {
+      const [adminSnap, suppliersSnap, clientsSnap, uidUserSnap, emailUsersSnap] = await Promise.all([
+        safeGetDocFromServer(['system', 'superAdmin']),
+        safeGetDocsFromServer('suppliers'),
+        safeGetDocsFromServer('posClients'),
+        uid ? safeGetDocFromServer(['users', uid]).catch(() => null) : Promise.resolve(null),
+        cleanEmail
+          ? withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, 'users'), where('email', '==', cleanEmail)))
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      let userDoc: AuthUser | null = null;
+      if (uidUserSnap && uidUserSnap.exists()) {
+        userDoc = {
+          ...(uidUserSnap.data() as AuthUser),
+          id: uidUserSnap.id,
+        };
+      } else if (emailUsersSnap && !emailUsersSnap.empty) {
+        const firstDoc = emailUsersSnap.docs[0];
+        userDoc = {
+          ...(firstDoc.data() as AuthUser),
+          id: firstDoc.id,
+        };
+      }
+
+      return {
+        connected: true,
+        superAdmin: adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
+        suppliers: mapDocsById<Supplier>(suppliersSnap.docs),
+        posClients: mapDocsById<POSClient>(clientsSnap.docs),
+        userDoc,
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        superAdmin: null,
+        suppliers: null,
+        posClients: null,
+        userDoc: null,
+        error,
+      };
+    }
+  },
+
   // Lightweight one-time bootstrap for login / registration screens without opening Watch streams
   async fetchAuthBootstrapData(): Promise<{
     superAdmin?: Partial<SuperAdmin>;
@@ -96,8 +246,8 @@ export const firestoreSync = {
     } = {};
 
     const [adminRes, settingsRes, suppliersRes, clientsRes] = await Promise.allSettled([
-      getDocPreferServer(doc(db, 'system', 'superAdmin')),
-      getDocPreferServer(doc(db, 'system', 'platformSettings')),
+      getDocPreferServer(() => doc(db, 'system', 'superAdmin')),
+      getDocPreferServer(() => doc(db, 'system', 'platformSettings')),
       getDocsPreferServer('suppliers'),
       getDocsPreferServer('posClients'),
     ]);
@@ -118,38 +268,34 @@ export const firestoreSync = {
     return result;
   },
 
-  // Fetch all remote databases directly from Firestore server for full local <-> remote reconciliation
+  // Fetch all remote databases directly from Firestore server in staggered batches
+  // to avoid opening 14 concurrent Watch targets on PersistentListenStream at once.
   async fetchAllDatabasesFromServer(): Promise<FullDatabaseSnapshot> {
-    const [
-      adminSnap,
-      settingsSnap,
-      suppliersSnap,
-      posClientsSnap,
-      catalogsSnap,
-      servicesSnap,
-      voucherWarehousesSnap,
-      ordersSnap,
-      depositRequestsSnap,
-      loanRepaymentRequestsSnap,
-      supplierBankAccountsSnap,
-      accountingEntriesSnap,
-      adminAccountingEntriesSnap,
-      inviteLinksSnap,
-    ] = await Promise.all([
-      getDocFromServer(doc(db, 'system', 'superAdmin')),
-      getDocFromServer(doc(db, 'system', 'platformSettings')),
-      getDocsFromServer(collection(db, 'suppliers')),
-      getDocsFromServer(collection(db, 'posClients')),
-      getDocsFromServer(collection(db, 'catalogs')),
-      getDocsFromServer(collection(db, 'services')),
-      getDocsFromServer(collection(db, 'voucherWarehouses')),
-      getDocsFromServer(collection(db, 'orders')),
-      getDocsFromServer(collection(db, 'depositRequests')),
-      getDocsFromServer(collection(db, 'loanRepaymentRequests')),
-      getDocsFromServer(collection(db, 'supplierBankAccounts')),
-      getDocsFromServer(collection(db, 'accountingEntries')),
-      getDocsFromServer(collection(db, 'adminAccountingEntries')),
-      getDocsFromServer(collection(db, 'inviteLinks')),
+    const [adminSnap, settingsSnap, suppliersSnap, posClientsSnap] = await Promise.all([
+      safeGetDocFromServer(['system', 'superAdmin']),
+      safeGetDocFromServer(['system', 'platformSettings']),
+      safeGetDocsFromServer('suppliers'),
+      safeGetDocsFromServer('posClients'),
+    ]);
+
+    const [catalogsSnap, servicesSnap, voucherWarehousesSnap, supplierBankAccountsSnap] =
+      await Promise.all([
+        safeGetDocsFromServer('catalogs'),
+        safeGetDocsFromServer('services'),
+        safeGetDocsFromServer('voucherWarehouses'),
+        safeGetDocsFromServer('supplierBankAccounts'),
+      ]);
+
+    const [ordersSnap, depositRequestsSnap, loanRepaymentRequestsSnap] = await Promise.all([
+      safeGetDocsFromServer('orders'),
+      safeGetDocsFromServer('depositRequests'),
+      safeGetDocsFromServer('loanRepaymentRequests'),
+    ]);
+
+    const [accountingEntriesSnap, adminAccountingEntriesSnap, inviteLinksSnap] = await Promise.all([
+      safeGetDocsFromServer('accountingEntries'),
+      safeGetDocsFromServer('adminAccountingEntries'),
+      safeGetDocsFromServer('inviteLinks'),
     ]);
 
     return {
@@ -179,18 +325,16 @@ export const firestoreSync = {
     if (!supplierId) {
       return { clients: [], users: [] };
     }
-    const clientsQuery = query(
-      collection(db, 'posClients'),
-      where('supplierId', '==', supplierId)
-    );
-    const usersQuery = query(
-      collection(db, 'users'),
-      where('role', '==', 'pos_client')
-    );
 
     const [clientsSnap, usersSnap] = await Promise.all([
-      getDocsFromServer(clientsQuery),
-      getDocsFromServer(usersQuery).catch(() => null),
+      withFirestoreRecovery(() =>
+        getDocsFromServer(
+          query(collection(db, 'posClients'), where('supplierId', '==', supplierId))
+        )
+      ),
+      withFirestoreRecovery(() =>
+        getDocsFromServer(query(collection(db, 'users'), where('role', '==', 'pos_client')))
+      ).catch(() => null),
     ]);
 
     return {
@@ -207,15 +351,17 @@ export const firestoreSync = {
     let written = 0;
     for (let i = 0; i < entries.length; i += CHUNK_SIZE) {
       const chunk = entries.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      for (const entry of chunk) {
-        batch.set(
-          doc(db, entry.path[0], entry.path[1]),
-          sanitizeData(entry.data) as Record<string, unknown>,
-          { merge: true }
-        );
-      }
-      await batch.commit();
+      await withFirestoreRecovery(async () => {
+        const batch = writeBatch(db);
+        for (const entry of chunk) {
+          batch.set(
+            doc(db, entry.path[0], entry.path[1]),
+            sanitizeData(entry.data) as Record<string, unknown>,
+            { merge: true }
+          );
+        }
+        await batch.commit();
+      });
       written += chunk.length;
     }
     return written;
@@ -284,7 +430,9 @@ export const firestoreSync = {
         ...user,
         updatedAt: new Date().toISOString()
       });
-      await setDoc(doc(db, 'users', user.id), cleanUser, { merge: true });
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'users', user.id), cleanUser, { merge: true })
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
@@ -293,9 +441,18 @@ export const firestoreSync = {
   async getUser(userId: string): Promise<AuthUser | null> {
     const path = `users/${userId}`;
     try {
-      const snap = await getDocPreferServer(doc(db, 'users', userId));
+      const snap = await getDocPreferServer(() => doc(db, 'users', userId));
       return snap.exists() ? (snap.data() as AuthUser) : null;
     } catch (error) {
+      if (
+        isTransientFirestoreError(error) ||
+        isFirestoreCacheMissError(error) ||
+        isFirestoreInternalAssertionError(error) ||
+        isNavigatorOffline()
+      ) {
+        console.warn(`Transient offline/cache/assertion error fetching user ${userId}, returning null gracefully:`, error);
+        return null;
+      }
       handleFirestoreError(error, OperationType.GET, path);
       return null;
     }
@@ -305,20 +462,13 @@ export const firestoreSync = {
     const cleanEmail = normalizeStoreEmail(email);
     if (!cleanEmail) return null;
     try {
-      const qNormalized = query(collection(db, 'users'), where('email', '==', cleanEmail));
-      let snap;
-      try {
-        snap = await getDocsFromServer(qNormalized);
-      } catch {
-        snap = await getDocs(qNormalized);
-      }
+      let snap = await getDocsQueryPreferServer(() =>
+        query(collection(db, 'users'), where('email', '==', cleanEmail))
+      );
       if (snap.empty && email.trim() !== cleanEmail) {
-        const qRaw = query(collection(db, 'users'), where('email', '==', email.trim()));
-        try {
-          snap = await getDocsFromServer(qRaw);
-        } catch {
-          snap = await getDocs(qRaw);
-        }
+        snap = await getDocsQueryPreferServer(() =>
+          query(collection(db, 'users'), where('email', '==', email.trim()))
+        );
       }
       if (snap.empty) return null;
       const firstDoc = snap.docs[0];
@@ -335,13 +485,9 @@ export const firestoreSync = {
     const cleanEmail = normalizeStoreEmail(email);
     if (!cleanEmail) return [];
     try {
-      const q = query(collection(db, 'posClients'), where('email', '==', cleanEmail));
-      let snap;
-      try {
-        snap = await getDocsFromServer(q);
-      } catch {
-        snap = await getDocs(q);
-      }
+      const snap = await getDocsQueryPreferServer(() =>
+        query(collection(db, 'posClients'), where('email', '==', cleanEmail))
+      );
       return mapDocsById<POSClient>(snap.docs);
     } catch {
       return [];
@@ -351,7 +497,7 @@ export const firestoreSync = {
   async deleteUser(userId: string): Promise<void> {
     const path = `users/${userId}`;
     try {
-      await deleteDoc(doc(db, 'users', userId));
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'users', userId)));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -361,7 +507,10 @@ export const firestoreSync = {
   async savePosClient(client: POSClient): Promise<void> {
     const path = `posClients/${client.id}`;
     try {
-      await setDoc(doc(db, 'posClients', client.id), sanitizeData(client), { merge: true });
+      const cleanClient = sanitizeData(client);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'posClients', client.id), cleanClient, { merge: true })
+      );
       clearEntityPendingSync('posClients', client.id);
     } catch (error) {
       markEntityPendingSync('posClients', client.id);
@@ -369,11 +518,66 @@ export const firestoreSync = {
     }
   },
 
+  async deletePosClient(posId: string): Promise<void> {
+    const path = `posClients/${posId}`;
+    try {
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'posClients', posId)));
+      clearEntityPendingSync('posClients', posId);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  },
+
+  async deletePosClientAccountFromFirestore(
+    posId: string,
+    clientEmail?: string,
+    keepEmailUserDocs: boolean = false
+  ): Promise<void> {
+    await this.deletePosClient(posId);
+
+    // Clean up associated user profile docs so deleted client accounts cannot restore cleanly
+    try {
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'users', posId))).catch(() => {});
+
+      const assocSnap = await withFirestoreRecovery(() =>
+        getDocs(query(collection(db, 'users'), where('associatedId', '==', posId)))
+      ).catch(() => null);
+      if (assocSnap && !assocSnap.empty) {
+        await this.commitBatchDeletes(
+          assocSnap.docs.map((d) => doc(db, 'users', d.id))
+        );
+      }
+
+      const cleanEmail = normalizeStoreEmail(clientEmail);
+      if (cleanEmail && !keepEmailUserDocs) {
+        const emailSnap = await withFirestoreRecovery(() =>
+          getDocs(query(collection(db, 'users'), where('email', '==', cleanEmail)))
+        ).catch(() => null);
+        if (emailSnap && !emailSnap.empty) {
+          const refsToDelete = emailSnap.docs
+            .filter((d) => {
+              const data = d.data() as Partial<AuthUser>;
+              return !data.role || data.role === 'pos_client';
+            })
+            .map((d) => doc(db, 'users', d.id));
+          if (refsToDelete.length > 0) {
+            await this.commitBatchDeletes(refsToDelete);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Partial cleanup while deleting POS client user docs:', err);
+    }
+  },
+
   // Supplier operations
   async saveSupplier(supplier: Supplier): Promise<void> {
     const path = `suppliers/${supplier.id}`;
     try {
-      await setDoc(doc(db, 'suppliers', supplier.id), sanitizeData(supplier), { merge: true });
+      const cleanSupplier = sanitizeData(supplier);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'suppliers', supplier.id), cleanSupplier, { merge: true })
+      );
       clearEntityPendingSync('suppliers', supplier.id);
     } catch (error) {
       markEntityPendingSync('suppliers', supplier.id);
@@ -385,7 +589,10 @@ export const firestoreSync = {
   async saveSuperAdmin(admin: SuperAdmin): Promise<void> {
     const path = 'system/superAdmin';
     try {
-      await setDoc(doc(db, 'system', 'superAdmin'), sanitizeData(admin), { merge: true });
+      const cleanAdmin = sanitizeData(admin);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'system', 'superAdmin'), cleanAdmin, { merge: true })
+      );
       clearEntityPendingSync('superAdmin', 'superAdmin');
     } catch (error) {
       markEntityPendingSync('superAdmin', 'superAdmin');
@@ -397,7 +604,10 @@ export const firestoreSync = {
   async savePlatformSettings(settings: PlatformInterfaceSettings): Promise<void> {
     const path = 'system/platformSettings';
     try {
-      await setDoc(doc(db, 'system', 'platformSettings'), sanitizeData(settings), { merge: true });
+      const cleanSettings = sanitizeData(settings);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'system', 'platformSettings'), cleanSettings, { merge: true })
+      );
       clearEntityPendingSync('platformSettings', 'platformSettings');
     } catch (error) {
       markEntityPendingSync('platformSettings', 'platformSettings');
@@ -409,7 +619,10 @@ export const firestoreSync = {
   async saveOrder(order: Order): Promise<void> {
     const path = `orders/${order.id}`;
     try {
-      await setDoc(doc(db, 'orders', order.id), sanitizeData(order), { merge: true });
+      const cleanOrder = sanitizeData(order);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'orders', order.id), cleanOrder, { merge: true })
+      );
       clearEntityPendingSync('orders', order.id);
     } catch (error) {
       markEntityPendingSync('orders', order.id);
@@ -421,7 +634,10 @@ export const firestoreSync = {
   async saveDepositRequest(req: DepositRequest): Promise<void> {
     const path = `depositRequests/${req.id}`;
     try {
-      await setDoc(doc(db, 'depositRequests', req.id), sanitizeData(req), { merge: true });
+      const cleanReq = sanitizeData(req);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'depositRequests', req.id), cleanReq, { merge: true })
+      );
       clearEntityPendingSync('depositRequests', req.id);
     } catch (error) {
       markEntityPendingSync('depositRequests', req.id);
@@ -433,7 +649,10 @@ export const firestoreSync = {
   async saveLoanRepaymentRequest(req: LoanRepaymentRequest): Promise<void> {
     const path = `loanRepaymentRequests/${req.id}`;
     try {
-      await setDoc(doc(db, 'loanRepaymentRequests', req.id), sanitizeData(req), { merge: true });
+      const cleanReq = sanitizeData(req);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'loanRepaymentRequests', req.id), cleanReq, { merge: true })
+      );
       clearEntityPendingSync('loanRepaymentRequests', req.id);
     } catch (error) {
       markEntityPendingSync('loanRepaymentRequests', req.id);
@@ -445,7 +664,10 @@ export const firestoreSync = {
   async saveAccountingEntry(entry: AccountingEntry): Promise<void> {
     const path = `accountingEntries/${entry.id}`;
     try {
-      await setDoc(doc(db, 'accountingEntries', entry.id), sanitizeData(entry), { merge: true });
+      const cleanEntry = sanitizeData(entry);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'accountingEntries', entry.id), cleanEntry, { merge: true })
+      );
       clearEntityPendingSync('accountingEntries', entry.id);
     } catch (error) {
       markEntityPendingSync('accountingEntries', entry.id);
@@ -457,7 +679,10 @@ export const firestoreSync = {
   async saveAdminAccountingEntry(entry: AdminAccountingEntry): Promise<void> {
     const path = `adminAccountingEntries/${entry.id}`;
     try {
-      await setDoc(doc(db, 'adminAccountingEntries', entry.id), sanitizeData(entry), { merge: true });
+      const cleanEntry = sanitizeData(entry);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'adminAccountingEntries', entry.id), cleanEntry, { merge: true })
+      );
       clearEntityPendingSync('adminAccountingEntries', entry.id);
     } catch (error) {
       markEntityPendingSync('adminAccountingEntries', entry.id);
@@ -469,7 +694,10 @@ export const firestoreSync = {
   async saveCatalog(cat: Catalog): Promise<void> {
     const path = `catalogs/${cat.id}`;
     try {
-      await setDoc(doc(db, 'catalogs', cat.id), sanitizeData(cat), { merge: true });
+      const cleanCat = sanitizeData(cat);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'catalogs', cat.id), cleanCat, { merge: true })
+      );
       clearEntityPendingSync('catalogs', cat.id);
     } catch (error) {
       markEntityPendingSync('catalogs', cat.id);
@@ -480,7 +708,7 @@ export const firestoreSync = {
   async deleteCatalog(catalogId: string): Promise<void> {
     const path = `catalogs/${catalogId}`;
     try {
-      await deleteDoc(doc(db, 'catalogs', catalogId));
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'catalogs', catalogId)));
       clearEntityPendingSync('catalogs', catalogId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
@@ -490,7 +718,10 @@ export const firestoreSync = {
   async saveService(service: DigitalService): Promise<void> {
     const path = `services/${service.id}`;
     try {
-      await setDoc(doc(db, 'services', service.id), sanitizeData(service), { merge: true });
+      const cleanService = sanitizeData(service);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'services', service.id), cleanService, { merge: true })
+      );
       clearEntityPendingSync('services', service.id);
     } catch (error) {
       markEntityPendingSync('services', service.id);
@@ -501,7 +732,7 @@ export const firestoreSync = {
   async deleteService(serviceId: string): Promise<void> {
     const path = `services/${serviceId}`;
     try {
-      await deleteDoc(doc(db, 'services', serviceId));
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'services', serviceId)));
       clearEntityPendingSync('services', serviceId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
@@ -512,7 +743,10 @@ export const firestoreSync = {
   async saveVoucherWarehouse(warehouse: VoucherWarehouse): Promise<void> {
     const path = `voucherWarehouses/${warehouse.id}`;
     try {
-      await setDoc(doc(db, 'voucherWarehouses', warehouse.id), sanitizeData(warehouse), { merge: true });
+      const cleanWarehouse = sanitizeData(warehouse);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'voucherWarehouses', warehouse.id), cleanWarehouse, { merge: true })
+      );
       clearEntityPendingSync('voucherWarehouses', warehouse.id);
     } catch (error) {
       markEntityPendingSync('voucherWarehouses', warehouse.id);
@@ -523,7 +757,7 @@ export const firestoreSync = {
   async deleteVoucherWarehouse(warehouseId: string): Promise<void> {
     const path = `voucherWarehouses/${warehouseId}`;
     try {
-      await deleteDoc(doc(db, 'voucherWarehouses', warehouseId));
+      await withFirestoreRecovery(() => deleteDoc(doc(db, 'voucherWarehouses', warehouseId)));
       clearEntityPendingSync('voucherWarehouses', warehouseId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
@@ -534,7 +768,10 @@ export const firestoreSync = {
   async saveTransfer(transfer: BalanceTransfer): Promise<void> {
     const path = `balanceTransfers/${transfer.id}`;
     try {
-      await setDoc(doc(db, 'balanceTransfers', transfer.id), sanitizeData(transfer), { merge: true });
+      const cleanTransfer = sanitizeData(transfer);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'balanceTransfers', transfer.id), cleanTransfer, { merge: true })
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
@@ -544,7 +781,10 @@ export const firestoreSync = {
   async saveInviteLink(link: InviteLink): Promise<void> {
     const path = `inviteLinks/${link.id}`;
     try {
-      await setDoc(doc(db, 'inviteLinks', link.id), sanitizeData(link), { merge: true });
+      const cleanLink = sanitizeData(link);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'inviteLinks', link.id), cleanLink, { merge: true })
+      );
       clearEntityPendingSync('inviteLinks', link.id);
     } catch (error) {
       markEntityPendingSync('inviteLinks', link.id);
@@ -556,7 +796,10 @@ export const firestoreSync = {
   async saveSupplierBankAccount(account: SupplierBankAccount): Promise<void> {
     const path = `supplierBankAccounts/${account.id}`;
     try {
-      await setDoc(doc(db, 'supplierBankAccounts', account.id), sanitizeData(account), { merge: true });
+      const cleanAccount = sanitizeData(account);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'supplierBankAccounts', account.id), cleanAccount, { merge: true })
+      );
       clearEntityPendingSync('supplierBankAccounts', account.id);
     } catch (error) {
       markEntityPendingSync('supplierBankAccounts', account.id);
@@ -567,7 +810,9 @@ export const firestoreSync = {
   async deleteSupplierBankAccount(accountId: string): Promise<void> {
     const path = `supplierBankAccounts/${accountId}`;
     try {
-      await deleteDoc(doc(db, 'supplierBankAccounts', accountId));
+      await withFirestoreRecovery(() =>
+        deleteDoc(doc(db, 'supplierBankAccounts', accountId))
+      );
       clearEntityPendingSync('supplierBankAccounts', accountId);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
@@ -698,11 +943,13 @@ export const firestoreSync = {
     let deleted = 0;
     for (let i = 0; i < refs.length; i += CHUNK_SIZE) {
       const chunk = refs.slice(i, i + CHUNK_SIZE);
-      const batch = writeBatch(db);
-      for (const ref of chunk) {
-        batch.delete(ref);
-      }
-      await batch.commit();
+      await withFirestoreRecovery(async () => {
+        const batch = writeBatch(db);
+        for (const ref of chunk) {
+          batch.delete(doc(db, ref.path));
+        }
+        await batch.commit();
+      });
       deleted += chunk.length;
     }
     return deleted;
@@ -731,7 +978,9 @@ export const firestoreSync = {
     try {
       let remoteAdmin: Partial<SuperAdmin> | null = null;
       try {
-        const adminSnap = await getDoc(doc(db, 'system', 'superAdmin'));
+        const adminSnap = await withFirestoreRecovery(() =>
+          getDoc(doc(db, 'system', 'superAdmin'))
+        );
         if (adminSnap.exists()) {
           remoteAdmin = adminSnap.data() as Partial<SuperAdmin>;
         }
@@ -743,7 +992,7 @@ export const firestoreSync = {
 
       // 1. Delete all docs in non-admin collections
       for (const colName of FIRESTORE_COLLECTIONS_TO_CLEAR) {
-        const snap = await getDocs(collection(db, colName));
+        const snap = await withFirestoreRecovery(() => getDocs(collection(db, colName)));
         if (snap.empty) continue;
         const refs = snap.docs.map(d => doc(db, colName, d.id));
         const deletedCount = await this.commitBatchDeletes(refs);
@@ -755,7 +1004,7 @@ export const firestoreSync = {
       }
 
       // 2. Delete non-fixed catalogs (preserve admin-fixed catalogs only)
-      const catalogsSnap = await getDocs(collection(db, 'catalogs'));
+      const catalogsSnap = await withFirestoreRecovery(() => getDocs(collection(db, 'catalogs')));
       if (!catalogsSnap.empty) {
         const catalogRefsToDelete: DocumentReference[] = [];
         catalogsSnap.docs.forEach(docSnap => {
@@ -769,7 +1018,7 @@ export const firestoreSync = {
       }
 
       // 3. Delete all non-admin users while preserving Super Admin and Admin staff
-      const usersSnap = await getDocs(collection(db, 'users'));
+      const usersSnap = await withFirestoreRecovery(() => getDocs(collection(db, 'users')));
       if (!usersSnap.empty) {
         const userRefsToDelete: DocumentReference[] = [];
         usersSnap.docs.forEach(docSnap => {
@@ -791,7 +1040,9 @@ export const firestoreSync = {
         email: mergedAdmin.email,
         adminAccounts: (remoteAdmin?.adminAccounts || localSuperAdmin?.adminAccounts || []) as SuperAdmin['adminAccounts'],
       });
-      await setDoc(doc(db, 'system', 'superAdmin'), sanitizeData(sanitizedAdmin), { merge: true });
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'system', 'superAdmin'), sanitizeData(sanitizedAdmin), { merge: true })
+      );
     } catch (err) {
       console.error('Error resetting services and non-admin data in Firestore:', err);
     }
@@ -822,20 +1073,30 @@ export const firestoreSync = {
     };
   }> {
     try {
-      const markerRef = doc(db, 'system', 'cleanStateMigrationV2');
-      const markerSnap = await getDocPreferServer(markerRef);
+      const markerSnap = await getDocPreferServer(() => doc(db, 'system', 'cleanStateMigrationV2'));
       if (markerSnap.exists()) {
         return { migrated: false };
       }
 
       const summary = await this.resetServicesAndNonAdminData(localSuperAdmin);
-      await setDoc(markerRef, {
-        completedAt: new Date().toISOString(),
-        preserved: 'super_admin_and_staff',
-        summary,
-      });
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'system', 'cleanStateMigrationV2'), {
+          completedAt: new Date().toISOString(),
+          preserved: 'super_admin_and_staff',
+          summary,
+        })
+      );
       return { migrated: true, summary };
     } catch (err) {
+      if (
+        isTransientFirestoreError(err) ||
+        isFirestoreCacheMissError(err) ||
+        isFirestoreInternalAssertionError(err) ||
+        isNavigatorOffline()
+      ) {
+        console.warn('Clean state migration check deferred (offline/transient):', err);
+        return { migrated: false };
+      }
       console.error('Error running one-time clean state migration:', err);
       return { migrated: false };
     }

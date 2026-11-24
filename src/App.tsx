@@ -11,11 +11,13 @@ import { AuthScreen } from './components/auth/AuthScreen';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
 import { parsePasswordResetUrl } from './utils/passwordReset';
 import { isFirestoreInternalAssertionError } from './utils/firestoreConnectivity';
+import { recoverFirestoreInstance } from './services/firebase';
 import { SupplierContactLinks } from './components/common/SupplierContactLinks';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { SupplierSelector } from './components/auth/SupplierSelector';
 
 const MainContent: React.FC = () => {
-  const { role, activeNavTab, isAuthenticated } = useApp();
+  const { role, activeNavTab, isAuthenticated, isSupplierSelectionRequired, logout } = useApp();
   const [resetOobCode, setResetOobCode] = React.useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const parsed = parsePasswordResetUrl(window.location.search);
@@ -54,6 +56,25 @@ const MainContent: React.FC = () => {
   // If user is not authenticated, show initial login & register welcome screen
   if (!isAuthenticated) {
     return <AuthScreen initialMode={authInitialMode} />;
+  }
+
+  if (role === 'pos_client' && isSupplierSelectionRequired) {
+    return (
+      <div className="max-w-md mx-auto py-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
+          <SupplierSelector />
+          <div className="pt-2 border-t border-slate-800 flex justify-center">
+            <button
+              type="button"
+              onClick={logout}
+              className="text-xs text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
+            >
+              تسجيل الخروج والعودة لشاشة الدخول
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (activeNavTab === 'prompt_studio') {
@@ -117,7 +138,8 @@ export default function App() {
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
       if (isFirestoreInternalAssertionError(event.reason)) {
         event.preventDefault();
-        console.warn('Suppressed internal Firestore assertion error:', event.reason);
+        console.warn('Recovering from internal Firestore assertion error:', event.reason);
+        void recoverFirestoreInstance();
       }
     };
     window.addEventListener('unhandledrejection', handleUnhandledRejection);

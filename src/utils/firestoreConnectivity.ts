@@ -11,6 +11,13 @@ const TRANSIENT_CODES = new Set([
   'aborted',
 ]);
 
+const CACHE_MISS_MESSAGE_SNIPPETS = [
+  'failed to get document from cache',
+  'failed to get documents from cache',
+  'unable to get document from cache',
+  'document was not found in the cache',
+];
+
 const TRANSIENT_MESSAGE_SNIPPETS = [
   'unavailable',
   'client is offline',
@@ -24,6 +31,7 @@ const TRANSIENT_MESSAGE_SNIPPETS = [
   'load failed',
   'timeout',
   'مهلة',
+  ...CACHE_MISS_MESSAGE_SNIPPETS,
 ];
 
 export function isNavigatorOffline(nav?: { onLine?: boolean } | null): boolean {
@@ -125,6 +133,12 @@ export function classifyFirestoreConnectionError(
   };
 }
 
+export function isFirestoreCacheMissError(error: unknown): boolean {
+  const msg = extractErrorMessage(error).toLowerCase();
+  if (!msg) return false;
+  return CACHE_MISS_MESSAGE_SNIPPETS.some((snippet) => msg.includes(snippet));
+}
+
 export function isFirestoreInternalAssertionError(error: unknown): boolean {
   const msg = extractErrorMessage(error).toLowerCase();
   if (!msg) return false;
@@ -136,17 +150,36 @@ export function isFirestoreInternalAssertionError(error: unknown): boolean {
 
 /**
  * Coalesces concurrent async probe calls (e.g. boot / login / retry checks)
- * so only a single server request is in-flight at a time.
+ * so only a single server request is in-flight at a time, while expiring
+ * stale hung promises or allowing forced fresh probes after DB recovery.
  */
-export function createCoalescedProbe<T>(probeFn: () => Promise<T>): () => Promise<T> {
+export function createCoalescedProbe<T>(
+  probeFn: () => Promise<T>,
+  maxWaitMs = 15000
+): ((options?: { forceFresh?: boolean }) => Promise<T>) & { reset: () => void } {
   let inFlight: Promise<T> | null = null;
-  return () => {
-    if (!inFlight) {
-      inFlight = probeFn().finally(() => {
-        inFlight = null;
+  let startedAt = 0;
+
+  const runner = (options?: { forceFresh?: boolean }) => {
+    const now = Date.now();
+    const expired = inFlight !== null && now - startedAt > maxWaitMs;
+    if (!inFlight || expired || options?.forceFresh) {
+      startedAt = now;
+      const current = probeFn().finally(() => {
+        if (inFlight === current) {
+          inFlight = null;
+        }
       });
+      inFlight = current;
     }
     return inFlight;
   };
+
+  runner.reset = () => {
+    inFlight = null;
+    startedAt = 0;
+  };
+
+  return runner;
 }
 

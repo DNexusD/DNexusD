@@ -7,8 +7,11 @@ import {
   canSwitchToSupplier,
   checkEmailRegistrationConflict,
   evaluateEmployeeLoginEligibility,
+  evaluatePosClientLoginEligibility,
   isMasterAdminEmail,
+  isPosClientActive,
   resolveAccountIdentityByEmail,
+  resolveAuthoritativeIdentityFromFirestore,
   resolveScopedCurrentPos,
   resolveScopedSupplier,
   filterOrdersForPosClient,
@@ -434,4 +437,166 @@ test('evaluateEmployeeLoginEligibility blocks suspended stores and suspended emp
   assert.equal(builtSuspended.authUser.permissions?.canEditServicePrices, false);
   assert.equal(builtSuspended.authUser.permissions?.canViewReports, false);
 });
+
+test('resolveAuthoritativeIdentityFromFirestore resolves authoritative roles and rejects email-mismatched userDoc hijacking', () => {
+  const sup1 = makeSupplier({ id: 'sup-1', email: 'merchant1@store.sa' });
+  const sup2 = makeSupplier({
+    id: 'sup-2',
+    email: 'merchant2@store.sa',
+    employees: [makeEmployee({ id: 'emp-9', supplierId: 'sup-2', email: 'worker@store2.sa' })],
+  });
+  const posOlder = makePosClient({
+    id: 'pos-old',
+    email: 'multi@pos.sa',
+    supplierId: 'sup-1',
+    createdAt: '2026-01-01',
+  });
+  const posNewer = makePosClient({
+    id: 'pos-new',
+    email: 'multi@pos.sa',
+    supplierId: 'sup-2',
+    createdAt: '2026-02-01',
+  });
+
+  // 1. Multi-store POS client sorts deterministically and honors matching userDoc.associatedId
+  const multiIdentity = resolveAuthoritativeIdentityFromFirestore({
+    email: 'multi@pos.sa',
+    superAdmin: sampleSuperAdmin,
+    suppliers: [sup1, sup2],
+    posClients: [posOlder, posNewer],
+    userDoc: {
+      id: 'uid-multi',
+      email: 'multi@pos.sa',
+      name: 'عميل متعدد المتاجر',
+      role: 'pos_client',
+      associatedId: 'pos-old',
+    },
+  });
+  assert.equal(multiIdentity.kind, 'pos_client');
+  if (multiIdentity.kind === 'pos_client') {
+    assert.equal(multiIdentity.posRecords[0].id, 'pos-old');
+    assert.equal(multiIdentity.suppliers.length, 2);
+  }
+
+  // 2. Stale/mismatched userDoc cannot hijack an employee or client into super_admin or another store
+  const mismatchedRole = resolveAuthoritativeIdentityFromFirestore({
+    email: 'worker@store2.sa',
+    superAdmin: sampleSuperAdmin,
+    suppliers: [sup1, sup2],
+    posClients: [posOlder],
+    userDoc: {
+      id: 'uid-spoof',
+      email: 'worker@store2.sa',
+      name: 'Spoof',
+      role: 'super_admin',
+      associatedId: 'sup-1',
+    },
+  });
+  assert.equal(mismatchedRole.kind, 'employee');
+  if (mismatchedRole.kind === 'employee') {
+    assert.equal(mismatchedRole.supplier.id, 'sup-2');
+    assert.equal(mismatchedRole.employee.id, 'emp-9');
+  }
+
+  // 3. Supplier switching guard blocks selecting a POS client belonging to another merchant's store
+  const sup1User: AuthUser = {
+    id: 'sup-usr-sup-1',
+    email: 'merchant1@store.sa',
+    name: 'تاجر 1',
+    role: 'supplier',
+    associatedId: 'sup-1',
+  };
+  assert.equal(
+    canSwitchToPosClient({
+      isAuthenticated: true,
+      currentUser: sup1User,
+      targetPosId: 'pos-old',
+      posClients: [posOlder, posNewer],
+    }),
+    true
+  );
+  assert.equal(
+    canSwitchToPosClient({
+      isAuthenticated: true,
+      currentUser: sup1User,
+      targetPosId: 'pos-new',
+      posClients: [posOlder, posNewer],
+    }),
+    false
+  );
+});
+
+test('isPosClientActive and evaluatePosClientLoginEligibility block suspended clients and isolate suspended stores', () => {
+  const sup1 = makeSupplier({ id: 'sup-1', email: 'm1@store.sa' });
+  const sup2 = makeSupplier({ id: 'sup-2', email: 'm2@store.sa' });
+  const activePos = makePosClient({ id: 'pos-active', email: 'c@pos.sa', supplierId: 'sup-1', isActive: true });
+  const defaultActivePos = makePosClient({ id: 'pos-default', email: 'd@pos.sa', supplierId: 'sup-1' });
+  const suspendedPos = makePosClient({ id: 'pos-susp', email: 'c@pos.sa', supplierId: 'sup-2', isActive: false });
+
+  assert.equal(isPosClientActive(activePos), true);
+  assert.equal(isPosClientActive(defaultActivePos), true);
+  assert.equal(isPosClientActive(suspendedPos), false);
+
+  // Single suspended client is blocked
+  const blocked = evaluatePosClientLoginEligibility([suspendedPos]);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.activeRecords.length, 0);
+  assert.equal(blocked.title, 'حساب العميل موقوف');
+
+  // Multi-store client with one active and one suspended store is allowed and routes only to active store
+  const partial = evaluatePosClientLoginEligibility([suspendedPos, activePos]);
+  assert.equal(partial.allowed, true);
+  assert.deepEqual(partial.activeRecords.map((p) => p.id), ['pos-active']);
+
+  const built = buildAuthUserFromIdentity(
+    {
+      kind: 'pos_client',
+      email: 'c@pos.sa',
+      posRecords: [suspendedPos, activePos],
+      suppliers: [sup2, sup1],
+    },
+    { preferredPosId: 'pos-susp' }
+  );
+  assert.equal(built.posId, 'pos-active');
+  assert.equal(built.supplierId, 'sup-1');
+  assert.equal(built.requiresSupplierSelection, false);
+
+  const clientUser: AuthUser = {
+    id: 'u-c',
+    email: 'c@pos.sa',
+    name: 'عميل',
+    role: 'pos_client',
+    associatedId: 'pos-active',
+  };
+  assert.equal(
+    canSwitchToPosClient({
+      isAuthenticated: true,
+      currentUser: clientUser,
+      targetPosId: 'pos-susp',
+      posClients: [suspendedPos, activePos],
+    }),
+    false
+  );
+  assert.equal(
+    canSwitchToSupplier({
+      isAuthenticated: true,
+      currentUser: clientUser,
+      targetSupplierId: 'sup-2',
+      posClients: [suspendedPos, activePos],
+    }),
+    false
+  );
+  assert.equal(
+    resolveScopedCurrentPos({
+      isAuthenticated: true,
+      role: 'pos_client',
+      currentUser: clientUser,
+      currentPosId: 'pos-susp',
+      posClients: [suspendedPos, activePos],
+    }).id,
+    'pos-active'
+  );
+});
+
+
 

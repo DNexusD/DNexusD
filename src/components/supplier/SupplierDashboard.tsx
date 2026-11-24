@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
-import { AccountTier, TIERS_CONFIG, DepositRequest, Catalog, DigitalService } from '../../types';
+import { AccountTier, TIERS_CONFIG, DepositRequest, Catalog, DigitalService, POSClient } from '../../types';
+import { isPosClientActive } from '../../utils/accountAuth';
 import {
   generateStatementPdf,
   triggerPdfFileDownload,
@@ -56,7 +57,10 @@ import {
   Archive,
   Coins,
   ArrowRightLeft,
-  LogOut
+  LogOut,
+  Ban,
+  Power,
+  Trash2
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { AddServiceModal } from './AddServiceModal';
@@ -125,6 +129,8 @@ export const SupplierDashboard: React.FC = () => {
     togglePosReceiveTransfersPrivilege,
     togglePosBonusPrivilege,
     togglePosGiftsPrivilege,
+    togglePosClientActiveStatus,
+    deletePosClient,
     addCatalog,
     activeNavTab,
     setActiveNavTab,
@@ -175,6 +181,8 @@ export const SupplierDashboard: React.FC = () => {
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [grantModalClientPosId, setGrantModalClientPosId] = useState<string | undefined>(undefined);
   const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
+  const [clientPendingDelete, setClientPendingDelete] = useState<POSClient | null>(null);
+  const [isDeletingClient, setIsDeletingClient] = useState(false);
 
   const perms = useMemo(
     () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
@@ -2797,12 +2805,41 @@ export const SupplierDashboard: React.FC = () => {
             ) : (
               storeClients.map(client => {
               const currentTier = TIERS_CONFIG[client.tier] || TIERS_CONFIG.regular;
+              const clientActive = isPosClientActive(client);
 
               return (
-                <div key={client.id} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
+                <div
+                  key={client.id}
+                  className={`p-5 rounded-3xl border space-y-4 text-xs transition-colors ${
+                    clientActive
+                      ? 'bg-slate-900 border-slate-800'
+                      : 'bg-slate-900/80 border-rose-500/40'
+                  }`}
+                >
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h3 className="font-bold text-base text-white">{client.tradeName}</h3>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-base text-white">{client.tradeName}</h3>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                            clientActive
+                              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                              : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                          }`}
+                        >
+                          {clientActive ? (
+                            <>
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>نشط</span>
+                            </>
+                          ) : (
+                            <>
+                              <Ban className="w-3 h-3" />
+                              <span>موقوف</span>
+                            </>
+                          )}
+                        </span>
+                      </div>
                       <div className="text-slate-400 mt-0.5">
                         المالك: <strong className="text-slate-200">{client.ownerName}</strong> · {client.phone}
                       </div>
@@ -2811,11 +2848,18 @@ export const SupplierDashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="text-left font-mono">
+                    <div className="text-left font-mono shrink-0">
                       <span className="text-[10px] text-slate-500 block">المعرّف الرسمي</span>
                       <strong className="text-amber-300 font-bold text-xs">{client.posCode}</strong>
                     </div>
                   </div>
+
+                  {!clientActive && (
+                    <div className="px-3 py-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-[11px] flex items-center gap-2">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <span>تم إيقاف تفعيل هذا العميل مؤقتاً — ممنوع من تسجيل الدخول والشراء والتحويل.</span>
+                    </div>
+                  )}
 
                   {/* Financial stats */}
                   <div className="grid grid-cols-2 gap-2 p-3 rounded-2xl bg-slate-950 border border-slate-800">
@@ -2974,6 +3018,40 @@ export const SupplierDashboard: React.FC = () => {
                             </span>
                           </button>
                         </div>
+                      </div>
+
+                      {/* Account Status & Delete Controls */}
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          onClick={() => togglePosClientActiveStatus(client.id)}
+                          className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                            clientActive
+                              ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30'
+                              : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40'
+                          }`}
+                        >
+                          {clientActive ? (
+                            <>
+                              <Ban className="w-3.5 h-3.5" />
+                              <span>إيقاف التفعيل</span>
+                            </>
+                          ) : (
+                            <>
+                              <Power className="w-3.5 h-3.5" />
+                              <span>تفعيل الحساب</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setClientPendingDelete(client)}
+                          className="py-2 px-3 rounded-xl border bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>حذف الحساب</span>
+                        </button>
                       </div>
                     </div>
                   ) : (
@@ -3287,6 +3365,104 @@ export const SupplierDashboard: React.FC = () => {
           supplierId={supplier.id}
           supplierStoreName={supplier.storeName}
         />
+      )}
+
+      {/* Delete POS Client Confirmation Modal */}
+      {clientPendingDelete && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4"
+          dir="rtl"
+        >
+          <div className="w-full max-w-md rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl overflow-hidden text-xs">
+            <div className="p-5 border-b border-slate-800 bg-rose-500/10 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">تأكيد حذف حساب العميل نهائياً</h3>
+                <p className="text-[11px] text-rose-200 mt-0.5">
+                  سيتم إنهاء وصول العميل وحذف ملفه من المتجر فوراً.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">الاسم التجاري:</span>
+                  <strong className="text-white">{clientPendingDelete.tradeName}</strong>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">اسم العميل:</span>
+                  <strong className="text-slate-200">{clientPendingDelete.ownerName}</strong>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">المعرّف الرسمي:</span>
+                  <strong className="font-mono text-amber-300" dir="ltr">
+                    {clientPendingDelete.posCode}
+                  </strong>
+                </div>
+                {clientPendingDelete.email && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-400">البريد الإلكتروني:</span>
+                    <strong className="font-mono text-cyan-300 truncate max-w-[220px]" dir="ltr">
+                      {clientPendingDelete.email}
+                    </strong>
+                  </div>
+                )}
+              </div>
+
+              {clientPendingDelete.walletBalance > 0 && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    تنبيه: يوجد رصيد حالي في محفظة العميل قدره{' '}
+                    <strong className="font-mono text-amber-300">
+                      {formatCurrency(clientPendingDelete.walletBalance)}
+                    </strong>
+                    . تأكد من تسوية الرصيد أو استخدم خيار «إيقاف التفعيل» إذا أردت تعطيل الحساب مؤقتاً.
+                  </span>
+                </div>
+              )}
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                ملاحظة: سيتم حذف حساب العميل وصلاحية تسجيل دخوله وإلغاء أي تفويضات استلام حوالات مرتبطة به، مع الاحتفاظ بقيود وسجلات العمليات المالية التاريخية للمتجر.
+              </p>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isDeletingClient}
+                  onClick={() => setClientPendingDelete(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingClient}
+                  onClick={async () => {
+                    setIsDeletingClient(true);
+                    try {
+                      await deletePosClient(clientPendingDelete.id);
+                      setClientPendingDelete(null);
+                    } finally {
+                      setIsDeletingClient(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isDeletingClient ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  <span>تأكيد الحذف النهائي</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

@@ -13,9 +13,11 @@ import {
   Users,
   X,
   AlertCircle,
+  Ban,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AuthUser, POSClient, TIERS_CONFIG } from '../../types';
+import { isPosClientActive } from '../../utils/accountAuth';
 import { firestoreSync } from '../../services/firestoreSync';
 import {
   buildSupplierClientsComparison,
@@ -398,6 +400,8 @@ export const SupplierClientsDirectoryModal: React.FC<SupplierClientsDirectoryMod
                 const isComparison = 'inLocal' in entry;
                 const inLocal = isComparison ? entry.inLocal : entry.source === 'local';
                 const inFirebase = isComparison ? entry.inFirebase : entry.source === 'firebase';
+                const primaryRec = entry.firebaseRecord || entry.localRecord;
+                const isSuspended = Boolean(primaryRec && !isPosClientActive(primaryRec));
                 const emailKey = `${activeTab}-${entry.id}-email-${idx}`;
                 const posCodeKey = `${activeTab}-${entry.id}-posCode-${idx}`;
                 const idKey = `${activeTab}-${entry.id}-id-${idx}`;
@@ -405,14 +409,24 @@ export const SupplierClientsDirectoryModal: React.FC<SupplierClientsDirectoryMod
                 return (
                   <div
                     key={`${activeTab}-${entry.id}-${idx}`}
-                    className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 hover:border-slate-700 transition-colors"
+                    className={`p-4 rounded-2xl bg-slate-950 border space-y-3 transition-colors ${
+                      isSuspended ? 'border-rose-500/40' : 'border-slate-800 hover:border-slate-700'
+                    }`}
                   >
                     {/* Top row: name + sync badges */}
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h3 className="font-bold text-sm text-white truncate">
-                          {entry.tradeName || 'نقطة بيع بدون اسم تجاري'}
-                        </h3>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h3 className="font-bold text-sm text-white truncate">
+                            {entry.tradeName || 'نقطة بيع بدون اسم تجاري'}
+                          </h3>
+                          {isSuspended && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-bold shrink-0">
+                              <Ban className="w-2.5 h-2.5" />
+                              <span>موقوف</span>
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-400 mt-0.5 truncate">
                           العميل: <strong className="text-slate-200">{entry.ownerName || '—'}</strong>
                           {entry.phone ? ` · ${entry.phone}` : ''}

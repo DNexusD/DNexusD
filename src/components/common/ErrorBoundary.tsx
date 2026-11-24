@@ -1,5 +1,7 @@
 import React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { recoverFirestoreInstance } from '../../services/firebase';
+import { isFirestoreInternalAssertionError } from '../../utils/firestoreConnectivity';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -20,6 +22,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    if (isFirestoreInternalAssertionError(error)) {
+      return {
+        hasError: false,
+        errorMessage: '',
+      };
+    }
     return {
       hasError: true,
       errorMessage: error?.message || 'حدث خطأ غير متوقع أثناء عرض الواجهة.',
@@ -27,6 +35,13 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    if (isFirestoreInternalAssertionError(error)) {
+      console.warn('Recovering UI cleanly after internal Firestore assertion:', error);
+      void recoverFirestoreInstance().then(() => {
+        this.setState({ hasError: false, errorMessage: '' });
+      });
+      return;
+    }
     console.error('Application UI ErrorBoundary caught error:', error, errorInfo);
   }
 

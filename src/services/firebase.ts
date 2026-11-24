@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
@@ -18,10 +18,19 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import {
   getFirestore,
   initializeFirestore,
+  memoryLocalCache,
+  terminate,
+  Firestore,
   doc,
   getDocFromServer,
   enableNetwork,
   disableNetwork,
+  onSnapshot,
+  DocumentReference,
+  DocumentSnapshot,
+  Query,
+  QuerySnapshot,
+  DocumentData,
   setLogLevel
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -40,24 +49,25 @@ const app = initializeApp(firebaseConfig);
 // real permission/operation errors and connection status are still surfaced via handleFirestoreError and testConnection.
 setLogLevel('silent');
 
-// Initialize Firestore with auto-detect long-polling and ignoreUndefinedProperties
-// so WebChannel uses optimal transport and gracefully adapts behind proxies without forcing legacy XHR polling.
-function createFirestoreInstance() {
+// Initialize Firestore with forced long-polling, clean in-memory cache, and ignoreUndefinedProperties
+// to prevent proxy WebChannel Watch stream desyncs and stale persistent target state assertions (ca9 / b815).
+function createFirestoreInstance(targetApp: FirebaseApp = app): Firestore {
   try {
     return initializeFirestore(
-      app,
+      targetApp,
       {
-        experimentalAutoDetectLongPolling: true,
+        experimentalForceLongPolling: true,
+        localCache: memoryLocalCache(),
         ignoreUndefinedProperties: true
       },
       firebaseConfig.firestoreDatabaseId
     );
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    return getFirestore(targetApp, firebaseConfig.firestoreDatabaseId);
   }
 }
 
-export const db = createFirestoreInstance();
+export let db: Firestore = createFirestoreInstance(app);
 export const auth = getAuth(app);
 auth.languageCode = 'ar';
 export const functions = getFunctions(app);
@@ -74,9 +84,54 @@ export {
 };
 
 let isNetworkExplicitlyDisabled = false;
+let recoveryGeneration = 0;
+let recoveryInFlight: Promise<Firestore> | null = null;
 
-export async function enableFirestoreNetwork(force = false): Promise<void> {
-  if (!force && !isNetworkExplicitlyDisabled) return;
+type RecoveryListener = () => void;
+const recoveryListeners = new Set<RecoveryListener>();
+
+export function subscribeFirestoreRecovery(listener: RecoveryListener): () => void {
+  recoveryListeners.add(listener);
+  return () => {
+    recoveryListeners.delete(listener);
+  };
+}
+
+/**
+ * Recovers from a fatal Firestore AsyncQueue assertion (e.g., ca9 / b815) by spinning up
+ * a fresh Firestore instance on a clean secondary app handle and notifying active subscribers.
+ */
+export async function recoverFirestoreInstance(): Promise<Firestore> {
+  if (recoveryInFlight) return recoveryInFlight;
+  recoveryInFlight = (async () => {
+    const staleDb = db;
+    recoveryGeneration += 1;
+    const recoveryApp = initializeApp(firebaseConfig, `firestore-recovery-${recoveryGeneration}`);
+    const freshDb = createFirestoreInstance(recoveryApp);
+    db = freshDb;
+    isNetworkExplicitlyDisabled = false;
+    probeFirestoreServerOnce.reset();
+    try {
+      await terminate(staleDb);
+    } catch {
+      // Ignore termination errors on an already-failed AsyncQueue
+    }
+    recoveryListeners.forEach((listener) => {
+      try {
+        listener();
+      } catch {
+        // Ignore subscriber callback errors
+      }
+    });
+    return freshDb;
+  })().finally(() => {
+    recoveryInFlight = null;
+  });
+  return recoveryInFlight;
+}
+
+export async function enableFirestoreNetwork(): Promise<void> {
+  if (!isNetworkExplicitlyDisabled) return;
   isNetworkExplicitlyDisabled = false;
   try {
     await enableNetwork(db);
@@ -122,6 +177,9 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  if (isFirestoreInternalAssertionError(error)) {
+    void recoverFirestoreInstance();
+  }
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -150,16 +208,79 @@ export function handleSnapshotError(
   path: string | null,
   onTransientOffline?: () => void
 ) {
-  if (
-    isTransientFirestoreError(error) ||
-    isFirestoreInternalAssertionError(error) ||
-    isNavigatorOffline()
-  ) {
+  if (isFirestoreInternalAssertionError(error)) {
+    console.warn(`Firestore snapshot encountered internal assertion (${path || 'unknown'}), recovering instance:`, error);
+    void recoverFirestoreInstance();
+    onTransientOffline?.();
+    return;
+  }
+  if (isTransientFirestoreError(error) || isNavigatorOffline()) {
     console.warn(`Firestore snapshot paused due to transient network error (${path || 'unknown'}):`, error);
     onTransientOffline?.();
     return;
   }
   handleFirestoreError(error, operationType, path);
+}
+
+export function safeOnSnapshot<T = DocumentData>(
+  target: DocumentReference<T>,
+  onNext: (snapshot: DocumentSnapshot<T>) => void,
+  onError?: (error: unknown) => void
+): () => void;
+export function safeOnSnapshot<T = DocumentData>(
+  target: Query<T>,
+  onNext: (snapshot: QuerySnapshot<T>) => void,
+  onError?: (error: unknown) => void
+): () => void;
+export function safeOnSnapshot<T = DocumentData>(
+  target: DocumentReference<T> | Query<T>,
+  onNext: ((snapshot: DocumentSnapshot<T>) => void) | ((snapshot: QuerySnapshot<T>) => void),
+  onError?: (error: unknown) => void
+): () => void {
+  let unsub: (() => void) | null = null;
+  try {
+    unsub =
+      target instanceof DocumentReference
+        ? onSnapshot(
+            target,
+            onNext as (snapshot: DocumentSnapshot<T>) => void,
+            (err) => {
+              if (isFirestoreInternalAssertionError(err)) {
+                void recoverFirestoreInstance();
+              }
+              onError?.(err);
+            }
+          )
+        : onSnapshot(
+            target,
+            onNext as (snapshot: QuerySnapshot<T>) => void,
+            (err) => {
+              if (isFirestoreInternalAssertionError(err)) {
+                void recoverFirestoreInstance();
+              }
+              onError?.(err);
+            }
+          );
+  } catch (err) {
+    if (isFirestoreInternalAssertionError(err)) {
+      void recoverFirestoreInstance();
+      return () => {};
+    }
+    throw err;
+  }
+
+  return () => {
+    if (!unsub) return;
+    try {
+      unsub();
+    } catch (err) {
+      if (isFirestoreInternalAssertionError(err)) {
+        void recoverFirestoreInstance();
+        return;
+      }
+      throw err;
+    }
+  };
 }
 
 export interface ConnectionTestResult {
@@ -172,17 +293,7 @@ const probeFirestoreServerOnce = createCoalescedProbe(async () => {
   await getDocFromServer(doc(db, 'test', 'connection'));
 });
 
-/**
- * Validate Connection to Firestore on boot and before any login attempt
- */
-export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestResult> {
-  if (isNavigatorOffline()) {
-    return {
-      success: false,
-      message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
-    };
-  }
-
+async function runBoundedServerProbe(timeoutMs: number, forceFresh = false): Promise<number> {
   const startTime = Date.now();
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   let timerId: ReturnType<typeof setTimeout> | undefined;
@@ -194,16 +305,50 @@ export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestR
       );
     });
 
-    await Promise.race([probeFirestoreServerOnce(), timeoutPromise]);
+    await Promise.race([probeFirestoreServerOnce({ forceFresh }), timeoutPromise]);
+    return Date.now() - startTime;
+  } finally {
     if (timerId) clearTimeout(timerId);
-    const latencyMs = Date.now() - startTime;
+  }
+}
+
+/**
+ * Validate Connection to Firestore on boot and before any login attempt
+ */
+export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestResult> {
+  if (isNavigatorOffline()) {
+    return {
+      success: false,
+      message: 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.'
+    };
+  }
+
+  try {
+    const latencyMs = await runBoundedServerProbe(timeoutMs, false);
     return {
       success: true,
       latencyMs,
       message: `تم الاتصال بقاعدة بيانات Firebase بنجاح (زمن الاستجابة: ${latencyMs}ms)`
     };
   } catch (error: unknown) {
-    if (timerId) clearTimeout(timerId);
+    if (isFirestoreInternalAssertionError(error)) {
+      try {
+        await recoverFirestoreInstance();
+        const retryLatencyMs = await runBoundedServerProbe(Math.min(timeoutMs, 10000), true);
+        return {
+          success: true,
+          latencyMs: retryLatencyMs,
+          message: `تمت استعادة الاتصال بقاعدة بيانات Firebase بنجاح (زمن الاستجابة: ${retryLatencyMs}ms)`
+        };
+      } catch (retryError: unknown) {
+        console.warn("Database connection check after recovery:", retryError);
+        const retryClassified = classifyFirestoreConnectionError(retryError);
+        return {
+          success: false,
+          message: retryClassified.userMessageAr
+        };
+      }
+    }
     console.warn("Database connection check:", error);
     const classified = classifyFirestoreConnectionError(error);
     return {
@@ -214,7 +359,7 @@ export async function testConnection(timeoutMs = 15000): Promise<ConnectionTestR
 }
 
 /**
- * Explicitly re-enable Firestore network (if stalled/disconnected) and establish a live server connection.
+ * Explicitly re-enable Firestore network (only if disabled) and verify a live server connection.
  */
 export async function reconnectFirestore(timeoutMs = 12000): Promise<ConnectionTestResult> {
   if (isNavigatorOffline()) {
@@ -224,14 +369,12 @@ export async function reconnectFirestore(timeoutMs = 12000): Promise<ConnectionT
     };
   }
 
-  await enableFirestoreNetwork(true);
-  let res = await testConnection(timeoutMs);
+  await enableFirestoreNetwork();
+  const res = await testConnection(timeoutMs);
   if (res.success || isNavigatorOffline()) {
     return res;
   }
 
   await new Promise((r) => setTimeout(r, 450));
-  await enableFirestoreNetwork(true);
-  res = await testConnection(timeoutMs);
-  return res;
+  return testConnection(timeoutMs);
 }

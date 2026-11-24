@@ -1,23 +1,25 @@
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { recoverFirestoreInstance } from './services/firebase';
+import { isFirestoreInternalAssertionError } from './utils/firestoreConnectivity';
 
-// Global guard against internal Firestore SDK assertions (e.g. ID ca9, b815)
+// Global guard & auto-recovery against internal Firestore SDK assertions (e.g. ID ca9, b815)
 if (typeof window !== 'undefined') {
   window.addEventListener('unhandledrejection', (event) => {
-    const reason = event.reason;
-    const msg = reason instanceof Error ? reason.message : String(reason || '');
-    if (msg.includes('FIRESTORE') && msg.includes('INTERNAL ASSERTION FAILED')) {
+    if (isFirestoreInternalAssertionError(event.reason)) {
       event.preventDefault();
-      console.warn('Suppressed internal Firestore assertion:', msg);
+      console.warn('Recovering from internal Firestore assertion:', event.reason);
+      void recoverFirestoreInstance();
     }
   });
 
   window.addEventListener('error', (event) => {
-    const message = event.message || '';
-    if (message.includes('FIRESTORE') && message.includes('INTERNAL ASSERTION FAILED')) {
+    const targetErr = event.error ?? event.message;
+    if (isFirestoreInternalAssertionError(targetErr)) {
       event.preventDefault();
-      console.warn('Suppressed internal Firestore assertion error event:', message);
+      console.warn('Recovering from internal Firestore assertion error event:', targetErr);
+      void recoverFirestoreInstance();
     }
   });
 }

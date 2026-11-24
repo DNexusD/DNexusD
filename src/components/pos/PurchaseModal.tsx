@@ -41,6 +41,10 @@ import {
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getServiceOrCodeAvailability } from '../../utils/availabilityMessages';
 import {
+  resolveGameProfileFromPackage,
+  validatePlayerIdFormat,
+} from '../../utils/gamePackageResolver';
+import {
   GAME_LOGIN_ACCOUNT_TYPES,
   resolveGameAccountTypeLabel,
   validateAccountLoginCredentials,
@@ -102,9 +106,9 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
 
   // Method 1: Player ID inputs
   const [playerId, setPlayerId] = useState('');
-  const [idChecking, setIdChecking] = useState(false);
+  const [zoneId, setZoneId] = useState('');
   const [idVerified, setIdVerified] = useState(false);
-  const [playerNickname, setPlayerNickname] = useState('');
+  const [idVerificationError, setIdVerificationError] = useState<string | null>(null);
 
   // Method 2: Account Login inputs (submitted directly via Confirm Payment button)
   const [accountType, setAccountType] = useState('');
@@ -140,6 +144,19 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   const currentTier = currentPos.tier;
   const currentTierInfo = TIERS_CONFIG[currentTier] || TIERS_CONFIG.regular;
   const serviceCatalog = catalogs.find(c => c.id === liveService.catalogId);
+  const resolvedGameProfile = resolveGameProfileFromPackage({
+    packageName: selectedPkg?.name || '',
+    packageDescription: selectedPkg?.description || '',
+    serviceName: liveService.nameAr,
+    serviceDescription: liveService.descriptionAr,
+    catalogName: serviceCatalog?.nameAr || '',
+  });
+
+  useEffect(() => {
+    setIdVerified(false);
+    setIdVerificationError(null);
+    setZoneId('');
+  }, [selectedPkgId, selectedMethod]);
   const giftStatus = evaluateClientGiftServiceStatus({
     service: liveService,
     catalog: serviceCatalog,
@@ -189,25 +206,33 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     exchangeRateSarPerUsd: activeExchangeRate,
   });
 
-  // Handle Verify Player ID
+  // Handle local Player ID format check (without external lookup or fetching player name)
   const handleVerifyPlayerId = () => {
-    const cleanId = playerId.trim();
-    if (!cleanId) {
-      showToast({ type: 'error', title: 'تنبيه', description: 'يرجى إدخال معرف اللاعب أولاً' });
+    const validation = validatePlayerIdFormat(
+      playerId,
+      resolvedGameProfile,
+      resolvedGameProfile.requiresZoneId ? zoneId : undefined
+    );
+
+    if (!validation.valid) {
+      const errorMsg = validation.error || 'يرجى التحقق من صحة معرف اللاعب المدخل.';
+      setIdVerified(false);
+      setIdVerificationError(errorMsg);
+      showToast({
+        type: 'error',
+        title: 'تنبيه في صيغة الأيدي',
+        description: errorMsg
+      });
       return;
     }
-    setIdChecking(true);
-    setIdVerified(false);
-    setTimeout(() => {
-      setIdChecking(false);
-      setPlayerNickname('');
-      setIdVerified(true);
-      showToast({
-        type: 'success',
-        title: 'تم اعتماد معرف اللاعب',
-        description: `معرف المستلم المعتمد: ${cleanId}`
-      });
-    }, 300);
+
+    setIdVerified(true);
+    setIdVerificationError(null);
+    showToast({
+      type: 'success',
+      title: 'تم فحص الأيدي بنجاح',
+      description: 'صيغة الأيدي صحيحة وجاهزة للإرسال إلى المتجر عند الدفع.'
+    });
   };
 
   // Handle Purchase Confirmation
@@ -228,13 +253,24 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
     }
 
     // Validation before purchase
-    if (selectedMethod === 'player_id' && !idVerified) {
-      showToast({
-        type: 'error',
-        title: 'يلزم التحقق من الأيدي',
-        description: 'يرجى إدخال الأيدي والضغط على زر "تحقق من الأيدي" للتأكد من حساب المستلم قبل الشراء.'
-      });
-      return;
+    if (selectedMethod === 'player_id') {
+      const idCheck = validatePlayerIdFormat(
+        playerId,
+        resolvedGameProfile,
+        resolvedGameProfile.requiresZoneId ? zoneId : undefined
+      );
+      if (!idCheck.valid) {
+        const msg = idCheck.error || 'يرجى إدخال معرف اللاعب (الأيدي) بشكل صحيح قبل الشراء.';
+        setIdVerified(false);
+        setIdVerificationError(msg);
+        showToast({
+          type: 'error',
+          title: 'معرف اللاعب مطلوب',
+          description: msg
+        });
+        return;
+      }
+      setIdVerificationError(null);
     }
 
     if (selectedMethod === 'account_login') {
@@ -319,8 +355,12 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
         purchaseUnit: effectivePurchaseUnit,
         deliveryMethod: selectedMethod,
         deliveryDetails: {
-          playerId: selectedMethod === 'player_id' ? playerId : undefined,
-          playerNickname: selectedMethod === 'player_id' ? playerNickname : undefined,
+          playerId:
+            selectedMethod === 'player_id'
+              ? resolvedGameProfile.requiresZoneId && zoneId.trim()
+                ? `${playerId.trim()} (${zoneId.trim()})`
+                : playerId.trim()
+              : undefined,
           accountType: selectedMethod === 'account_login' ? resolveGameAccountTypeLabel(accountType, customAccountType) : undefined,
           accountEmail: selectedMethod === 'account_login' ? accountEmail.trim() : undefined,
           accountPassword: selectedMethod === 'account_login' ? accountPassword : undefined
@@ -561,9 +601,6 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       <div>
                         <div className="text-[10px] text-slate-400">معرف اللاعب (Player ID):</div>
                         <div className="font-mono text-lg font-black text-amber-300 tracking-wider select-all">{playerId}</div>
-                        {playerNickname && (
-                          <div className="text-[11px] text-emerald-400 font-semibold mt-0.5">اسم اللاعب: {playerNickname}</div>
-                        )}
                       </div>
                       <button
                         onClick={copyIdToClipboard}
@@ -714,7 +751,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 {selectedMethod === 'player_id' && (
                   <div className="flex justify-between py-1 border-b border-slate-800 text-slate-400">
                     <span>المستلم (الأيدي في اللعبة):</span>
-                    <span className="font-mono font-bold text-amber-400">{playerId} {playerNickname ? `(${playerNickname})` : ''}</span>
+                    <span className="font-mono font-bold text-amber-400">{playerId}</span>
                   </div>
                 )}
                 {selectedMethod === 'account_login' && (
@@ -1133,7 +1170,7 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 {/* METHOD 1: Instant via Player ID */}
                 {selectedMethod === 'player_id' && (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-white flex items-center gap-1.5">
                         <Gamepad2 className="w-4 h-4 text-amber-400" />
                         أدخل الأيدي الخاص بمن تريد بيع الخدمة له:
@@ -1141,43 +1178,57 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                       {idVerified && (
                         <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          تم التحقق من الأيدي
+                          تم فحص صيغة الأيدي بنجاح
                         </span>
                       )}
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px]">
+                      <span className="text-slate-400">
+                        نوع اللعبة من الباقة:{' '}
+                        <strong className="text-amber-300 font-semibold">{resolvedGameProfile.gameLabelAr}</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <input
                         type="text"
                         value={playerId}
                         onChange={e => {
                           setPlayerId(e.target.value);
                           setIdVerified(false);
+                          setIdVerificationError(null);
                         }}
-                        placeholder="مثال: 5129480192"
+                        placeholder={resolvedGameProfile.idPlaceholder}
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
                       />
+                      {resolvedGameProfile.requiresZoneId && (
+                        <input
+                          type="text"
+                          value={zoneId}
+                          onChange={e => {
+                            setZoneId(e.target.value);
+                            setIdVerified(false);
+                            setIdVerificationError(null);
+                          }}
+                          placeholder={resolvedGameProfile.zonePlaceholder || 'Zone ID'}
+                          className="sm:w-36 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
+                        />
+                      )}
                       <button
                         type="button"
                         onClick={handleVerifyPlayerId}
-                        disabled={idChecking || !playerId.trim()}
-                        className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors shrink-0"
+                        disabled={!playerId.trim()}
+                        className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shrink-0 cursor-pointer"
                       >
-                        {idChecking ? (
-                          <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>جاري التحقق...</span>
-                          </>
-                        ) : (
-                          <span>تحقق من الأيدي</span>
-                        )}
+                        <span>فحص الأيدي</span>
                       </button>
                     </div>
 
-                    {idVerified && (
-                      <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs flex items-center justify-between text-emerald-300">
-                        <span>اسم اللاعب المطابق:</span>
-                        <strong className="font-mono text-white text-sm">{playerNickname}</strong>
+                    {idVerificationError && (
+                      <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/35 text-xs text-rose-200 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                        <span>{idVerificationError}</span>
                       </div>
                     )}
                   </div>

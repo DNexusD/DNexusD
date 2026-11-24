@@ -245,6 +245,7 @@ export interface POSClient {
   pendingGiftFees?: number; // رسوم تطبيق مؤجلة من هدايا مجانية لحين شحن المحفظة (لا تظهر للعميل كمديونية)
   usedGiftServiceIds?: string[]; // معرفات خدمات الهدايا المجانية المستخدمة والمكتملة لإخفائها من واجهة العميل
   preferredCurrency?: CurrencyCode; // العملة المفضلة للعرض والتعامل (SAR / USD)
+  isActive?: boolean; // حالة تفعيل حساب العميل (يتم التحكم بها من المتجر)
 }
 
 export interface FeeConfig {

@@ -132,11 +132,14 @@ import {
   canSwitchToSupplier,
   checkEmailRegistrationConflict,
   evaluateEmployeeLoginEligibility,
+  evaluatePosClientLoginEligibility,
   filterNotificationsForPosClient,
   findPosClientsForEmail,
   isNotificationForPosClient,
+  isPosClientActive,
   mapUnregisteredFirebaseAuthLoginErrorAr,
   resolveAccountIdentityByEmail,
+  resolveAuthoritativeIdentityFromFirestore,
   resolveOrphanedAuthRecovery,
   resolveScopedCurrentPos,
   resolveScopedSupplier
@@ -149,6 +152,8 @@ import confetti from 'canvas-confetti';
 import {
   testConnection,
   reconnectFirestore,
+  subscribeFirestoreRecovery,
+  safeOnSnapshot,
   auth,
   googleProvider,
   db,
@@ -171,7 +176,7 @@ import {
   writeSyncedIdsMap
 } from '../utils/localFirestoreSync';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-import { onSnapshot, collection, doc } from 'firebase/firestore';
+import { collection, doc } from 'firebase/firestore';
 import { firestoreSync } from '../services/firestoreSync';
 
 interface ToastMessage {
@@ -398,6 +403,8 @@ interface AppContextType {
   togglePosReceiveTransfersPrivilege: (posId: string) => void;
   togglePosBonusPrivilege: (posId: string) => void;
   togglePosGiftsPrivilege: (posId: string) => void;
+  togglePosClientActiveStatus: (posId: string) => void;
+  deletePosClient: (posId: string) => Promise<{ success: boolean; error?: string }>;
   updatePosProfile: (posId: string, updates: Partial<POSClient>) => void;
   updateSupplierProfile: (supplierId: string, updates: Partial<Supplier>) => void;
   createInviteLink: (targetTier: AccountTier) => InviteLink;
@@ -607,6 +614,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lastFirestoreSyncAt, setLastFirestoreSyncAt] = useState<string | null>(null);
   const [databaseSyncMessage, setDatabaseSyncMessage] = useState<string | null>(null);
   const [isSupplierSelectionRequired, setIsSupplierSelectionRequired] = useState<boolean>(false);
+  const [firestoreRecoveryEpoch, setFirestoreRecoveryEpoch] = useState<number>(0);
+
+  useEffect(() => {
+    return subscribeFirestoreRecovery(() => {
+      setFirestoreRecoveryEpoch((epoch) => epoch + 1);
+    });
+  }, []);
 
   // Compute registered suppliers strictly belonging to the currently logged in POS client
   const availableClientSuppliers = React.useMemo(() => {
@@ -617,7 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentUser.email,
       posClients,
       currentUser.associatedId
-    );
+    ).filter(isPosClientActive);
     if (matchingPosRecords.length === 0) {
       return [];
     }
@@ -700,6 +714,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearTransientSessionCaches = () => {
+    ordersRef.current = [];
+    depositRequestsRef.current = [];
+    loanRepaymentRequestsRef.current = [];
+    accountingEntriesRef.current = [];
+    adminAccountingEntriesRef.current = [];
+    supplierBankAccountsRef.current = [];
+    voucherWarehousesRef.current = [];
+    inviteLinksRef.current = [];
+    catalogsRef.current = [];
+    servicesRef.current = [];
+    currentPosIdRef.current = '';
+    currentSupplierIdRef.current = '';
+
     setOrders([]);
     setDepositRequests([]);
     setLoanRepaymentRequests([]);
@@ -708,7 +735,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSupplierBankAccounts([]);
     setVoucherWarehouses([]);
     setInviteLinks([]);
+    setCatalogs([]);
+    setServices([]);
+    setNotifications([]);
     setActiveOtps({});
+    setCurrentPosId('');
+    setCurrentSupplierId('');
+    setIsSupplierSelectionRequired(false);
+    setRole('pos_client');
+    setActiveNavTab('store');
+    setEmployeePreferredCurrency(null);
+
     try {
       localStorage.removeItem('digipos_auth_user');
       localStorage.removeItem('digipos_orders_v2');
@@ -722,11 +759,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem('digipos_live_supplier_reply');
       localStorage.removeItem('digipos_employee_currency_v1');
       localStorage.removeItem('digipos_admin_currency_v1');
+      localStorage.removeItem('digipos_notifications_v2');
     } catch {
       // ignore
     }
   };
 
+  const authSessionEpochRef = React.useRef(0);
   const isRegisteringRef = React.useRef(false);
   const isManualAuthInProgressRef = React.useRef(false);
   const currentUserRef = React.useRef(currentUser);
@@ -1158,7 +1197,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const handleOnline = () => {
       if (!isMounted) return;
-      void ensureDatabaseConnectedAndSynced({ forceSync: true, silent: true });
+      const lastSyncMs = lastFirestoreSyncAtRef.current
+        ? new Date(lastFirestoreSyncAtRef.current).getTime()
+        : 0;
+      const shouldForce = !lastSyncMs || Date.now() - lastSyncMs > 15000;
+      void ensureDatabaseConnectedAndSynced({ forceSync: shouldForce, silent: true });
     };
 
     if (typeof window !== 'undefined') {
@@ -1178,6 +1221,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
+  const getDefaultNavTabForSession = (authUser: AuthUser, resolvedRole: UserRole): string => {
+    if (resolvedRole === 'super_admin') {
+      return getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(authUser, 'super_admin'));
+    }
+    if (resolvedRole === 'supplier') {
+      return 'catalogs';
+    }
+    if (resolvedRole === 'employee') {
+      return getFirstAllowedSupplierTab(
+        normalizeEmployeePermissions(authUser.permissions),
+        'employee'
+      );
+    }
+    return 'store';
+  };
+
+  const reconcileIdentityCollectionsFromServer = (serverData: {
+    superAdmin: Partial<SuperAdmin> | null;
+    suppliers: Supplier[] | null;
+    posClients: POSClient[] | null;
+  }) => {
+    const pendingMap = readPendingSyncMap();
+    const syncedMap = readSyncedIdsMap();
+
+    let nextSuperAdmin = superAdminRef.current;
+    if (serverData.superAdmin) {
+      const adminRec = reconcileSuperAdminWithRemote(
+        superAdminRef.current,
+        serverData.superAdmin,
+        (pendingMap.superAdmin?.length ?? 0) > 0
+      );
+      nextSuperAdmin = adminRec.merged;
+      superAdminRef.current = adminRec.merged;
+      setSuperAdmin(adminRec.merged);
+    }
+
+    let nextSuppliers = suppliersRef.current;
+    if (Array.isArray(serverData.suppliers)) {
+      const supRec = reconcileCollectionWithRemote(
+        suppliersRef.current,
+        serverData.suppliers,
+        syncedMap.suppliers,
+        pendingMap.suppliers
+      );
+      nextSuppliers = supRec.merged;
+      suppliersRef.current = supRec.merged;
+      setSuppliers(supRec.merged);
+    }
+
+    let nextPosClients = posClientsRef.current;
+    if (Array.isArray(serverData.posClients)) {
+      const posRec = reconcileCollectionWithRemote(
+        posClientsRef.current,
+        serverData.posClients,
+        syncedMap.posClients,
+        pendingMap.posClients
+      );
+      nextPosClients = posRec.merged;
+      posClientsRef.current = posRec.merged;
+      setPosClients(posRec.merged);
+    }
+
+    return {
+      superAdmin: nextSuperAdmin,
+      suppliers: nextSuppliers,
+      posClients: nextPosClients,
+    };
+  };
+
+  const applyResolvedAuthenticatedSession = (params: {
+    built: ReturnType<typeof buildAuthUserFromIdentity>;
+    epoch: number;
+    clearCachesFirst?: boolean;
+  }): boolean => {
+    if (authSessionEpochRef.current !== params.epoch) {
+      return false;
+    }
+
+    const { built } = params;
+    const prevUser = currentUserRef.current;
+    const isSameAccount =
+      Boolean(prevUser?.email) &&
+      normalizeStoreEmail(prevUser?.email) === normalizeStoreEmail(built.authUser.email) &&
+      prevUser?.role === built.role &&
+      prevUser?.associatedId === built.authUser.associatedId;
+
+    if (params.clearCachesFirst || !isSameAccount) {
+      clearTransientSessionCaches();
+    }
+
+    currentPosIdRef.current = built.posId;
+    currentSupplierIdRef.current = built.supplierId;
+    setCurrentPosId(built.posId);
+    setCurrentSupplierId(built.supplierId);
+    setIsSupplierSelectionRequired(built.requiresSupplierSelection);
+    setActiveNavTab(getDefaultNavTabForSession(built.authUser, built.role));
+    setCurrentUser(built.authUser);
+    setRole(built.role);
+    return true;
+  };
+
   // Listen to Firebase Auth state (registered once on mount)
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
@@ -1186,67 +1330,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
+      authSessionEpochRef.current += 1;
+      const myEpoch = authSessionEpochRef.current;
+
       if (fbUser) {
         void (async () => {
           const cleanEmail = normalizeStoreEmail(fbUser.email);
           if (!cleanEmail || cleanEmail === 'almekhlafiraghad2@gmail.com') {
             fbSignOut(auth).catch(console.error);
+            clearTransientSessionCaches();
             setCurrentUser(null);
+            return;
+          }
+
+          // Always resolve post-reload / auth-state identity from authoritative Firestore records
+          const authData = await firestoreSync.fetchAuthoritativeIdentityDataFromFirestore(
+            cleanEmail,
+            fbUser.uid
+          );
+
+          if (
+            authSessionEpochRef.current !== myEpoch ||
+            isRegisteringRef.current ||
+            isManualAuthInProgressRef.current
+          ) {
             return;
           }
 
           const activeExistingEmail = normalizeStoreEmail(currentUserRef.current?.email);
           const isSameActiveAccount = Boolean(activeExistingEmail && activeExistingEmail === cleanEmail);
 
-          let activeSuppliers = suppliersRef.current;
-          let activePosClients = posClientsRef.current;
-          let activeSuperAdmin = superAdminRef.current;
-
-          let userDoc: AuthUser | null = null;
-          let identity = resolveAccountIdentityByEmail(cleanEmail, {
-            superAdmin: activeSuperAdmin,
-            suppliers: activeSuppliers,
-            posClients: activePosClients,
-          });
-
-          // On reload / cold start, employee permission refresh, or email mismatch, always fetch fresh Firestore records before resolving role
-          if (
-            !isSameActiveAccount ||
-            identity.kind === 'unregistered' ||
-            identity.kind === 'employee' ||
-            activeSuppliers.length === 0
-          ) {
-            const [bootData, fetchedUser] = await Promise.all([
-              bootstrapAuthDataFromFirestore(),
-              firestoreSync.getUser(fbUser.uid).catch(() => null),
-            ]);
-            userDoc = fetchedUser;
-            if (Array.isArray(bootData.suppliers)) {
-              activeSuppliers = bootData.suppliers;
+          if (!authData.connected || authData.suppliers === null || authData.posClients === null) {
+            // If offline/unreachable during cold start, never fabricate a session from stale local state
+            if (!isSameActiveAccount) {
+              clearTransientSessionCaches();
+              setCurrentUser(null);
             }
-            if (Array.isArray(bootData.posClients)) {
-              activePosClients = bootData.posClients;
-            }
-            if (bootData.superAdmin) {
-              activeSuperAdmin = {
-                ...activeSuperAdmin,
-                ...bootData.superAdmin,
-                adminAccounts: Array.isArray(bootData.superAdmin.adminAccounts)
-                  ? bootData.superAdmin.adminAccounts
-                  : activeSuperAdmin.adminAccounts || [],
-              };
-            }
-            identity = resolveAccountIdentityByEmail(cleanEmail, {
-              superAdmin: activeSuperAdmin,
-              suppliers: activeSuppliers,
-              posClients: activePosClients,
-              linkedAssociatedId: userDoc?.associatedId,
-            });
-          }
-
-          if (isRegisteringRef.current || isManualAuthInProgressRef.current) {
             return;
           }
+
+          setIsFirestoreConnected(true);
+          const reconciled = reconcileIdentityCollectionsFromServer(authData);
+
+          // Identity resolution strictly uses live Firestore truth (`authData` + `reconciled.superAdmin`)
+          const identity = resolveAuthoritativeIdentityFromFirestore({
+            email: cleanEmail,
+            superAdmin: authData.superAdmin
+              ? {
+                  ...reconciled.superAdmin,
+                  ...authData.superAdmin,
+                  adminAccounts: Array.isArray(authData.superAdmin.adminAccounts)
+                    ? authData.superAdmin.adminAccounts
+                    : reconciled.superAdmin.adminAccounts || [],
+                }
+              : reconciled.superAdmin,
+            suppliers: authData.suppliers,
+            posClients: authData.posClients,
+            userDoc: authData.userDoc,
+          });
 
           if (identity.kind === 'sub_admin' && !identity.adminAccount.isActive) {
             fbSignOut(auth).catch(console.error);
@@ -1258,7 +1399,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (identity.kind === 'supplier' && !isSupplierActive(identity.supplier)) {
             fbSignOut(auth).catch(console.error);
             clearTransientSessionCaches();
-            setCurrentSupplierId('');
             setCurrentUser(null);
             return;
           }
@@ -1268,7 +1408,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!eligibility.allowed) {
               fbSignOut(auth).catch(console.error);
               clearTransientSessionCaches();
-              setCurrentSupplierId('');
+              setCurrentUser(null);
+              return;
+            }
+          }
+
+          if (identity.kind === 'pos_client') {
+            const clientEligibility = evaluatePosClientLoginEligibility(identity.posRecords);
+            if (!clientEligibility.allowed) {
+              fbSignOut(auth).catch(console.error);
+              clearTransientSessionCaches();
               setCurrentUser(null);
               return;
             }
@@ -1277,63 +1426,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (identity.kind === 'unregistered') {
             // Never log an unrecognized Firebase session into someone else's client or supplier account
             clearTransientSessionCaches();
-            setCurrentPosId('');
-            setCurrentSupplierId('');
             setCurrentUser(null);
             return;
           }
 
-          if (!isSameActiveAccount) {
-            clearTransientSessionCaches();
-          }
-
           const safePreferredPosId = isSameActiveAccount
-            ? (currentPosIdRef.current || userDoc?.associatedId)
-            : userDoc?.associatedId;
+            ? (currentPosIdRef.current || authData.userDoc?.associatedId)
+            : authData.userDoc?.associatedId;
 
           const built = buildAuthUserFromIdentity(identity, {
             uid: fbUser.uid,
             phone: fbUser.phoneNumber || undefined,
-            masterAdminName: activeSuperAdmin.name || fbUser.displayName || 'الإدارة العامة للمنصة',
+            masterAdminName:
+              authData.superAdmin?.name ||
+              reconciled.superAdmin.name ||
+              fbUser.displayName ||
+              'الإدارة العامة للمنصة',
             preferredPosId: safePreferredPosId,
           });
 
-          setCurrentPosId(built.posId);
-          setCurrentSupplierId(built.supplierId);
-          setIsSupplierSelectionRequired(built.requiresSupplierSelection);
-
-          if (built.role === 'super_admin') {
-            setActiveNavTab(
-              getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(built.authUser, 'super_admin'))
-            );
-          } else if (built.role === 'supplier') {
-            setActiveNavTab('catalogs');
-          } else if (built.role === 'employee') {
-            setActiveNavTab(
-              getFirstAllowedSupplierTab(
-                normalizeEmployeePermissions(built.authUser.permissions),
-                'employee'
-              )
-            );
-          } else {
-            setActiveNavTab('store');
-          }
-
-          setCurrentUser(built.authUser);
-          setRole(built.role);
+          applyResolvedAuthenticatedSession({
+            built,
+            epoch: myEpoch,
+            clearCachesFirst: !isSameActiveAccount,
+          });
         })();
       } else {
-        // Preserve OTP / password-based sessions for employees, sub-admins, and local clients
+        // Preserve active synthetic non-Firebase-Auth sessions (sub-admins, employees, admin-created suppliers)
         setCurrentUser(prev => {
           if (
             prev &&
-            (prev.id.startsWith('usr-') ||
+            (prev.id === 'usr-master-admin' ||
               prev.id.startsWith('emp-') ||
               prev.id.startsWith('adm-') ||
-              prev.id.startsWith('sup-usr-') ||
-              prev.id.startsWith('pos-usr-'))
+              prev.id.startsWith('sup-usr-'))
           ) {
             return prev;
+          }
+          if (prev) {
+            clearTransientSessionCaches();
           }
           return null;
         });
@@ -1342,28 +1473,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubAuth();
   }, []);
 
-  // Lightweight one-time metadata bootstrap while unauthenticated (avoids opening 11 Watch streams before login)
+  // Lightweight one-time metadata bootstrap while unauthenticated (skips if boot sync already ran)
   useEffect(() => {
-    if (!isFirestoreConnected || isAuthenticated) return;
+    if (!isFirestoreConnected || isAuthenticated || lastFirestoreSyncAtRef.current) return;
     void bootstrapAuthDataFromFirestore();
   }, [isFirestoreConnected, isAuthenticated]);
 
-  // Real-time synchronization from Firestore (attached once per authenticated session)
+  // Real-time synchronization from Firestore (role-scoped and staggered to prevent Watch target churn)
   useEffect(() => {
     if (!isAuthenticated) return;
 
+    let isEffectActive = true;
+    const secondaryUnsubs: Array<() => void> = [];
+
     const handleTransientOffline = () => {
+      if (!isEffectActive) return;
       setIsFirestoreConnected(false);
     };
 
     const markConnectedIfLive = (fromCache: boolean) => {
-      if (!fromCache) {
-        setIsFirestoreConnected(prev => (prev ? prev : true));
-      }
+      if (!isEffectActive || fromCache) return;
+      setIsFirestoreConnected(prev => (prev ? prev : true));
     };
 
     // 1. Orders live sync
-    const unsubOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
+    const unsubOrders = safeOnSnapshot(collection(db, 'orders'), (snapshot) => {
+      if (!isEffectActive) return;
       markConnectedIfLive(snapshot.metadata.fromCache);
       const remoteOrders: Order[] = [];
       snapshot.forEach(docSnap => {
@@ -1378,7 +1513,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 2. Deposit Requests & Loans live sync
-    const unsubDeposits = onSnapshot(collection(db, 'depositRequests'), (snapshot) => {
+    const unsubDeposits = safeOnSnapshot(collection(db, 'depositRequests'), (snapshot) => {
+      if (!isEffectActive) return;
       const remoteDeps: DepositRequest[] = [];
       snapshot.forEach(docSnap => {
         remoteDeps.push(docSnap.data() as DepositRequest);
@@ -1392,7 +1528,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 3. POS Clients live sync (Deduplicated by ID)
-    const unsubClients = onSnapshot(collection(db, 'posClients'), (snapshot) => {
+    const unsubClients = safeOnSnapshot(collection(db, 'posClients'), (snapshot) => {
+      if (!isEffectActive) return;
       const clientMap = new Map<string, POSClient>();
       snapshot.forEach(docSnap => {
         const client = docSnap.data() as POSClient;
@@ -1410,10 +1547,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           syncedClients,
           activeUser.associatedId
         );
-        if (ownRecords.length === 0) {
-          setCurrentPosId('');
-        } else if (!ownRecords.some(p => p.id === currentPosIdRef.current)) {
-          setCurrentPosId(ownRecords[0].id);
+        const activeOwnRecords = ownRecords.filter(isPosClientActive);
+        if (activeOwnRecords.length === 0) {
+          if (!snapshot.metadata.fromCache) {
+            authSessionEpochRef.current += 1;
+            fbSignOut(auth).catch(console.error);
+            clearTransientSessionCaches();
+            setCurrentUser(null);
+            showToast({
+              type: 'error',
+              title: ownRecords.length === 0 ? 'تم حذف حساب العميل' : 'تم إيقاف تفعيل الحساب',
+              description:
+                ownRecords.length === 0
+                  ? 'تم حذف حسابك من قِبل المتجر ولم يعد متاحاً للوصول.'
+                  : 'تم إيقاف تفعيل حسابك لدى المتجر مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
+            });
+          }
+        } else {
+          const matchedRecord = activeOwnRecords.find(p => p.id === currentPosIdRef.current);
+          const targetRecord = matchedRecord || activeOwnRecords[0];
+          if (currentPosIdRef.current !== targetRecord.id) {
+            currentPosIdRef.current = targetRecord.id;
+            setCurrentPosId(targetRecord.id);
+          }
+          if (targetRecord.supplierId && currentSupplierIdRef.current !== targetRecord.supplierId) {
+            currentSupplierIdRef.current = targetRecord.supplierId;
+            setCurrentSupplierId(targetRecord.supplierId);
+          }
         }
       }
     }, (err) => {
@@ -1421,7 +1581,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 4. Suppliers live sync (Deduplicated by ID) + Live Employee Permission Sync
-    const unsubSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
+    const unsubSuppliers = safeOnSnapshot(collection(db, 'suppliers'), (snapshot) => {
+      if (!isEffectActive) return;
       const supMap = new Map<string, Supplier>();
       snapshot.forEach(docSnap => {
         const sup = docSnap.data() as Supplier;
@@ -1432,7 +1593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const syncedSuppliers = Array.from(supMap.values());
       setSuppliers(syncedSuppliers);
 
-      if (syncedSuppliers.length > 0) {
+      if (syncedSuppliers.length > 0 && !snapshot.metadata.fromCache) {
         const prevUser = currentUserRef.current;
         if (prevUser) {
           const cleanPrevEmail = normalizeStoreEmail(prevUser.email);
@@ -1444,20 +1605,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   (!s.email || normalizeStoreEmail(s.email) === cleanPrevEmail))
             );
             if (ownerSup && isSupplierActive(ownerSup)) {
-              setCurrentSupplierId(ownerSup.id);
-              setCurrentUser(curr =>
-                curr
-                  ? {
-                      ...curr,
-                      name: ownerSup.name,
-                      associatedId: ownerSup.id,
-                    }
-                  : curr
-              );
+              if (currentSupplierIdRef.current !== ownerSup.id) {
+                currentSupplierIdRef.current = ownerSup.id;
+                setCurrentSupplierId(ownerSup.id);
+              }
+              if (currentPosIdRef.current) {
+                currentPosIdRef.current = '';
+                setCurrentPosId('');
+              }
+              setCurrentUser(curr => {
+                if (!curr) return curr;
+                if (curr.name === ownerSup.name && curr.associatedId === ownerSup.id) {
+                  return curr;
+                }
+                return {
+                  ...curr,
+                  name: ownerSup.name,
+                  associatedId: ownerSup.id,
+                };
+              });
             } else {
               // Store removed, suspended, or email reassigned -> revoke stale store session
+              authSessionEpochRef.current += 1;
+              fbSignOut(auth).catch(console.error);
               clearTransientSessionCaches();
-              setCurrentSupplierId('');
               setCurrentUser(null);
             }
           } else if (prevUser.role === 'employee') {
@@ -1465,12 +1636,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               s => s.id === (prevUser.supplierId || prevUser.associatedId)
             );
             if (!targetSup || !isSupplierActive(targetSup)) {
+              authSessionEpochRef.current += 1;
+              fbSignOut(auth).catch(console.error);
               clearTransientSessionCaches();
-              setCurrentSupplierId('');
               setCurrentUser(null);
             } else if (normalizeStoreEmail(targetSup.email) === cleanPrevEmail) {
               // If email now belongs to store owner, upgrade to store owner
+              currentPosIdRef.current = '';
+              currentSupplierIdRef.current = targetSup.id;
+              setCurrentPosId('');
               setRole('supplier');
+              setActiveNavTab('catalogs');
               setCurrentSupplierId(targetSup.id);
               setCurrentUser(curr =>
                 curr
@@ -1494,26 +1670,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               );
               if (!syncedEmp || !isEmployeeActive(syncedEmp)) {
                 // Employee removed or suspended by store owner -> revoke session immediately
+                authSessionEpochRef.current += 1;
+                fbSignOut(auth).catch(console.error);
                 clearTransientSessionCaches();
-                setCurrentSupplierId('');
                 setCurrentUser(null);
               } else {
-                setCurrentSupplierId(targetSup.id);
-                setCurrentUser(curr =>
-                  curr
-                    ? {
-                        ...curr,
-                        name: syncedEmp.name,
-                        email: normalizeStoreEmail(syncedEmp.email),
-                        phone: syncedEmp.phone,
-                        associatedId: targetSup.id,
-                        supplierId: targetSup.id,
-                        employeeId: syncedEmp.id,
-                        roleTitle: syncedEmp.roleTitle,
-                        permissions: normalizeEmployeePermissions(syncedEmp.permissions),
-                      }
-                    : curr
-                );
+                if (currentSupplierIdRef.current !== targetSup.id) {
+                  currentSupplierIdRef.current = targetSup.id;
+                  setCurrentSupplierId(targetSup.id);
+                }
+                if (currentPosIdRef.current) {
+                  currentPosIdRef.current = '';
+                  setCurrentPosId('');
+                }
+                const nextPerms = normalizeEmployeePermissions(syncedEmp.permissions);
+                const nextEmail = normalizeStoreEmail(syncedEmp.email);
+                setCurrentUser(curr => {
+                  if (!curr) return curr;
+                  if (
+                    curr.name === syncedEmp.name &&
+                    curr.email === nextEmail &&
+                    curr.phone === syncedEmp.phone &&
+                    curr.associatedId === targetSup.id &&
+                    curr.supplierId === targetSup.id &&
+                    curr.employeeId === syncedEmp.id &&
+                    curr.roleTitle === syncedEmp.roleTitle &&
+                    JSON.stringify(curr.permissions) === JSON.stringify(nextPerms)
+                  ) {
+                    return curr;
+                  }
+                  return {
+                    ...curr,
+                    name: syncedEmp.name,
+                    email: nextEmail,
+                    phone: syncedEmp.phone,
+                    associatedId: targetSup.id,
+                    supplierId: targetSup.id,
+                    employeeId: syncedEmp.id,
+                    roleTitle: syncedEmp.roleTitle,
+                    permissions: nextPerms,
+                  };
+                });
               }
             }
           }
@@ -1523,36 +1720,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.LIST, 'suppliers', handleTransientOffline);
     });
 
-    // 5. Loan Repayment Requests live sync
-    const unsubLoanRepayments = onSnapshot(collection(db, 'loanRepaymentRequests'), (snapshot) => {
-      const remoteReqs: LoanRepaymentRequest[] = [];
-      snapshot.forEach(docSnap => {
-        remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
-      });
-      remoteReqs.sort(
-        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
-      );
-      setLoanRepaymentRequests(remoteReqs);
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'loanRepaymentRequests', handleTransientOffline);
-    });
-
-    // 6. Supplier Bank Accounts live sync
-    const unsubBankAccounts = onSnapshot(collection(db, 'supplierBankAccounts'), (snapshot) => {
-      const accMap = new Map<string, SupplierBankAccount>();
-      snapshot.forEach(docSnap => {
-        const acc = docSnap.data() as SupplierBankAccount;
-        if (acc && acc.id) {
-          accMap.set(acc.id, acc);
-        }
-      });
-      setSupplierBankAccounts(Array.from(accMap.values()));
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'supplierBankAccounts', handleTransientOffline);
-    });
-
-    // 7. Catalogs live sync
-    const unsubCatalogs = onSnapshot(collection(db, 'catalogs'), (snapshot) => {
+    // 5. Catalogs live sync
+    const unsubCatalogs = safeOnSnapshot(collection(db, 'catalogs'), (snapshot) => {
+      if (!isEffectActive) return;
       const catMap = new Map<string, Catalog>();
       snapshot.forEach(docSnap => {
         const cat = docSnap.data() as Catalog;
@@ -1565,8 +1735,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.LIST, 'catalogs', handleTransientOffline);
     });
 
-    // 8. Services live sync
-    const unsubServices = onSnapshot(collection(db, 'services'), (snapshot) => {
+    // 6. Services live sync
+    const unsubServices = safeOnSnapshot(collection(db, 'services'), (snapshot) => {
+      if (!isEffectActive) return;
       markConnectedIfLive(snapshot.metadata.fromCache);
       const srvMap = new Map<string, DigitalService>();
       snapshot.forEach(docSnap => {
@@ -1580,22 +1751,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.LIST, 'services', handleTransientOffline);
     });
 
-    // 8b. Voucher Warehouses live sync
-    const unsubWarehouses = onSnapshot(collection(db, 'voucherWarehouses'), (snapshot) => {
-      const whMap = new Map<string, VoucherWarehouse>();
-      snapshot.forEach(docSnap => {
-        const wh = docSnap.data() as VoucherWarehouse;
-        if (wh && wh.id) {
-          whMap.set(wh.id, wh);
-        }
-      });
-      setVoucherWarehouses(Array.from(whMap.values()));
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'voucherWarehouses', handleTransientOffline);
-    });
-
-    // 9. Platform Interface Settings live sync
-    const unsubPlatformSettings = onSnapshot(doc(db, 'system', 'platformSettings'), (docSnap) => {
+    // 7. Platform Interface Settings live sync
+    const unsubPlatformSettings = safeOnSnapshot(doc(db, 'system', 'platformSettings'), (docSnap) => {
+      if (!isEffectActive) return;
       if (docSnap.exists()) {
         setPlatformSettings(mergePlatformSettings(docSnap.data() as Partial<PlatformInterfaceSettings>));
       }
@@ -1603,8 +1761,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(err, OperationType.GET, 'system/platformSettings', handleTransientOffline);
     });
 
-    // 10. Super Admin & Admin Accounts live sync
-    const unsubSuperAdmin = onSnapshot(doc(db, 'system', 'superAdmin'), (docSnap) => {
+    // 8. Super Admin & Admin Accounts live sync
+    const unsubSuperAdmin = safeOnSnapshot(doc(db, 'system', 'superAdmin'), (docSnap) => {
+      if (!isEffectActive) return;
       markConnectedIfLive(docSnap.metadata.fromCache);
       if (docSnap.exists()) {
         const remoteAdmin = docSnap.data() as Partial<SuperAdmin>;
@@ -1616,114 +1775,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             : (prev.adminAccounts || [])
         }));
 
-        if (Array.isArray(remoteAdmin.adminAccounts)) {
-          setCurrentUser(prevUser => {
-            if (!prevUser?.adminAccountId) return prevUser;
-            const syncedAcc = remoteAdmin.adminAccounts?.find(a => a.id === prevUser.adminAccountId);
+        if (!docSnap.metadata.fromCache && Array.isArray(remoteAdmin.adminAccounts)) {
+          const activeUser = currentUserRef.current;
+          if (activeUser?.adminAccountId) {
+            const syncedAcc = remoteAdmin.adminAccounts?.find(a => a.id === activeUser.adminAccountId);
             if (!syncedAcc || !syncedAcc.isActive) {
-              return null;
+              authSessionEpochRef.current += 1;
+              fbSignOut(auth).catch(console.error);
+              clearTransientSessionCaches();
+              setCurrentUser(null);
+            } else {
+              setCurrentUser(prevUser => {
+                if (!prevUser?.adminAccountId) return prevUser;
+                if (
+                  prevUser.name === syncedAcc.name &&
+                  prevUser.email === syncedAcc.email &&
+                  prevUser.phone === syncedAcc.phone &&
+                  prevUser.roleTitle === syncedAcc.roleTitle &&
+                  JSON.stringify(prevUser.adminPermissions) === JSON.stringify(syncedAcc.permissions)
+                ) {
+                  return prevUser;
+                }
+                return {
+                  ...prevUser,
+                  name: syncedAcc.name,
+                  email: syncedAcc.email,
+                  phone: syncedAcc.phone,
+                  roleTitle: syncedAcc.roleTitle,
+                  adminPermissions: syncedAcc.permissions
+                };
+              });
             }
-            return {
-              ...prevUser,
-              name: syncedAcc.name,
-              email: syncedAcc.email,
-              phone: syncedAcc.phone,
-              roleTitle: syncedAcc.roleTitle,
-              adminPermissions: syncedAcc.permissions
-            };
-          });
+          }
         }
       }
     }, (err) => {
       handleSnapshotError(err, OperationType.GET, 'system/superAdmin', handleTransientOffline);
     });
 
-    // 11. Accounting Entries live sync
-    const unsubAccounting = onSnapshot(collection(db, 'accountingEntries'), (snapshot) => {
-      const entryMap = new Map<string, AccountingEntry>();
-      snapshot.forEach(docSnap => {
-        const entry = docSnap.data() as AccountingEntry;
-        if (entry && entry.id) {
-          entryMap.set(entry.id, entry);
-        }
-      });
-      const syncedEntries = Array.from(entryMap.values()).sort(
-        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
-      );
-      setAccountingEntries(syncedEntries);
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'accountingEntries', handleTransientOffline);
-    });
+    // Stagger secondary & role-scoped listeners slightly so Watch target registrations never burst simultaneously
+    const secondaryTimer = setTimeout(() => {
+      if (!isEffectActive) return;
 
-    // 12. Admin Accounting Entries live sync
-    const unsubAdminAccounting = onSnapshot(collection(db, 'adminAccountingEntries'), (snapshot) => {
-      const admMap = new Map<string, AdminAccountingEntry>();
-      snapshot.forEach(docSnap => {
-        const entry = docSnap.data() as AdminAccountingEntry;
-        if (entry && entry.id) {
-          admMap.set(entry.id, entry);
-        }
-      });
-      const syncedAdmEntries = Array.from(admMap.values()).sort(
-        (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+      // 9. Loan Repayment Requests live sync (all roles)
+      secondaryUnsubs.push(
+        safeOnSnapshot(collection(db, 'loanRepaymentRequests'), (snapshot) => {
+          if (!isEffectActive) return;
+          const remoteReqs: LoanRepaymentRequest[] = [];
+          snapshot.forEach(docSnap => {
+            remoteReqs.push(docSnap.data() as LoanRepaymentRequest);
+          });
+          remoteReqs.sort(
+            (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+          );
+          setLoanRepaymentRequests(remoteReqs);
+        }, (err) => {
+          handleSnapshotError(err, OperationType.LIST, 'loanRepaymentRequests', handleTransientOffline);
+        })
       );
-      setAdminAccountingEntries(syncedAdmEntries);
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'adminAccountingEntries', handleTransientOffline);
-    });
 
-    // 13. Invite Links live sync
-    const unsubInvites = onSnapshot(collection(db, 'inviteLinks'), (snapshot) => {
-      const invMap = new Map<string, InviteLink>();
-      snapshot.forEach(docSnap => {
-        const inv = docSnap.data() as InviteLink;
-        if (inv && inv.id) {
-          invMap.set(inv.id, inv);
-        }
-      });
-      setInviteLinks(Array.from(invMap.values()));
-    }, (err) => {
-      handleSnapshotError(err, OperationType.LIST, 'inviteLinks', handleTransientOffline);
-    });
+      // 10. Supplier Bank Accounts live sync (all roles)
+      secondaryUnsubs.push(
+        safeOnSnapshot(collection(db, 'supplierBankAccounts'), (snapshot) => {
+          if (!isEffectActive) return;
+          const accMap = new Map<string, SupplierBankAccount>();
+          snapshot.forEach(docSnap => {
+            const acc = docSnap.data() as SupplierBankAccount;
+            if (acc && acc.id) {
+              accMap.set(acc.id, acc);
+            }
+          });
+          setSupplierBankAccounts(Array.from(accMap.values()));
+        }, (err) => {
+          handleSnapshotError(err, OperationType.LIST, 'supplierBankAccounts', handleTransientOffline);
+        })
+      );
+
+      if (role === 'supplier' || role === 'employee' || role === 'super_admin') {
+        // 11. Voucher Warehouses live sync (supplier / employee / super_admin only)
+        secondaryUnsubs.push(
+          safeOnSnapshot(collection(db, 'voucherWarehouses'), (snapshot) => {
+            if (!isEffectActive) return;
+            const whMap = new Map<string, VoucherWarehouse>();
+            snapshot.forEach(docSnap => {
+              const wh = docSnap.data() as VoucherWarehouse;
+              if (wh && wh.id) {
+                whMap.set(wh.id, wh);
+              }
+            });
+            setVoucherWarehouses(Array.from(whMap.values()));
+          }, (err) => {
+            handleSnapshotError(err, OperationType.LIST, 'voucherWarehouses', handleTransientOffline);
+          })
+        );
+
+        // 12. Accounting Entries live sync (supplier / employee / super_admin only)
+        secondaryUnsubs.push(
+          safeOnSnapshot(collection(db, 'accountingEntries'), (snapshot) => {
+            if (!isEffectActive) return;
+            const entryMap = new Map<string, AccountingEntry>();
+            snapshot.forEach(docSnap => {
+              const entry = docSnap.data() as AccountingEntry;
+              if (entry && entry.id) {
+                entryMap.set(entry.id, entry);
+              }
+            });
+            const syncedEntries = Array.from(entryMap.values()).sort(
+              (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+            );
+            setAccountingEntries(syncedEntries);
+          }, (err) => {
+            handleSnapshotError(err, OperationType.LIST, 'accountingEntries', handleTransientOffline);
+          })
+        );
+
+        // 13. Invite Links live sync (supplier / employee / super_admin only)
+        secondaryUnsubs.push(
+          safeOnSnapshot(collection(db, 'inviteLinks'), (snapshot) => {
+            if (!isEffectActive) return;
+            const invMap = new Map<string, InviteLink>();
+            snapshot.forEach(docSnap => {
+              const inv = docSnap.data() as InviteLink;
+              if (inv && inv.id) {
+                invMap.set(inv.id, inv);
+              }
+            });
+            setInviteLinks(Array.from(invMap.values()));
+          }, (err) => {
+            handleSnapshotError(err, OperationType.LIST, 'inviteLinks', handleTransientOffline);
+          })
+        );
+      }
+
+      if (role === 'super_admin') {
+        // 14. Admin Accounting Entries live sync (super_admin only)
+        secondaryUnsubs.push(
+          safeOnSnapshot(collection(db, 'adminAccountingEntries'), (snapshot) => {
+            if (!isEffectActive) return;
+            const admMap = new Map<string, AdminAccountingEntry>();
+            snapshot.forEach(docSnap => {
+              const entry = docSnap.data() as AdminAccountingEntry;
+              if (entry && entry.id) {
+                admMap.set(entry.id, entry);
+              }
+            });
+            const syncedAdmEntries = Array.from(admMap.values()).sort(
+              (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+            );
+            setAdminAccountingEntries(syncedAdmEntries);
+          }, (err) => {
+            handleSnapshotError(err, OperationType.LIST, 'adminAccountingEntries', handleTransientOffline);
+          })
+        );
+      }
+    }, 150);
 
     return () => {
+      isEffectActive = false;
+      clearTimeout(secondaryTimer);
       unsubOrders();
       unsubDeposits();
       unsubClients();
       unsubSuppliers();
-      unsubLoanRepayments();
-      unsubBankAccounts();
       unsubCatalogs();
       unsubServices();
-      unsubWarehouses();
       unsubPlatformSettings();
       unsubSuperAdmin();
-      unsubAccounting();
-      unsubAdminAccounting();
-      unsubInvites();
+      secondaryUnsubs.forEach(unsub => unsub());
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, role, firestoreRecoveryEpoch]);
 
-  // Sync auth user to local storage (or keep purely in memory/Firebase Auth)
+  // Never rely on localStorage temporary auth snapshot to restore or determine role/store identity
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('digipos_auth_user', JSON.stringify(currentUser));
-    } else {
+    try {
       localStorage.removeItem('digipos_auth_user');
+    } catch {
+      // ignore
     }
   }, [currentUser]);
 
   // Google Login via Firebase Popup
   const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    authSessionEpochRef.current += 1;
+    const myEpoch = authSessionEpochRef.current;
     isManualAuthInProgressRef.current = true;
     try {
       const res = await signInWithPopup(auth, googleProvider);
-      if (!isFirestoreConnected || !lastFirestoreSyncAtRef.current) {
-        await ensureDatabaseConnectedAndSynced({
-          forceSync: !isFirestoreConnected,
-          silent: true,
-        }).catch(() => {});
-      }
       const fbUser = res.user;
       const cleanEmail = normalizeStoreEmail(fbUser.email);
       const displayName = fbUser.displayName || 'مستخدم Google';
@@ -1738,31 +1975,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'تعذر الحصول على البريد الإلكتروني من حساب جوجل.' };
       }
 
-      let activeSuppliers = suppliersRef.current;
-      let activePosClients = posClientsRef.current;
-      let activeSuperAdmin = superAdminRef.current;
-
-      const bootData = await bootstrapAuthDataFromFirestore();
-      if (bootData.suppliers && bootData.suppliers.length > 0) {
-        activeSuppliers = bootData.suppliers;
-      }
-      if (bootData.posClients && bootData.posClients.length > 0) {
-        activePosClients = bootData.posClients;
-      }
-      if (bootData.superAdmin) {
-        activeSuperAdmin = {
-          ...activeSuperAdmin,
-          ...bootData.superAdmin,
-          adminAccounts: Array.isArray(bootData.superAdmin.adminAccounts)
-            ? bootData.superAdmin.adminAccounts
-            : activeSuperAdmin.adminAccounts || [],
-        };
+      const conn = await reconnectFirestore(12000);
+      setIsFirestoreConnected(conn.success);
+      if (!conn.success) {
+        await fbSignOut(auth).catch(() => {});
+        const errMsg = conn.message || 'تعذر الاتصال بقاعدة بيانات Firestore للتحقق من هوية الحساب.';
+        showToast({
+          type: 'error',
+          title: 'تعذر التحقق من قاعدة البيانات',
+          description: errMsg,
+        });
+        return { success: false, error: errMsg };
       }
 
-      let identity = resolveAccountIdentityByEmail(cleanEmail, {
-        superAdmin: activeSuperAdmin,
-        suppliers: activeSuppliers,
-        posClients: activePosClients,
+      const authData = await firestoreSync.fetchAuthoritativeIdentityDataFromFirestore(
+        cleanEmail,
+        fbUser.uid
+      );
+      if (!authData.connected || authData.suppliers === null || authData.posClients === null) {
+        await fbSignOut(auth).catch(() => {});
+        const errMsg = 'تعذر جلب بيانات الحساب الموثقة من قاعدة بيانات Firestore. يرجى المحاولة مجدداً.';
+        showToast({
+          type: 'error',
+          title: 'تعذر قراءة بيانات الحساب',
+          description: errMsg,
+        });
+        return { success: false, error: errMsg };
+      }
+
+      if (authSessionEpochRef.current !== myEpoch) {
+        return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
+      }
+
+      const reconciled = reconcileIdentityCollectionsFromServer(authData);
+      const authoritativeSuperAdmin = authData.superAdmin
+        ? {
+            ...reconciled.superAdmin,
+            ...authData.superAdmin,
+            adminAccounts: Array.isArray(authData.superAdmin.adminAccounts)
+              ? authData.superAdmin.adminAccounts
+              : reconciled.superAdmin.adminAccounts || [],
+          }
+        : reconciled.superAdmin;
+
+      let identity = resolveAuthoritativeIdentityFromFirestore({
+        email: cleanEmail,
+        superAdmin: authoritativeSuperAdmin,
+        suppliers: authData.suppliers,
+        posClients: authData.posClients,
+        userDoc: authData.userDoc,
       });
 
       if (identity.kind === 'sub_admin' && !identity.adminAccount.isActive) {
@@ -1798,8 +2059,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
+      if (identity.kind === 'pos_client') {
+        const clientEligibility = evaluatePosClientLoginEligibility(identity.posRecords);
+        if (!clientEligibility.allowed) {
+          await fbSignOut(auth).catch(() => {});
+          showToast({
+            type: 'error',
+            title: clientEligibility.title || 'حساب العميل موقوف',
+            description: clientEligibility.error
+          });
+          return { success: false, error: clientEligibility.error };
+        }
+      }
+
       if (identity.kind === 'unregistered') {
-        const defaultSupId = activeSuppliers[0]?.id || '';
+        const activeSupList = authData.suppliers.filter(s => isSupplierActive(s));
+        const defaultSupId = activeSupList[0]?.id || authData.suppliers[0]?.id || '';
         const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
         const newPos: POSClient = {
           id: `pos-fb-${fbUser.uid.slice(0, 8)}`,
@@ -1825,40 +2100,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           kind: 'pos_client',
           email: cleanEmail,
           posRecords: [newPos],
-          suppliers: activeSuppliers.filter(s => s.id === defaultSupId),
+          suppliers: authData.suppliers.filter(s => s.id === defaultSupId),
         };
       }
 
       const built = buildAuthUserFromIdentity(identity, {
         uid: fbUser.uid,
         phone: fbUser.phoneNumber || undefined,
-        masterAdminName: activeSuperAdmin.name || displayName,
+        masterAdminName: authoritativeSuperAdmin.name || displayName,
+        preferredPosId: authData.userDoc?.associatedId,
       });
 
-      clearTransientSessionCaches();
-      setCurrentPosId(built.posId);
-      setCurrentSupplierId(built.supplierId);
-      setIsSupplierSelectionRequired(built.requiresSupplierSelection);
-
-      if (built.role === 'super_admin') {
-        setActiveNavTab(
-          getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(built.authUser, 'super_admin'))
-        );
-      } else if (built.role === 'supplier') {
-        setActiveNavTab('catalogs');
-      } else if (built.role === 'employee') {
-        setActiveNavTab(
-          getFirstAllowedSupplierTab(
-            normalizeEmployeePermissions(built.authUser.permissions),
-            'employee'
-          )
-        );
-      } else {
-        setActiveNavTab('store');
+      const applied = applyResolvedAuthenticatedSession({
+        built,
+        epoch: myEpoch,
+        clearCachesFirst: true,
+      });
+      if (!applied) {
+        return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
       }
 
-      setCurrentUser(built.authUser);
-      setRole(built.role);
       firestoreSync.saveUser(built.authUser).catch(console.error);
 
       if (built.role !== 'pos_client') {
@@ -2054,13 +2315,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' };
     }
 
-    // 1. Verify and restore database connectivity + sync local rules/data with Firebase before auth
-    const syncRes = await ensureDatabaseConnectedAndSynced({
-      forceSync: !isFirestoreConnected || !lastFirestoreSyncAtRef.current,
-      silent: true,
-    });
-    if (!syncRes.connected) {
-      const connErr = syncRes.message || 'تعذر إتمام الاتصال بقاعدة بيانات Firebase. يرجى التحقق من الشبكة والمحاولة مجدداً.';
+    // 1. Verify and restore database connectivity before reading authoritative identity from Firestore
+    if (isNavigatorOffline()) {
+      setIsFirestoreConnected(false);
+      const offlineErr = 'الجهاز غير متصل بشبكة الإنترنت حالياً. يرجى التحقق من الشبكة والمحاولة مجدداً.';
+      showToast({
+        type: 'error',
+        title: 'لا يوجد اتصال بالإنترنت',
+        description: offlineErr,
+      });
+      return { success: false, error: offlineErr };
+    }
+
+    const conn = await reconnectFirestore(12000);
+    setIsFirestoreConnected(conn.success);
+    if (!conn.success) {
+      const connErr = conn.message || 'تعذر إتمام الاتصال بقاعدة بيانات Firebase. يرجى التحقق من الشبكة والمحاولة مجدداً.';
       showToast({
         type: 'error',
         title: 'تعذر الاتصال بقاعدة البيانات',
@@ -2090,37 +2360,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    authSessionEpochRef.current += 1;
+    const myEpoch = authSessionEpochRef.current;
     isManualAuthInProgressRef.current = true;
     try {
-      // 3. Use freshly reconciled account records (or fetch auth bootstrap if partial)
-      let activeSuppliers = suppliersRef.current;
-      let activeSuperAdmin = superAdminRef.current;
-      let activePosClients = posClientsRef.current;
-
-      if (!syncRes.synced) {
-        const bootData = await bootstrapAuthDataFromFirestore();
-        if (bootData.suppliers && bootData.suppliers.length > 0) {
-          activeSuppliers = bootData.suppliers;
-        }
-        if (bootData.superAdmin) {
-          activeSuperAdmin = {
-            ...activeSuperAdmin,
-            ...bootData.superAdmin,
-            adminAccounts: Array.isArray(bootData.superAdmin.adminAccounts)
-              ? bootData.superAdmin.adminAccounts
-              : activeSuperAdmin.adminAccounts || [],
-          };
-        }
-        if (bootData.posClients && bootData.posClients.length > 0) {
-          activePosClients = bootData.posClients;
-        }
+      // 3. Always fetch fresh authoritative identity records directly from Firestore server
+      const authData = await firestoreSync.fetchAuthoritativeIdentityDataFromFirestore(cleanEmail);
+      if (!authData.connected || authData.suppliers === null || authData.posClients === null) {
+        const fetchErr = 'تعذر جلب بيانات الحساب الموثقة من قاعدة بيانات Firestore. يرجى المحاولة مجدداً.';
+        showToast({
+          type: 'error',
+          title: 'تعذر التحقق من قاعدة البيانات',
+          description: fetchErr,
+        });
+        return { success: false, error: fetchErr };
       }
 
-      // 4. Resolve exact account identity by email (NO substring role escalation, NO fallback to another person's account)
-      let identity = resolveAccountIdentityByEmail(cleanEmail, {
+      if (authSessionEpochRef.current !== myEpoch) {
+        return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
+      }
+
+      const reconciled = reconcileIdentityCollectionsFromServer(authData);
+      const activeSuppliers = authData.suppliers;
+      const activePosClients = authData.posClients;
+      const activeSuperAdmin = authData.superAdmin
+        ? {
+            ...reconciled.superAdmin,
+            ...authData.superAdmin,
+            adminAccounts: Array.isArray(authData.superAdmin.adminAccounts)
+              ? authData.superAdmin.adminAccounts
+              : reconciled.superAdmin.adminAccounts || [],
+          }
+        : reconciled.superAdmin;
+
+      // 4. Resolve exact account identity from Firestore records (never stale cache/state)
+      let resolvedUserDoc = authData.userDoc;
+      let identity = resolveAuthoritativeIdentityFromFirestore({
+        email: cleanEmail,
         superAdmin: activeSuperAdmin,
         suppliers: activeSuppliers,
         posClients: activePosClients,
+        userDoc: resolvedUserDoc,
       });
 
       let verifiedUid: string | undefined;
@@ -2136,10 +2416,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (authFallbackCred) {
           verifiedUid = authFallbackCred.user.uid;
-          const [userDoc, existingClients] = await Promise.all([
+          const [uidUserDoc, emailUserDoc, existingClients] = await Promise.all([
+            firestoreSync.getUser(verifiedUid).catch(() => null),
             firestoreSync.findUserByEmail(cleanEmail).catch(() => null),
             firestoreSync.findPosClientsByEmail(cleanEmail).catch(() => []),
           ]);
+          resolvedUserDoc = uidUserDoc || emailUserDoc || resolvedUserDoc;
           const allKnownClients = [...existingClients, ...activePosClients];
 
           const recovery = resolveOrphanedAuthRecovery({
@@ -2147,7 +2429,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             uid: verifiedUid,
             displayName: authFallbackCred.user.displayName,
             phone: authFallbackCred.user.phoneNumber,
-            userDoc,
+            userDoc: resolvedUserDoc,
             existingClients: allKnownClients,
             suppliers: activeSuppliers,
             superAdmin: activeSuperAdmin,
@@ -2166,6 +2448,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setSuppliers(prev => [recovery.supplier, ...prev.filter(s => s.id !== recovery.supplier.id)]);
             identity = { kind: 'supplier', email: cleanEmail, supplier: recovery.supplier };
           } else if (recovery.action === 'restore_pos_client') {
+            if (!isPosClientActive(recovery.posClient)) {
+              await fbSignOut(auth).catch(() => {});
+              showToast({
+                type: 'error',
+                title: 'حساب العميل موقوف',
+                description:
+                  'تم إيقاف تفعيل حسابك لدى المتجر مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
+              });
+              return {
+                success: false,
+                error:
+                  'تم إيقاف تفعيل حسابك لدى المتجر مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
+              };
+            }
             await firestoreSync.savePosClient(recovery.posClient);
             setPosClients(prev => [recovery.posClient, ...prev.filter(p => p.id !== recovery.posClient.id)]);
             identity = {
@@ -2321,7 +2617,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         }
       } else {
-        // pos_client: strictly verify password via Firebase Auth
+        // pos_client: strictly verify password via Firebase Auth before checking suspension
         try {
           const cred = await signInWithEmailAndPassword(auth, cleanEmail, enteredPassword);
           verifiedUid = cred.user.uid;
@@ -2336,16 +2632,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             error: 'كلمة المرور المدخلة غير صحيحة. يرجى إعادة إدخالها والمحاولة مجدداً.'
           };
         }
+
+        const clientEligibility = evaluatePosClientLoginEligibility(
+          identity.kind === 'pos_client' ? identity.posRecords : []
+        );
+        if (!clientEligibility.allowed) {
+          await fbSignOut(auth).catch(() => {});
+          showToast({
+            type: 'error',
+            title: clientEligibility.title || 'حساب العميل موقوف',
+            description: clientEligibility.error
+          });
+          return {
+            success: false,
+            error: clientEligibility.error
+          };
+        }
       }
 
-      // 5. Build scoped session exclusively for the resolved account
+      if (verifiedUid && resolvedUserDoc?.id !== verifiedUid) {
+        const uidUserDoc = await firestoreSync.getUser(verifiedUid).catch(() => null);
+        if (uidUserDoc) {
+          resolvedUserDoc = uidUserDoc;
+        }
+      }
+
+      // 5. Build scoped session exclusively from the Firestore-resolved account
       const built = buildAuthUserFromIdentity(identity, {
         uid: verifiedUid,
         masterAdminName: activeSuperAdmin.name,
+        preferredPosId: resolvedUserDoc?.associatedId,
       });
 
-      // Clear any residual session state/caches from a prior user before activating the verified session
-      clearTransientSessionCaches();
+      const applied = applyResolvedAuthenticatedSession({
+        built,
+        epoch: myEpoch,
+        clearCachesFirst: true,
+      });
+      if (!applied) {
+        return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
+      }
 
       // Clear used OTP (single-use constraint)
       if (storedOtp) {
@@ -2356,29 +2682,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
-      setCurrentPosId(built.posId);
-      setCurrentSupplierId(built.supplierId);
-      setIsSupplierSelectionRequired(built.requiresSupplierSelection);
-
-      if (built.role === 'super_admin') {
-        setActiveNavTab(
-          getFirstAllowedAdminTab(resolveEffectiveAdminPermissions(built.authUser, 'super_admin'))
-        );
-      } else if (built.role === 'supplier') {
-        setActiveNavTab('catalogs');
-      } else if (built.role === 'employee') {
-        setActiveNavTab(
-          getFirstAllowedSupplierTab(
-            normalizeEmployeePermissions(built.authUser.permissions),
-            'employee'
-          )
-        );
-      } else {
-        setActiveNavTab('store');
-      }
-
-      setCurrentUser(built.authUser);
-      setRole(built.role);
       firestoreSync.saveUser(built.authUser).catch(console.error);
 
       if (built.role !== 'pos_client') {
@@ -2692,14 +2995,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    authSessionEpochRef.current += 1;
     fbSignOut(auth).catch(console.error);
     clearTransientSessionCaches();
     setCurrentUser(null);
-    setCurrentPosId('');
-    setCurrentSupplierId('');
-    setRole('pos_client');
-    setIsSupplierSelectionRequired(false);
-    setActiveNavTab('store');
     showToast({
       type: 'info',
       title: 'تم تسجيل الخروج',
@@ -3480,6 +3779,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Transfer balance between POS clients via Code or QR
   const executeBalanceTransfer = async (params: { targetPosCode: string; amount: number }) => {
+    if (!isPosClientActive(currentPos)) {
+      showToast({
+        type: 'error',
+        title: 'حسابك موقوف مؤقتاً',
+        description: 'تم إيقاف تفعيل حسابك لدى المتجر ولا يمكنك إجراء تحويلات مالية حالياً.'
+      });
+      return { success: false, error: 'sender_suspended' };
+    }
+
     const { targetPosCode, amount } = params;
     const target = posClients.find(p => p.posCode.trim().toUpperCase() === targetPosCode.trim().toUpperCase());
     
@@ -3490,6 +3798,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         description: `لم يتم العثور على نقطة بيع بهذا المعرف (${targetPosCode}). تأكد من صيغة المعرف (مثال: RYD-10492).`
       });
       return { success: false, error: 'target_not_found' };
+    }
+
+    if (!isPosClientActive(target)) {
+      showToast({
+        type: 'error',
+        title: 'حساب المستلم موقوف',
+        description: `حساب نقطة البيع (${target.tradeName}) موقوف مؤقتاً من قِبل المتجر ولا يمكن التحويل إليه حالياً.`
+      });
+      return { success: false, error: 'target_suspended' };
     }
 
     if (target.id === currentPos.id) {
@@ -5978,6 +6295,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const togglePosClientActiveStatus = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تفعيل أو إيقاف حسابات العملاء.')) return;
+    const targetClient = posClientsRef.current.find(p => p.id === posId);
+    if (!targetClient) return;
+
+    if (role !== 'super_admin' && targetClient.supplierId !== supplier.id) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية مرفوضة',
+        description: 'لا يمكنك تعديل حالة تفعيل عميل لا ينتمي لهذا المتجر.'
+      });
+      return;
+    }
+
+    const nextActive = !isPosClientActive(targetClient);
+    const updatedClient: POSClient = { ...targetClient, isActive: nextActive };
+    const nextClients = posClientsRef.current.map(p => (p.id === posId ? updatedClient : p));
+    posClientsRef.current = nextClients;
+    setPosClients(nextClients);
+    firestoreSync.savePosClient(updatedClient).catch(console.error);
+
+    addNotification({
+      posId,
+      supplierId: targetClient.supplierId || supplier.id,
+      supplierName: supplier.name,
+      title: nextActive ? 'تم إعادة تفعيل حسابك لدى المتجر' : 'تم إيقاف تفعيل حسابك مؤقتاً',
+      message: nextActive
+        ? 'قام المتجر بإعادة تفعيل حسابك ويمكنك الآن تسجيل الدخول وإجراء الطلبات بشكل طبيعي.'
+        : 'قام المتجر بإيقاف تفعيل حسابك مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: nextActive ? 'success' : 'info',
+      title: nextActive ? 'تم تفعيل حساب العميل بنجاح' : 'تم إيقاف تفعيل حساب العميل',
+      description: nextActive
+        ? `أصبح حساب العميل (${updatedClient.tradeName}) نشطاً ويمكنه تسجيل الدخول والشراء الآن.`
+        : `تم إيقاف تفعيل حساب العميل (${updatedClient.tradeName}) ولن يتمكن من الدخول أو الشراء لدى المتجر حتى إعادة التفعيل.`
+    });
+  };
+
+  const deletePosClient = async (posId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية حذف حسابات العملاء.')) {
+      return { success: false, error: 'ليس لديك صلاحية حذف حسابات العملاء.' };
+    }
+    const targetClient = posClientsRef.current.find(p => p.id === posId);
+    if (!targetClient) {
+      return { success: false, error: 'لم يتم العثور على حساب العميل المطلوب.' };
+    }
+    if (role !== 'super_admin' && targetClient.supplierId !== supplier.id) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية مرفوضة',
+        description: 'لا يمكنك حذف عميل لا ينتمي لهذا المتجر.'
+      });
+      return { success: false, error: 'لا يمكنك حذف عميل لا ينتمي لهذا المتجر.' };
+    }
+
+    const remainingClients = posClientsRef.current.filter(p => p.id !== posId);
+    posClientsRef.current = remainingClients;
+    setPosClients(remainingClients);
+
+    // Clear any store bank transfer delegations pointing to the deleted POS client
+    const affectedAccounts = supplierBankAccountsRef.current.filter(acc => acc.delegatedPosId === posId);
+    if (affectedAccounts.length > 0) {
+      const nextAccounts = supplierBankAccountsRef.current.map(acc => {
+        if (acc.delegatedPosId !== posId) return acc;
+        const updatedAcc: SupplierBankAccount = {
+          ...acc,
+          delegatedPosId: undefined,
+          canReceiveSupplierTransfers: false,
+          holderType: acc.delegatedEmployeeId ? 'employee' : 'supplier',
+        };
+        firestoreSync.saveSupplierBankAccount(updatedAcc).catch(console.error);
+        return updatedAcc;
+      });
+      supplierBankAccountsRef.current = nextAccounts;
+      setSupplierBankAccounts(nextAccounts);
+    }
+
+    const cleanEmail = normalizeStoreEmail(targetClient.email);
+    const hasRemainingPosWithEmail = Boolean(
+      cleanEmail && remainingClients.some(p => normalizeStoreEmail(p.email) === cleanEmail)
+    );
+    const hasStoreOrAdminWithEmail = Boolean(
+      cleanEmail &&
+        (normalizeStoreEmail(superAdminRef.current.email) === cleanEmail ||
+          MASTER_ADMIN_EMAILS.some(e => normalizeStoreEmail(e) === cleanEmail) ||
+          (superAdminRef.current.adminAccounts || []).some(a => normalizeStoreEmail(a.email) === cleanEmail) ||
+          suppliersRef.current.some(
+            s =>
+              normalizeStoreEmail(s.email) === cleanEmail ||
+              (s.employees || []).some(emp => normalizeStoreEmail(emp.email) === cleanEmail)
+          ))
+    );
+    const keepEmailUserDocs = hasRemainingPosWithEmail || hasStoreOrAdminWithEmail;
+
+    try {
+      await firestoreSync.deletePosClientAccountFromFirestore(posId, targetClient.email, keepEmailUserDocs);
+      showToast({
+        type: 'success',
+        title: 'تم حذف حساب العميل نهائياً',
+        description: `تم حذف حساب العميل (${targetClient.tradeName} - ${targetClient.posCode}) وإزالة صلاحية دخوله مع الإبقاء على السجلات المالية التاريخية للمتجر.`
+      });
+      return { success: true };
+    } catch (err) {
+      console.error('Failed to delete POS client from Firestore:', err);
+      showToast({
+        type: 'info',
+        title: 'تم حذف العميل محلياً',
+        description: `تمت إزالة العميل (${targetClient.tradeName}) محلياً، وتعذر حذف سجله من الخادم حالياً.`
+      });
+      return { success: true };
+    }
+  };
+
   // Update POS client profile details (logo, tradeName, ownerName, email, phone, servicePhone, country, city)
   const updatePosProfile = (posId: string, updates: Partial<POSClient>) => {
     const targetClient = posClients.find(p => p.id === posId) || currentPos;
@@ -7697,7 +8130,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ) {
       return;
     }
+    currentPosIdRef.current = id;
     setCurrentPosId(id);
+
+    if (isAuthenticated && currentUser?.role === 'pos_client') {
+      const targetPos = posClients.find(p => p.id === id);
+      if (targetPos?.supplierId && currentSupplierIdRef.current !== targetPos.supplierId) {
+        currentSupplierIdRef.current = targetPos.supplierId;
+        setCurrentSupplierId(targetPos.supplierId);
+      }
+    }
   };
 
   const guardedSetCurrentSupplierId = (id: string) => {
@@ -7711,7 +8153,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ) {
       return;
     }
+    currentSupplierIdRef.current = id;
     setCurrentSupplierId(id);
+
+    if (isAuthenticated && currentUser?.role === 'pos_client') {
+      const ownRecords = findPosClientsForEmail(
+        currentUser.email,
+        posClients,
+        currentUser.associatedId
+      );
+      const matchingPos = ownRecords.find(p => p.supplierId === id);
+      if (matchingPos && currentPosIdRef.current !== matchingPos.id) {
+        currentPosIdRef.current = matchingPos.id;
+        setCurrentPosId(matchingPos.id);
+      }
+    }
   };
 
   return (
@@ -7813,6 +8269,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         togglePosReceiveTransfersPrivilege,
         togglePosBonusPrivilege,
         togglePosGiftsPrivilege,
+        togglePosClientActiveStatus,
+        deletePosClient,
         updatePosProfile,
         updateSupplierProfile,
         createInviteLink,

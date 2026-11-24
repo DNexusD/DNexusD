@@ -70,6 +70,39 @@ export function isMasterAdminEmail(
   return Boolean(cleanConfigured && cleanEmail === cleanConfigured);
 }
 
+export function isPosClientActive(
+  client?: Pick<POSClient, 'isActive'> | null
+): boolean {
+  return client?.isActive !== false;
+}
+
+export function evaluatePosClientLoginEligibility(
+  posRecords: POSClient[]
+): {
+  allowed: boolean;
+  activeRecords: POSClient[];
+  title?: string;
+  error?: string;
+} {
+  if (!Array.isArray(posRecords) || posRecords.length === 0) {
+    return { allowed: false, activeRecords: [] };
+  }
+  const activeRecords = posRecords.filter(isPosClientActive);
+  if (activeRecords.length === 0) {
+    return {
+      allowed: false,
+      activeRecords: [],
+      title: 'حساب العميل موقوف',
+      error:
+        'تم إيقاف تفعيل حسابك لدى المتجر مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
+    };
+  }
+  return {
+    allowed: true,
+    activeRecords,
+  };
+}
+
 export function findAdminAccountByEmail(
   email: string,
   adminAccounts: AdminAccount[] = []
@@ -77,6 +110,25 @@ export function findAdminAccountByEmail(
   const cleanEmail = normalizeStoreEmail(email);
   if (!cleanEmail) return undefined;
   return adminAccounts.find((acc) => normalizeStoreEmail(acc.email) === cleanEmail);
+}
+
+export function sortPosRecordsDeterministically(
+  records: POSClient[],
+  preferredPosId?: string
+): POSClient[] {
+  if (!Array.isArray(records) || records.length <= 1) return [...(records || [])];
+  const cleanPreferred = (preferredPosId || '').trim();
+  return [...records].sort((a, b) => {
+    if (cleanPreferred) {
+      if (a.id === cleanPreferred && b.id !== cleanPreferred) return -1;
+      if (b.id === cleanPreferred && a.id !== cleanPreferred) return 1;
+    }
+    const dateDiff =
+      (new Date(b.createdAt || 0).getTime() || 0) -
+      (new Date(a.createdAt || 0).getTime() || 0);
+    if (dateDiff !== 0) return dateDiff;
+    return (a.id || '').localeCompare(b.id || '');
+  });
 }
 
 export function findPosClientsForEmail(
@@ -91,7 +143,7 @@ export function findPosClientsForEmail(
     (p) => normalizeStoreEmail(p.email) === cleanEmail
   );
   if (matchedByEmail.length > 0) {
-    return matchedByEmail;
+    return sortPosRecordsDeterministically(matchedByEmail, linkedAssociatedId);
   }
 
   // Legacy record recovery: only match by linkedAssociatedId if that record has no conflicting email
@@ -188,6 +240,78 @@ export function resolveAccountIdentityByEmail(
 }
 
 /**
+ * Resolves the authoritative identity strictly from fresh Firestore collections
+ * and optional Firestore `users/{uid}` document — never trusting stale local role cache.
+ */
+export function resolveAuthoritativeIdentityFromFirestore(params: {
+  email: string;
+  superAdmin?: Pick<SuperAdmin, 'email' | 'adminAccounts'> | null;
+  suppliers: Supplier[];
+  posClients: POSClient[];
+  userDoc?: AuthUser | null;
+}): ResolvedAccountIdentity {
+  const cleanEmail = normalizeStoreEmail(params.email);
+  if (!cleanEmail) {
+    return { kind: 'unregistered', email: '' };
+  }
+
+  const userDoc = params.userDoc;
+  const userDocEmail = normalizeStoreEmail(userDoc?.email);
+  const userDocMatchesEmail = Boolean(userDoc && (!userDocEmail || userDocEmail === cleanEmail));
+  const safeLinkedAssociatedId = userDocMatchesEmail ? userDoc?.associatedId : undefined;
+
+  const primary = resolveAccountIdentityByEmail(cleanEmail, {
+    superAdmin: params.superAdmin,
+    suppliers: params.suppliers,
+    posClients: params.posClients,
+    linkedAssociatedId: safeLinkedAssociatedId,
+  });
+
+  if (primary.kind !== 'unregistered' || !userDocMatchesEmail || !userDoc) {
+    return primary;
+  }
+
+  // Fallback for legacy/UID-linked supplier or employee records whose email was blank on the sub-entity
+  if (userDoc.role === 'supplier' && userDoc.associatedId) {
+    const linkedSup = params.suppliers.find(
+      (s) =>
+        s.id === userDoc.associatedId &&
+        (!s.email || normalizeStoreEmail(s.email) === cleanEmail)
+    );
+    if (linkedSup) {
+      return {
+        kind: 'supplier',
+        email: cleanEmail,
+        supplier: linkedSup,
+      };
+    }
+  }
+
+  if (userDoc.role === 'employee') {
+    const targetSupId = userDoc.supplierId || userDoc.associatedId;
+    const targetEmpId = userDoc.employeeId || userDoc.id;
+    const linkedSup = targetSupId
+      ? params.suppliers.find((s) => s.id === targetSupId)
+      : undefined;
+    const linkedEmp = linkedSup?.employees?.find(
+      (e) =>
+        e.id === targetEmpId &&
+        (!e.email || normalizeStoreEmail(e.email) === cleanEmail)
+    );
+    if (linkedSup && linkedEmp) {
+      return {
+        kind: 'employee',
+        email: cleanEmail,
+        supplier: linkedSup,
+        employee: linkedEmp,
+      };
+    }
+  }
+
+  return primary;
+}
+
+/**
  * Resolves the active POSClient strictly scoped to the logged-in user.
  * When authenticated as pos_client, NEVER falls back to posClients[0] (another user).
  */
@@ -210,7 +334,9 @@ export function resolveScopedCurrentPos(params: {
     if (ownRecords.length === 0) {
       return EMPTY_POS_FALLBACK;
     }
-    return ownRecords.find((p) => p.id === currentPosId) || ownRecords[0];
+    const activeRecords = ownRecords.filter(isPosClientActive);
+    const pool = activeRecords.length > 0 ? activeRecords : ownRecords;
+    return pool.find((p) => p.id === currentPosId) || pool[0];
   }
 
   return (
@@ -272,7 +398,7 @@ export function resolveScopedSupplier(params: {
       cleanEmail,
       posClients,
       currentUser?.associatedId
-    );
+    ).filter(isPosClientActive);
     const allowedSupIds = new Set(
       ownRecords.map((p) => p.supplierId).filter(Boolean)
     );
@@ -282,7 +408,7 @@ export function resolveScopedSupplier(params: {
     }
     if (
       currentSupplierId &&
-      (allowedSupIds.size === 0 || allowedSupIds.has(currentSupplierId))
+      allowedSupIds.has(currentSupplierId)
     ) {
       const matched = suppliers.find((s) => s.id === currentSupplierId);
       if (matched) return matched;
@@ -310,8 +436,18 @@ export function canSwitchToPosClient(params: {
 }): boolean {
   const { isAuthenticated, currentUser, targetPosId, posClients } = params;
   if (!isAuthenticated || !currentUser) return true;
-  if (currentUser.role === 'super_admin' || currentUser.role === 'supplier' || currentUser.role === 'employee') {
+  if (currentUser.role === 'super_admin') {
     return true;
+  }
+  if (currentUser.role === 'supplier' || currentUser.role === 'employee') {
+    if (!targetPosId) return true;
+    const lockedSupplierId =
+      currentUser.role === 'employee'
+        ? currentUser.supplierId || currentUser.associatedId
+        : currentUser.associatedId;
+    if (!lockedSupplierId) return false;
+    const targetClient = posClients.find((p) => p.id === targetPosId);
+    return Boolean(targetClient && targetClient.supplierId === lockedSupplierId);
   }
   if (currentUser.role === 'pos_client') {
     const ownRecords = findPosClientsForEmail(
@@ -319,7 +455,7 @@ export function canSwitchToPosClient(params: {
       posClients,
       currentUser.associatedId
     );
-    return ownRecords.some((p) => p.id === targetPosId);
+    return ownRecords.some((p) => p.id === targetPosId && isPosClientActive(p));
   }
   return false;
 }
@@ -355,7 +491,9 @@ export function canSwitchToSupplier(params: {
       posClients,
       currentUser.associatedId
     );
-    return ownRecords.some((p) => p.supplierId === targetSupplierId);
+    return ownRecords.some(
+      (p) => p.supplierId === targetSupplierId && isPosClientActive(p)
+    );
   }
 
   return false;
@@ -531,12 +669,20 @@ export function buildAuthUserFromIdentity(
     };
   }
 
-  // pos_client
+  // pos_client: prioritize active records so suspended stores are excluded from routing
+  const activeRecords = identity.posRecords.filter(isPosClientActive);
+  const candidateRecords = activeRecords.length > 0 ? activeRecords : identity.posRecords;
   const preferred =
     (options?.preferredPosId &&
-      identity.posRecords.find((p) => p.id === options.preferredPosId)) ||
-    identity.posRecords[0];
-  const requiresSupplierSelection = identity.suppliers.length > 1;
+      candidateRecords.find((p) => p.id === options.preferredPosId)) ||
+    candidateRecords[0];
+  const activeSupplierIds = Array.from(
+    new Set(candidateRecords.map((p) => p.supplierId).filter(Boolean))
+  );
+  const activeSuppliersCount = identity.suppliers.filter((s) =>
+    activeSupplierIds.includes(s.id)
+  ).length;
+  const requiresSupplierSelection = activeSuppliersCount > 1;
   return {
     role: 'pos_client',
     supplierId: preferred.supplierId || identity.suppliers[0]?.id || '',

@@ -4,6 +4,7 @@ import {
   classifyFirestoreConnectionError,
   createCoalescedProbe,
   extractFirestoreErrorCode,
+  isFirestoreCacheMissError,
   isFirestoreInternalAssertionError,
   isNavigatorOffline,
   isTransientFirestoreError,
@@ -22,7 +23,7 @@ test('extractFirestoreErrorCode normalizes firestore prefixed and plain codes', 
   assert.equal(extractFirestoreErrorCode(new Error('plain')), '');
 });
 
-test('isTransientFirestoreError identifies unavailable and WebChannel offline errors', () => {
+test('isTransientFirestoreError identifies unavailable, offline, and cache-miss errors', () => {
   assert.equal(
     isTransientFirestoreError({
       code: 'unavailable',
@@ -34,6 +35,16 @@ test('isTransientFirestoreError identifies unavailable and WebChannel offline er
     isTransientFirestoreError(
       new Error('Failed to get document because the client is offline.')
     ),
+    true
+  );
+  assert.equal(
+    isTransientFirestoreError(
+      new Error('Failed to get document from cache.')
+    ),
+    true
+  );
+  assert.equal(
+    isFirestoreCacheMissError(new Error('Failed to get document from cache.')),
     true
   );
   assert.equal(
@@ -97,13 +108,13 @@ test('isFirestoreInternalAssertionError detects ca9 and b815 assertion errors', 
   );
 });
 
-test('createCoalescedProbe shares in-flight promises and resets after settlement', async () => {
+test('createCoalescedProbe shares in-flight promises, supports reset, and expires hung probes', async () => {
   let invocations = 0;
   const runProbe = createCoalescedProbe(async () => {
     invocations += 1;
     await new Promise((resolve) => setTimeout(resolve, 15));
     return invocations;
-  });
+  }, 500);
 
   const [r1, r2, r3] = await Promise.all([runProbe(), runProbe(), runProbe()]);
   assert.equal(invocations, 1);
@@ -112,5 +123,23 @@ test('createCoalescedProbe shares in-flight promises and resets after settlement
   const r4 = await runProbe();
   assert.equal(invocations, 2);
   assert.equal(r4, 2);
+
+  // Explicit reset clears in-flight promise immediately for DB recovery
+  let hungCount = 0;
+  const hungProbe = createCoalescedProbe(
+    () =>
+      new Promise<number>((resolve) => {
+        hungCount += 1;
+        const idx = hungCount;
+        setTimeout(() => resolve(idx), idx === 1 ? 80 : 5);
+      }),
+    30
+  );
+  const firstPending = hungProbe();
+  hungProbe.reset();
+  const fastSecond = await hungProbe();
+  assert.equal(fastSecond, 2);
+  await firstPending;
 });
+
 

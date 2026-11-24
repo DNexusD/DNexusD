@@ -197,7 +197,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     return () => clearInterval(timer);
   }, [cooldownSeconds, remainingSeconds]);
 
-  // Trigger database connection verification & local <-> Firebase sync when AuthScreen opens
+  // Trigger database connection verification & local <-> Firebase sync once when AuthScreen opens
   useEffect(() => {
     if (isFirestoreConnected && lastFirestoreSyncAt) return;
     let active = true;
@@ -214,45 +214,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
       active = false;
     };
   }, []);
-
-  // Trigger connection completion & local sync when user fills in email/password if not yet connected/synced
-  useEffect(() => {
-    if (mode !== 'login') return;
-    if (!loginEmail.trim() && !loginPassword.trim()) return;
-    if (isFirestoreConnected && lastFirestoreSyncAt) return;
-
-    const timer = setTimeout(() => {
-      setIsCheckingConn(true);
-      void ensureDatabaseConnectedAndSynced({
-        forceSync: !isFirestoreConnected,
-        silent: true,
-      })
-        .then((res) => {
-          setConnStatusMsg(res.message);
-        })
-        .finally(() => {
-          setIsCheckingConn(false);
-        });
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [loginEmail, loginPassword, mode, isFirestoreConnected, lastFirestoreSyncAt]);
-
-  const handleCredentialFieldFocus = () => {
-    if (isFirestoreConnected && lastFirestoreSyncAt) return;
-    if (isCheckingConn || isSyncingWithFirestore) return;
-    setIsCheckingConn(true);
-    void ensureDatabaseConnectedAndSynced({
-      forceSync: !isFirestoreConnected,
-      silent: true,
-    })
-      .then((res) => {
-        setConnStatusMsg(res.message);
-      })
-      .finally(() => {
-        setIsCheckingConn(false);
-      });
-  };
 
   // Handle Manual Database Connection & Sync
   const handleManualCheckConnection = async () => {
@@ -638,7 +599,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           type="email"
                           required
                           value={loginEmail}
-                          onFocus={handleCredentialFieldFocus}
                           onChange={e => {
                             setLoginEmail(e.target.value);
                             if (otpSent || otpSentToEmail || cooldownSeconds > 0) {
@@ -681,7 +641,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           type={showLoginPassword ? 'text' : 'password'}
                           required
                           value={loginPassword}
-                          onFocus={handleCredentialFieldFocus}
                           onChange={e => setLoginPassword(e.target.value)}
                           placeholder="••••••••••••"
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white pl-9 focus:outline-none transition-colors font-mono"
