@@ -13,7 +13,9 @@ import {
   Order, 
   AccountingEntry, 
   AdminAccountingEntry,
-  InviteLink, 
+  InviteLink,
+  InviteLinkFeatures,
+  TIERS_CONFIG,
   DeliveryMethod,
   ServicePackage,
   AuthUser,
@@ -175,6 +177,20 @@ import {
   SyncedIdsMap,
   writeSyncedIdsMap
 } from '../utils/localFirestoreSync';
+import {
+  buildInviteUrl,
+  buildPosClientInviteDefaults,
+  getEnabledInviteFeatureLabels,
+  isInviteLinkActive,
+  normalizeInviteFeatures,
+  parseInviteCodeFromInput,
+  resolveValidInviteLink,
+} from '../utils/inviteLinks';
+import {
+  canSupplierInspectPosInterface,
+  getPosUpgradeStatus,
+  hasClientApprovedPosUpgrade,
+} from '../utils/posAccreditation';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { collection, doc } from 'firebase/firestore';
 import { firestoreSync } from '../services/firestoreSync';
@@ -242,6 +258,7 @@ interface AppContextType {
     phone?: string;
     tradeName?: string;
     supplierId?: string;
+    inviteCode?: string;
   }) => Promise<{ success: boolean; error?: string; code?: string }>;
   requestPasswordReset: (email: string) => Promise<{
     success: boolean;
@@ -266,6 +283,10 @@ interface AppContextType {
   // Data entities
   currentPos: POSClient;
   setCurrentPosId: (id: string) => void;
+  isSupplierPosPreviewMode: boolean;
+  openSupplierPosPreview: (posId: string) => boolean;
+  closeSupplierPosPreview: () => void;
+  respondToPosUpgrade: (decision: 'approved' | 'declined') => void;
   posClients: POSClient[];
   suppliers: Supplier[];
   availableClientSuppliers: Supplier[];
@@ -403,11 +424,16 @@ interface AppContextType {
   togglePosReceiveTransfersPrivilege: (posId: string) => void;
   togglePosBonusPrivilege: (posId: string) => void;
   togglePosGiftsPrivilege: (posId: string) => void;
+  togglePosAccreditedPrivilege: (posId: string) => void;
   togglePosClientActiveStatus: (posId: string) => void;
   deletePosClient: (posId: string) => Promise<{ success: boolean; error?: string }>;
   updatePosProfile: (posId: string, updates: Partial<POSClient>) => void;
   updateSupplierProfile: (supplierId: string, updates: Partial<Supplier>) => void;
-  createInviteLink: (targetTier: AccountTier) => InviteLink;
+  createInviteLink: (
+    params: { targetTier: AccountTier; features?: InviteLinkFeatures; label?: string } | AccountTier
+  ) => InviteLink;
+  toggleInviteLinkActiveStatus: (inviteId: string) => void;
+  deleteInviteLink: (inviteId: string) => Promise<{ success: boolean; error?: string }>;
   
   addCatalog: (nameAr: string, descriptionAr: string, icon: string, isFreeGiftsCatalog?: boolean) => void;
   updateCatalog: (id: string, updates: Partial<Pick<Catalog, 'nameAr' | 'descriptionAr' | 'icon' | 'isFreeGiftsCatalog'>>) => void;
@@ -527,6 +553,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
     [isAuthenticated, role, currentUser, currentSupplierId, currentPos, suppliers, posClients]
   );
+
+  const effectiveEmployeePerms = React.useMemo(
+    () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
+    [currentUser, role, supplier]
+  );
+
+  const [inspectedPosId, setInspectedPosId] = useState<string | null>(null);
+
+  const inspectedPosClient = React.useMemo(() => {
+    if (!inspectedPosId || !isAuthenticated) return null;
+    const candidate = posClients.find((p) => p.id === inspectedPosId);
+    if (!candidate) return null;
+    const allowed = canSupplierInspectPosInterface({
+      client: candidate,
+      supplierId: supplier?.id || '',
+      role,
+      canViewClients: effectiveEmployeePerms.canViewClients,
+      canUpgradeClientTiers: effectiveEmployeePerms.canUpgradeClientTiers,
+    });
+    return allowed ? candidate : null;
+  }, [
+    inspectedPosId,
+    isAuthenticated,
+    posClients,
+    supplier?.id,
+    role,
+    effectiveEmployeePerms.canViewClients,
+    effectiveEmployeePerms.canUpgradeClientTiers,
+  ]);
+
+  const isSupplierPosPreviewMode = inspectedPosClient !== null;
+  const exposedCurrentPos = inspectedPosClient || currentPos;
+
+  useEffect(() => {
+    if (inspectedPosId && !inspectedPosClient) {
+      setInspectedPosId(null);
+    }
+  }, [inspectedPosId, inspectedPosClient]);
   
   const [superAdmin, setSuperAdmin] = useState<SuperAdmin>(initialSuperAdmin);
 
@@ -551,10 +615,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [notifications]);
 
   const markNotificationAsRead = (id: string) => {
+    if (isSupplierPosPreviewMode) return;
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, isRead: true } : n)));
   };
 
   const markAllNotificationsAsRead = () => {
+    if (isSupplierPosPreviewMode) return;
     setNotifications(prev =>
       prev.map(n =>
         isNotificationForPosClient(n, currentPos?.id, currentPos?.supplierId)
@@ -565,6 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAllNotifications = () => {
+    if (isSupplierPosPreviewMode) return;
     setNotifications(prev =>
       prev.filter(n => !isNotificationForPosClient(n, currentPos?.id, currentPos?.supplierId))
     );
@@ -701,11 +768,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         posClientsRef.current = posRec.merged;
         setPosClients(posRec.merged);
       }
+      if (Array.isArray(bootData.inviteLinks)) {
+        const invRec = reconcileCollectionWithRemote(
+          inviteLinksRef.current,
+          bootData.inviteLinks,
+          syncedMap.inviteLinks,
+          pendingMap.inviteLinks
+        );
+        inviteLinksRef.current = invRec.merged;
+        setInviteLinks(invRec.merged);
+      }
       return {
         superAdmin: superAdminRef.current,
         platformSettings: platformSettingsRef.current,
         suppliers: suppliersRef.current,
         posClients: posClientsRef.current,
+        inviteLinks: inviteLinksRef.current,
       };
     } catch (err) {
       console.warn('Auth bootstrap fetch skipped:', err);
@@ -741,6 +819,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveOtps({});
     setCurrentPosId('');
     setCurrentSupplierId('');
+    setInspectedPosId(null);
     setIsSupplierSelectionRequired(false);
     setRole('pos_client');
     setActiveNavTab('store');
@@ -1900,7 +1979,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 invMap.set(inv.id, inv);
               }
             });
-            setInviteLinks(Array.from(invMap.values()));
+            const syncedInvites = Array.from(invMap.values());
+            inviteLinksRef.current = syncedInvites;
+            setInviteLinks(syncedInvites);
           }, (err) => {
             handleSnapshotError(err, OperationType.LIST, 'inviteLinks', handleTransientOffline);
           })
@@ -2724,6 +2805,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     phone?: string;
     tradeName?: string;
     supplierId?: string;
+    inviteCode?: string;
   }): Promise<{ success: boolean; error?: string; code?: string }> => {
     const syncRes = await ensureDatabaseConnectedAndSynced({
       forceSync: !isFirestoreConnected || !lastFirestoreSyncAtRef.current,
@@ -2738,7 +2820,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { success: false, error: connErr };
     }
-    const { name, email, role: chosenRole, phone, tradeName, supplierId } = params;
+    const { name, email, role: chosenRole, phone, tradeName, supplierId, inviteCode } = params;
     const cleanEmail = normalizeStoreEmail(email);
 
     if (chosenRole !== 'pos_client' && chosenRole !== 'supplier') {
@@ -2750,6 +2832,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let activeSuppliers = suppliersRef.current;
       let activePosClients = posClientsRef.current;
       let activeSuperAdmin = superAdminRef.current;
+      let activeInviteLinks = inviteLinksRef.current;
 
       const bootData = await bootstrapAuthDataFromFirestore();
       if (bootData.suppliers && bootData.suppliers.length > 0) {
@@ -2757,6 +2840,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       if (bootData.posClients && bootData.posClients.length > 0) {
         activePosClients = bootData.posClients;
+      }
+      if (bootData.inviteLinks && bootData.inviteLinks.length > 0) {
+        activeInviteLinks = bootData.inviteLinks;
       }
       if (bootData.superAdmin) {
         activeSuperAdmin = {
@@ -2768,7 +2854,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
-      const targetSupplierId = supplierId?.trim() || '';
+      const parsedInviteInput = chosenRole === 'pos_client' ? parseInviteCodeFromInput(inviteCode || '') : '';
+      let matchedInviteLink: InviteLink | undefined;
+      let targetSupplierId = supplierId?.trim() || '';
+      let posInviteDefaults: ReturnType<typeof buildPosClientInviteDefaults> | undefined;
+
+      if (chosenRole === 'pos_client' && parsedInviteInput) {
+        let candidateInvites = activeInviteLinks;
+        if (
+          !candidateInvites.some(
+            (l) => (l.code || '').trim().toUpperCase() === parsedInviteInput.toUpperCase()
+          )
+        ) {
+          const remoteInvite = await firestoreSync.fetchInviteLinkByCodeFromServer(parsedInviteInput);
+          if (remoteInvite) {
+            candidateInvites = [remoteInvite, ...candidateInvites.filter((l) => l.id !== remoteInvite.id)];
+          }
+        }
+
+        const resolvedInvite = resolveValidInviteLink({
+          codeOrUrl: parsedInviteInput,
+          inviteLinks: candidateInvites,
+          suppliers: activeSuppliers,
+        });
+        if (!resolvedInvite.valid) {
+          showToast({
+            type: 'error',
+            title: 'رابط الدعوة غير صالح',
+            description: resolvedInvite.error,
+          });
+          return { success: false, error: resolvedInvite.error };
+        }
+        matchedInviteLink = resolvedInvite.inviteLink;
+        targetSupplierId = resolvedInvite.supplier.id;
+        posInviteDefaults = buildPosClientInviteDefaults(resolvedInvite);
+      }
+
       if (chosenRole === 'pos_client') {
         if (!targetSupplierId || !activeSuppliers.some(s => s.id === targetSupplierId)) {
           const msg = 'معرف المتجر المدخل غير صحيح أو غير موجود. يرجى اختيار متجر صالح من القائمة أو عبر QR.';
@@ -2819,7 +2940,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           country: 'المملكة العربية السعودية',
           city: 'الرياض',
           supplierId: targetSupplierId,
-          tier: 'regular',
+          tier: posInviteDefaults ? posInviteDefaults.tier : 'regular',
+          ...(posInviteDefaults
+            ? {
+                canRequestLoans: posInviteDefaults.canRequestLoans,
+                canReceiveSupplierTransfers: posInviteDefaults.canReceiveSupplierTransfers,
+                canGetBonus: posInviteDefaults.canGetBonus,
+                canViewGifts: posInviteDefaults.canViewGifts,
+                isAccreditedPos: posInviteDefaults.isAccreditedPos,
+                posUpgradeStatus: posInviteDefaults.isAccreditedPos ? 'approved' : 'none',
+                ...(posInviteDefaults.isAccreditedPos
+                  ? {
+                      accreditedAt: new Date().toISOString(),
+                      posUpgradeRequestedAt: new Date().toISOString(),
+                      posUpgradeRespondedAt: new Date().toISOString(),
+                      accreditedByName:
+                        matchedInviteLink?.supplierName ||
+                        activeSuppliers.find((s) => s.id === targetSupplierId)?.storeName ||
+                        'المتجر',
+                    }
+                  : {}),
+              }
+            : { posUpgradeStatus: 'none' }),
           walletBalance: 0,
           totalSpent: 0,
           ordersCount: 0,
@@ -2864,6 +3006,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       await firestoreSync.saveUser(authUser);
 
+      // 4. Record invite usage & notify supplier if registered via an invite link
+      if (matchedInviteLink && newPos) {
+        const updatedInvite: InviteLink = {
+          ...matchedInviteLink,
+          usedCount: (matchedInviteLink.usedCount || 0) + 1,
+        };
+        const nextInvites = inviteLinksRef.current.some(l => l.id === updatedInvite.id)
+          ? inviteLinksRef.current.map(l => (l.id === updatedInvite.id ? updatedInvite : l))
+          : [updatedInvite, ...inviteLinksRef.current];
+        inviteLinksRef.current = nextInvites;
+        setInviteLinks(nextInvites);
+        firestoreSync.saveInviteLink(updatedInvite).catch(console.error);
+
+        const enabledLabels = getEnabledInviteFeatureLabels(matchedInviteLink.features).map(f => f.labelAr);
+        addNotification({
+          posId: newPos.id,
+          posName: newPos.tradeName,
+          posCode: newPos.posCode,
+          supplierId: matchedInviteLink.supplierId,
+          supplierName: matchedInviteLink.supplierName,
+          targetRole: 'supplier',
+          title: 'انضمام عميل جديد عبر رابط الدعوة',
+          message:
+            enabledLabels.length > 0
+              ? `سجل العميل (${newPos.tradeName}) عبر الرابط (${matchedInviteLink.code}) برتبة ${TIERS_CONFIG[newPos.tier]?.nameAr || newPos.tier} مع الميزات: ${enabledLabels.join('، ')}.`
+              : `سجل العميل (${newPos.tradeName}) عبر الرابط (${matchedInviteLink.code}) برتبة ${TIERS_CONFIG[newPos.tier]?.nameAr || newPos.tier}.`,
+          type: 'tier_upgrade',
+          actionTab: 'clients',
+        });
+      }
+
       // Force sign-out and clear state so the user MUST log in manually
       await fbSignOut(auth);
       setCurrentUser(null);
@@ -2874,7 +3047,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast({
         type: 'success',
         title: 'تم إنشاء وتوثيق الحساب بنجاح!',
-        description: `أهلاً بك يا ${name}، تم إنشاء حسابك وحفظه في قاعدة البيانات. يمكنك الآن تسجيل الدخول بالبريد الإلكتروني وكلمة المرور.`
+        description: posInviteDefaults
+          ? `أهلاً بك يا ${name}، تم إنشاء حسابك برتبة (${TIERS_CONFIG[posInviteDefaults.tier]?.nameAr || posInviteDefaults.tier}) وتفعيل ميزات الرابط المحددة بنجاح. يمكنك الآن تسجيل الدخول.`
+          : `أهلاً بك يا ${name}، تم إنشاء حسابك وحفظه في قاعدة البيانات. يمكنك الآن تسجيل الدخول بالبريد الإلكتروني وكلمة المرور.`
       });
 
       return { success: true };
@@ -3007,8 +3182,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const currentPosSupplier = React.useMemo(() => {
-    return suppliers.find(s => s.id === currentPos?.supplierId) || supplier;
-  }, [suppliers, currentPos?.supplierId, supplier]);
+    return suppliers.find(s => s.id === exposedCurrentPos?.supplierId) || supplier;
+  }, [suppliers, exposedCurrentPos?.supplierId, supplier]);
 
   const [adminPreferredCurrency, setAdminPreferredCurrency] = useState<CurrencyCode>(() => {
     try {
@@ -3027,6 +3202,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const activeCurrency: CurrencyCode = React.useMemo(() => {
+    if (isSupplierPosPreviewMode) {
+      return normalizeCurrencyCode(exposedCurrentPos?.preferredCurrency ?? supplier?.preferredCurrency);
+    }
     if (role === 'pos_client') {
       return normalizeCurrencyCode(currentPos?.preferredCurrency);
     }
@@ -3037,14 +3215,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return normalizeCurrencyCode(employeePreferredCurrency ?? supplier?.preferredCurrency);
     }
     return normalizeCurrencyCode(adminPreferredCurrency);
-  }, [role, currentPos?.preferredCurrency, supplier?.preferredCurrency, employeePreferredCurrency, adminPreferredCurrency]);
+  }, [isSupplierPosPreviewMode, exposedCurrentPos?.preferredCurrency, role, currentPos?.preferredCurrency, supplier?.preferredCurrency, employeePreferredCurrency, adminPreferredCurrency]);
 
   const activeExchangeRate: number = React.useMemo(() => {
-    if (role === 'pos_client') {
+    if (role === 'pos_client' || isSupplierPosPreviewMode) {
       return normalizeExchangeRateSarPerUsd((currentPosSupplier || supplier)?.exchangeRateSarPerUsd);
     }
     return normalizeExchangeRateSarPerUsd(supplier?.exchangeRateSarPerUsd);
-  }, [role, currentPosSupplier, supplier]);
+  }, [role, isSupplierPosPreviewMode, currentPosSupplier, supplier]);
 
   const currencyLabel = getCurrencyShortLabel(activeCurrency);
 
@@ -3120,11 +3298,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const effectiveEmployeePerms = React.useMemo(
-    () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
-    [currentUser, role, supplier]
-  );
-
   const assertEmployeePermission = (
     allowed: boolean,
     errorDesc = 'ليس لديك صلاحية تنفيذ هذا الإجراء من مالك المتجر.'
@@ -3151,8 +3324,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [notifications, supplier?.id, effectiveEmployeePerms, role]);
 
   const clientNotifications = React.useMemo(() => {
+    if (isSupplierPosPreviewMode) return [];
     return filterNotificationsForPosClient(notifications, currentPos?.id, currentPos?.supplierId);
-  }, [notifications, currentPos?.id, currentPos?.supplierId]);
+  }, [isSupplierPosPreviewMode, notifications, currentPos?.id, currentPos?.supplierId]);
 
   const unreadSupplierNotificationsCount = React.useMemo(() => {
     return supplierNotifications.filter(n => !n.isRead).length;
@@ -3224,6 +3398,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customerPhone?: string;
     resalePrice?: number;
   }) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'أنت تتصفح واجهة نقطة البيع المعتمدة للعميل في وضع القراءة فقط ولا يمكن تنفيذ عمليات شراء.'
+      });
+      return { success: false, error: 'read_only_preview' };
+    }
     const { service, pkg, purchaseUnit, deliveryMethod, deliveryDetails, paymentMethod, customerName, customerPhone, resalePrice } = params;
     
     // 1. Resolve live service/package + linked warehouse purchase options & pricing
@@ -3779,6 +3961,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Transfer balance between POS clients via Code or QR
   const executeBalanceTransfer = async (params: { targetPosCode: string; amount: number }) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن إجراء تحويلات مالية أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return { success: false, error: 'read_only_preview' };
+    }
     if (!isPosClientActive(currentPos)) {
       showToast({
         type: 'error',
@@ -4420,6 +4610,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     decision: 'confirmed' | 'rejected',
     note?: string
   ) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن تأكيد أو رفض الحوالات أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return;
+    }
     const dep = depositRequests.find(d => d.id === depositId);
     if (!dep) return;
 
@@ -4505,6 +4703,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     transferReceiptImage?: string;
     transferReceiptFileName?: string;
   }) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن إرسال طلبات شحن أو سلفة أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return;
+    }
     const isLoan = params.requestType === 'loan';
     const depositId = isLoan ? `dep-loan-${Date.now().toString().slice(-6)}` : `dep-${Date.now().toString().slice(-6)}`;
     const now = new Date();
@@ -5152,6 +5358,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loanId: string,
     rawAmount: number
   ): Promise<{ success: boolean; error?: string; receipt?: WalletLoanRepaymentReceipt }> => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن سداد السلف أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return { success: false, error: 'read_only_preview' };
+    }
     const loan = depositRequests.find(d => d.id === loanId);
     if (!loan) {
       return { success: false, error: 'لم يتم العثور على السلفة المطلوبة.' };
@@ -5310,6 +5524,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     decision: 'confirmed' | 'rejected',
     note?: string
   ) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن مراجعة حوالات سداد السلف أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return;
+    }
     const req = loanRepaymentRequests.find(r => r.id === requestId);
     if (!req) return;
 
@@ -5401,6 +5623,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     transferReceiptImage?: string;
     transferReceiptFileName?: string;
   }): Promise<{ success: boolean; requestId?: string; request?: LoanRepaymentRequest; error?: string }> => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن إرسال طلبات سداد سلفة أثناء وضع معاينة واجهة نقطة البيع.'
+      });
+      return { success: false, error: 'read_only_preview' };
+    }
     const loan = depositRequests.find(d => d.id === params.loanId);
     if (!loan) {
       return { success: false, error: 'لم يتم العثور على السلفة المحددة.' };
@@ -6124,6 +6354,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const confirmClientOtpRead = (orderId: string) => {
+    if (isSupplierPosPreviewMode) return;
     const targetOrder = orders.find(o => o.id === orderId);
     if (!targetOrder) return;
 
@@ -6295,6 +6526,223 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const togglePosAccreditedPrivilege = (posId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية اعتماد أو تعديل ميزات العملاء.')) return;
+    const targetClient = posClientsRef.current.find(p => p.id === posId);
+    if (!targetClient) return;
+
+    if (role !== 'super_admin' && targetClient.supplierId !== supplier.id) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية مرفوضة',
+        description: 'لا يمكنك تعديل حالة اعتماد عميل لا ينتمي لهذا المتجر.'
+      });
+      return;
+    }
+
+    const currentStatus = getPosUpgradeStatus(targetClient);
+    const storeDisplayName = supplier.storeName || supplier.name;
+    const nowIso = new Date().toISOString();
+
+    let updatedClient: POSClient;
+    let notifTitle = '';
+    let notifMessage = '';
+    let toastTitle = '';
+    let toastDescription = '';
+    let toastType: 'success' | 'info' = 'info';
+
+    if (currentStatus === 'pending_client_approval') {
+      // Cancel pending upgrade invite
+      updatedClient = {
+        ...targetClient,
+        isAccreditedPos: false,
+        posUpgradeStatus: 'none',
+        accreditedAt: '',
+        accreditedByName: '',
+        posUpgradeRespondedAt: '',
+      };
+      notifTitle = 'تم إلغاء طلب الترقية إلى نقطة بيع معتمدة';
+      notifMessage = `قام متجر (${storeDisplayName}) بإلغاء طلب الترقية المعلق لحسابك إلى نقطة بيع معتمدة.`;
+      toastTitle = 'تم إلغاء طلب الترقية المعلق';
+      toastDescription = `تم إلغاء طلب اعتماد العميل (${updatedClient.tradeName}) كنقطة بيع للمتجر قبل موافقته.`;
+    } else if (hasClientApprovedPosUpgrade(targetClient)) {
+      // Revoke active accredited POS status
+      updatedClient = {
+        ...targetClient,
+        isAccreditedPos: false,
+        posUpgradeStatus: 'none',
+        accreditedAt: '',
+        accreditedByName: '',
+        posUpgradeRespondedAt: '',
+      };
+      if (inspectedPosId === posId) {
+        setInspectedPosId(null);
+      }
+      notifTitle = 'إلغاء اعتماد نقطة البيع للمتجر';
+      notifMessage = `قام متجر (${storeDisplayName}) بإلغاء شارة الاعتماد كنقطة بيع رسمية لحسابك.`;
+      toastTitle = 'تم إلغاء اعتماد نقطة البيع';
+      toastDescription = `تم إلغاء شارة الاعتماد كنقطة بيع من العميل (${updatedClient.tradeName}) وإيقاف معاينة واجهته.`;
+    } else {
+      // Send a fresh upgrade invitation requiring explicit client consent
+      updatedClient = {
+        ...targetClient,
+        isAccreditedPos: false,
+        posUpgradeStatus: 'pending_client_approval',
+        posUpgradeRequestedAt: nowIso,
+        posUpgradeRespondedAt: '',
+        accreditedAt: '',
+        accreditedByName: currentUser?.name || storeDisplayName,
+      };
+      toastType = 'success';
+      notifTitle = 'دعوة ترقية حسابك إلى نقطة بيع معتمدة للمتجر';
+      notifMessage = `رشّحك متجر (${storeDisplayName}) للترقية واعتماد حسابك رسمياً كنقطة بيع للمتجر. يرجى فتح لوحتك والموافقة على الترقية لإصدار شهادة الاعتماد وتمكين المتجر من الاطلاع على واجهة نقطة البيع الخاصة بك.`;
+      toastTitle = 'تم إرسال طلب الترقية للعميل';
+      toastDescription = `تم إرسال دعوة الاعتماد للعميل (${updatedClient.tradeName})؛ وبمجرد موافقته سيتم تفعيل الشهادة وزر الاطلاع على واجهة نقطة البيع.`;
+    }
+
+    const nextClients = posClientsRef.current.map(p => (p.id === posId ? updatedClient : p));
+    posClientsRef.current = nextClients;
+    setPosClients(nextClients);
+    firestoreSync.savePosClient(updatedClient).catch(console.error);
+
+    addNotification({
+      posId,
+      supplierId: targetClient.supplierId || supplier.id,
+      supplierName: storeDisplayName,
+      targetRole: 'pos',
+      title: notifTitle,
+      message: notifMessage,
+      type: 'tier_upgrade'
+    });
+
+    showToast({
+      type: toastType,
+      title: toastTitle,
+      description: toastDescription
+    });
+  };
+
+  const respondToPosUpgrade = (decision: 'approved' | 'declined') => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن تغيير حالة الموافقة على الترقية أثناء وضع المعاينة.'
+      });
+      return;
+    }
+    if (!isAuthenticated || role !== 'pos_client' || !currentPos?.id) {
+      return;
+    }
+
+    const targetClient = posClientsRef.current.find(p => p.id === currentPos.id) || currentPos;
+    const status = getPosUpgradeStatus(targetClient);
+    if (status !== 'pending_client_approval') {
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const targetSup = suppliers.find(s => s.id === targetClient.supplierId) || currentPosSupplier || supplier;
+    const storeDisplayName = targetSup?.storeName || targetSup?.name || 'المتجر';
+
+    const updatedClient: POSClient =
+      decision === 'approved'
+        ? {
+            ...targetClient,
+            isAccreditedPos: true,
+            posUpgradeStatus: 'approved',
+            posUpgradeRespondedAt: nowIso,
+            accreditedAt: nowIso,
+            accreditedByName: targetClient.accreditedByName || storeDisplayName,
+          }
+        : {
+            ...targetClient,
+            isAccreditedPos: false,
+            posUpgradeStatus: 'declined',
+            posUpgradeRespondedAt: nowIso,
+            accreditedAt: '',
+          };
+
+    const nextClients = posClientsRef.current.map(p => (p.id === targetClient.id ? updatedClient : p));
+    posClientsRef.current = nextClients;
+    setPosClients(nextClients);
+    firestoreSync.savePosClient(updatedClient).catch(console.error);
+
+    addNotification({
+      posId: targetClient.id,
+      posName: targetClient.tradeName,
+      posCode: targetClient.posCode,
+      supplierId: targetClient.supplierId || targetSup?.id,
+      supplierName: storeDisplayName,
+      targetRole: 'supplier',
+      title:
+        decision === 'approved'
+          ? 'وافق العميل على الترقية إلى نقطة بيع معتمدة ✓'
+          : 'رفض العميل الترقية إلى نقطة بيع معتمدة',
+      message:
+        decision === 'approved'
+          ? `وافق العميل (${targetClient.tradeName} - ${targetClient.posCode}) على الترقية رسمياً كنقطة بيع معتمدة لمتجرك، وأصبح بإمكانك الآن الاطلاع على واجهة نقطة البيع الخاصة به من إدارة العملاء.`
+          : `رفض العميل (${targetClient.tradeName} - ${targetClient.posCode}) طلب الترقية إلى نقطة بيع معتمدة.`,
+      type: 'tier_upgrade',
+      actionTab: 'clients',
+    });
+
+    if (decision === 'approved') {
+      triggerConfetti();
+      showToast({
+        type: 'success',
+        title: 'تمت الموافقة على الترقية واعتماد نقطة البيع!',
+        description: `أصبح حسابك (${targetClient.tradeName}) نقطة بيع معتمدة لدى (${storeDisplayName}) ويمكنك الآن عرض وتحميل شهادة الاعتماد.`
+      });
+    } else {
+      showToast({
+        type: 'info',
+        title: 'تم تسجيل رفض طلب الترقية',
+        description: `تم إشعار المتجر (${storeDisplayName}) برفضك طلب الترقية إلى نقطة بيع معتمدة.`
+      });
+    }
+  };
+
+  const openSupplierPosPreview = (posId: string): boolean => {
+    const candidate = posClientsRef.current.find(p => p.id === posId);
+    const allowed = canSupplierInspectPosInterface({
+      client: candidate,
+      supplierId: supplier?.id || '',
+      role,
+      canViewClients: effectiveEmployeePerms.canViewClients,
+      canUpgradeClientTiers: effectiveEmployeePerms.canUpgradeClientTiers,
+    });
+
+    if (!allowed || !candidate) {
+      const status = getPosUpgradeStatus(candidate);
+      const reason = !candidate
+        ? 'لم يتم العثور على سجل العميل المطلوب.'
+        : candidate.supplierId !== supplier?.id && role !== 'super_admin'
+        ? 'هذا العميل لا ينتمي لمتجرك.'
+        : status === 'pending_client_approval'
+        ? 'بانتظار موافقة العميل الصريحة على الترقية إلى نقطة بيع قبل إتاحة الاطلاع على واجهته.'
+        : status === 'declined'
+        ? 'رفض العميل الترقية إلى نقطة بيع معتمدة ولا يمكن الاطلاع على واجهته.'
+        : 'يجب ترقية العميل واعتماده كنقطة بيع وموافقته أولاً للاطلاع على واجهة نقطة البيع.';
+
+      showToast({
+        type: 'error',
+        title: 'يتعذر فتح واجهة نقطة البيع',
+        description: reason
+      });
+      return false;
+    }
+
+    setInspectedPosId(candidate.id);
+    setActiveNavTab('store');
+    return true;
+  };
+
+  const closeSupplierPosPreview = () => {
+    setInspectedPosId(null);
+    setActiveNavTab('store');
+  };
+
   const togglePosClientActiveStatus = (posId: string) => {
     if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية تفعيل أو إيقاف حسابات العملاء.')) return;
     const targetClient = posClientsRef.current.find(p => p.id === posId);
@@ -6413,6 +6861,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Update POS client profile details (logo, tradeName, ownerName, email, phone, servicePhone, country, city)
   const updatePosProfile = (posId: string, updates: Partial<POSClient>) => {
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'لا يمكن تعديل بيانات نقطة البيع أثناء وضع معاينة الواجهة.'
+      });
+      return;
+    }
     const targetClient = posClients.find(p => p.id === posId) || currentPos;
     const targetSup = suppliers.find(s => s.id === targetClient.supplierId) || supplier;
     const updatedClient = { ...targetClient, ...updates };
@@ -6478,30 +6934,118 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Create invite link with pre-assigned tier
-  const createInviteLink = (targetTier: AccountTier) => {
-    const code = `${supplier.name.slice(0, 3).toUpperCase()}-${targetTier.toUpperCase()}-${Math.floor(100 + Math.random() * 900)}`;
+  // Create invite link with pre-assigned tier and features
+  const createInviteLink = (
+    params: { targetTier: AccountTier; features?: InviteLinkFeatures; label?: string } | AccountTier
+  ): InviteLink => {
+    const targetTier: AccountTier = typeof params === 'string' ? params : params.targetTier;
+    const normalizedFeatures = normalizeInviteFeatures(
+      typeof params === 'string' ? undefined : params.features
+    );
+    const cleanLabel = typeof params === 'string' ? undefined : params.label?.trim() || undefined;
+
+    const rawPrefix =
+      (supplier.name || supplier.storeName || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() ||
+      'POS';
+    const code = `${rawPrefix}-${targetTier.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://digipos.app';
     const newLink: InviteLink = {
       id: `inv-${Date.now()}`,
       code,
       supplierId: supplier.id,
-      supplierName: supplier.name,
+      supplierName: supplier.storeName || supplier.name,
       targetTier,
+      features: normalizedFeatures,
+      isActive: true,
+      ...(cleanLabel ? { label: cleanLabel } : {}),
       createdAt: new Date().toISOString().substring(0, 10),
       usedCount: 0,
-      url: `https://digipos.app/join?ref=${code}&tier=${targetTier}&sup=${supplier.id}`
+      url: buildInviteUrl({ origin: appOrigin, code, supplierId: supplier.id })
     };
     if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية إنشاء روابط دعوة العملاء.')) {
       return newLink;
     }
-    setInviteLinks(prev => [newLink, ...prev]);
+    const nextInvites = [newLink, ...inviteLinksRef.current];
+    inviteLinksRef.current = nextInvites;
+    setInviteLinks(nextInvites);
     firestoreSync.saveInviteLink(newLink).catch(console.error);
+
+    const enabledFeaturesCount = getEnabledInviteFeatureLabels(normalizedFeatures).length;
+    const tierName = TIERS_CONFIG[targetTier]?.nameAr || targetTier;
     showToast({
       type: 'success',
-      title: 'تم إنشاء رابط الدعوة',
-      description: `الرابط جاهز مع رتبة (${targetTier}) محددة مسبقاً للعميل عند التسجيل.`
+      title: 'تم إنشاء رابط الدعوة بنجاح',
+      description:
+        enabledFeaturesCount > 0
+          ? `الرابط جاهز برتبة (${tierName}) مع (${enabledFeaturesCount}) ميزات مفعّلة تلقائياً للعميل عند التسجيل.`
+          : `الرابط جاهز برتبة (${tierName}) محددة مسبقاً للعميل عند التسجيل.`
     });
     return newLink;
+  };
+
+  const toggleInviteLinkActiveStatus = (inviteId: string) => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية إدارة روابط الدعوة.')) return;
+    const target = inviteLinksRef.current.find(l => l.id === inviteId);
+    if (!target) return;
+
+    if (role !== 'super_admin' && target.supplierId !== supplier.id) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية مرفوضة',
+        description: 'لا يمكنك تعديل رابط دعوة لا ينتمي لهذا المتجر.'
+      });
+      return;
+    }
+
+    const nextActive = !isInviteLinkActive(target);
+    const updatedLink: InviteLink = { ...target, isActive: nextActive };
+    const nextInvites = inviteLinksRef.current.map(l => (l.id === inviteId ? updatedLink : l));
+    inviteLinksRef.current = nextInvites;
+    setInviteLinks(nextInvites);
+    firestoreSync.saveInviteLink(updatedLink).catch(console.error);
+
+    showToast({
+      type: nextActive ? 'success' : 'info',
+      title: nextActive ? 'تم تفعيل رابط الدعوة' : 'تم إيقاف رابط الدعوة',
+      description: nextActive
+        ? `الرابط (${updatedLink.code}) نشط الآن ويقبل تسجيلات العملاء الجدد.`
+        : `تم تعطيل الرابط (${updatedLink.code}) ولن يقبل أي تسجيلات جديدة حتى إعادة تفعيله.`
+    });
+  };
+
+  const deleteInviteLink = async (inviteId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!assertEmployeePermission(effectiveEmployeePerms.canUpgradeClientTiers, 'ليس لديك صلاحية حذف روابط الدعوة.')) {
+      return { success: false, error: 'ليس لديك صلاحية حذف روابط الدعوة.' };
+    }
+    const target = inviteLinksRef.current.find(l => l.id === inviteId);
+    if (!target) {
+      return { success: false, error: 'رابط الدعوة غير موجود.' };
+    }
+    if (role !== 'super_admin' && target.supplierId !== supplier.id) {
+      showToast({
+        type: 'error',
+        title: 'صلاحية مرفوضة',
+        description: 'لا يمكنك حذف رابط دعوة لا ينتمي لهذا المتجر.'
+      });
+      return { success: false, error: 'لا يمكنك حذف رابط دعوة لا ينتمي لهذا المتجر.' };
+    }
+
+    const remaining = inviteLinksRef.current.filter(l => l.id !== inviteId);
+    inviteLinksRef.current = remaining;
+    setInviteLinks(remaining);
+
+    try {
+      await firestoreSync.deleteInviteLink(inviteId);
+    } catch (err) {
+      console.warn('Failed to delete invite link from Firestore:', err);
+    }
+
+    showToast({
+      type: 'info',
+      title: 'تم حذف رابط الدعوة',
+      description: `تم حذف رابط الدعوة (${target.code}) بنجاح.`
+    });
+    return { success: true };
   };
 
   // Add catalog
@@ -8116,6 +8660,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!canSwitchRole({ isAuthenticated, currentUser, nextRole })) {
       return;
     }
+    setInspectedPosId(null);
     setRole(nextRole);
   };
 
@@ -8207,8 +8752,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         verifyResetCode,
         completePasswordReset,
         logout,
-        currentPos,
+        currentPos: exposedCurrentPos,
         setCurrentPosId: guardedSetCurrentPosId,
+        isSupplierPosPreviewMode,
+        openSupplierPosPreview,
+        closeSupplierPosPreview,
+        respondToPosUpgrade,
         posClients,
         suppliers,
         availableClientSuppliers,
@@ -8269,11 +8818,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         togglePosReceiveTransfersPrivilege,
         togglePosBonusPrivilege,
         togglePosGiftsPrivilege,
+        togglePosAccreditedPrivilege,
         togglePosClientActiveStatus,
         deletePosClient,
         updatePosProfile,
         updateSupplierProfile,
         createInviteLink,
+        toggleInviteLinkActiveStatus,
+        deleteInviteLink,
         addCatalog,
         updateCatalog,
         deleteCatalog,

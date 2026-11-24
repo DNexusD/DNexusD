@@ -13,6 +13,7 @@ import {
   Users,
   X,
   AlertCircle,
+  BadgeCheck,
   Ban,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -420,6 +421,12 @@ export const SupplierClientsDirectoryModal: React.FC<SupplierClientsDirectoryMod
                           <h3 className="font-bold text-sm text-white truncate">
                             {entry.tradeName || 'نقطة بيع بدون اسم تجاري'}
                           </h3>
+                          {primaryRec?.isAccreditedPos && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold shrink-0">
+                              <BadgeCheck className="w-3 h-3 text-amber-400" />
+                              <span>نقطة بيع معتمدة</span>
+                            </span>
+                          )}
                           {isSuspended && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/30 text-[10px] font-bold shrink-0">
                               <Ban className="w-2.5 h-2.5" />

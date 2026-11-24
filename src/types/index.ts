@@ -220,6 +220,8 @@ export interface DigitalService {
   giftActivatedAt?: string;
 }
 
+export type PosUpgradeStatus = 'none' | 'pending_client_approval' | 'approved' | 'declined';
+
 export interface POSClient {
   id: string;
   posCode: string; // e.g. "RYD-84920" (3 letters - 5 digits)
@@ -246,6 +248,12 @@ export interface POSClient {
   usedGiftServiceIds?: string[]; // معرفات خدمات الهدايا المجانية المستخدمة والمكتملة لإخفائها من واجهة العميل
   preferredCurrency?: CurrencyCode; // العملة المفضلة للعرض والتعامل (SAR / USD)
   isActive?: boolean; // حالة تفعيل حساب العميل (يتم التحكم بها من المتجر)
+  isAccreditedPos?: boolean; // اعتماد العميل كنقطة بيع رسمية للمتجر
+  accreditedAt?: string; // تاريخ الاعتماد
+  accreditedByName?: string; // اسم المعتمد / المتجر
+  posUpgradeStatus?: PosUpgradeStatus; // حالة موافقة العميل على الترقية إلى نقطة بيع معتمدة
+  posUpgradeRequestedAt?: string; // تاريخ إرسال طلب الترقية إلى نقطة بيع
+  posUpgradeRespondedAt?: string; // تاريخ رد العميل على طلب الترقية
 }
 
 export interface FeeConfig {
@@ -648,12 +656,23 @@ export interface AdminAccountingEntry {
   notes?: string;
 }
 
+export interface InviteLinkFeatures {
+  canRequestLoans?: boolean;
+  canReceiveSupplierTransfers?: boolean;
+  canGetBonus?: boolean;
+  canViewGifts?: boolean;
+  isAccreditedPos?: boolean;
+}
+
 export interface InviteLink {
   id: string;
   code: string;
   supplierId: string;
   supplierName: string;
   targetTier: AccountTier;
+  features?: InviteLinkFeatures;
+  isActive?: boolean;
+  label?: string;
   createdAt: string;
   usedCount: number;
   url: string;

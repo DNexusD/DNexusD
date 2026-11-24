@@ -10,6 +10,7 @@ import { PromptStudio } from './components/prompt-studio/PromptStudio';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { ResetPasswordView } from './components/auth/ResetPasswordView';
 import { parsePasswordResetUrl } from './utils/passwordReset';
+import { parseInviteUrl } from './utils/inviteLinks';
 import { isFirestoreInternalAssertionError } from './utils/firestoreConnectivity';
 import { recoverFirestoreInstance } from './services/firebase';
 import { SupplierContactLinks } from './components/common/SupplierContactLinks';
@@ -17,13 +18,26 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SupplierSelector } from './components/auth/SupplierSelector';
 
 const MainContent: React.FC = () => {
-  const { role, activeNavTab, isAuthenticated, isSupplierSelectionRequired, logout } = useApp();
+  const { role, activeNavTab, isAuthenticated, isSupplierSelectionRequired, isSupplierPosPreviewMode, logout } = useApp();
   const [resetOobCode, setResetOobCode] = React.useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const parsed = parsePasswordResetUrl(window.location.search);
     return parsed.isPasswordResetFlow ? parsed.oobCode : null;
   });
-  const [authInitialMode, setAuthInitialMode] = React.useState<'login' | 'register' | 'forgot_password'>('login');
+  const [initialInviteCode, setInitialInviteCode] = React.useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const resetParsed = parsePasswordResetUrl(window.location.search);
+    if (resetParsed.isPasswordResetFlow) return null;
+    const invParsed = parseInviteUrl(window.location.search);
+    return invParsed.isInviteFlow ? invParsed.inviteCode : null;
+  });
+  const [authInitialMode, setAuthInitialMode] = React.useState<'login' | 'register' | 'forgot_password'>(() => {
+    if (typeof window === 'undefined') return 'login';
+    const resetParsed = parsePasswordResetUrl(window.location.search);
+    if (resetParsed.isPasswordResetFlow) return 'login';
+    const invParsed = parseInviteUrl(window.location.search);
+    return invParsed.isInviteFlow ? 'register' : 'login';
+  });
 
   const clearResetParamsFromUrl = () => {
     setResetOobCode(null);
@@ -33,6 +47,19 @@ const MainContent: React.FC = () => {
       url.searchParams.delete('oobCode');
       url.searchParams.delete('apiKey');
       url.searchParams.delete('lang');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+  };
+
+  const clearInviteParamsFromUrl = () => {
+    setInitialInviteCode(null);
+    setAuthInitialMode('login');
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('invite');
+      url.searchParams.delete('ref');
+      url.searchParams.delete('tier');
+      url.searchParams.delete('sup');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
   };
@@ -55,7 +82,13 @@ const MainContent: React.FC = () => {
 
   // If user is not authenticated, show initial login & register welcome screen
   if (!isAuthenticated) {
-    return <AuthScreen initialMode={authInitialMode} />;
+    return (
+      <AuthScreen
+        initialMode={authInitialMode}
+        initialInviteCode={initialInviteCode || undefined}
+        onClearInviteParam={clearInviteParamsFromUrl}
+      />
+    );
   }
 
   if (role === 'pos_client' && isSupplierSelectionRequired) {
@@ -87,7 +120,14 @@ const MainContent: React.FC = () => {
   }
 
   if (role === 'supplier' || role === 'employee') {
-    return <SupplierDashboard />;
+    return (
+      <>
+        <div className={isSupplierPosPreviewMode ? 'hidden' : ''}>
+          <SupplierDashboard />
+        </div>
+        {isSupplierPosPreviewMode && <PosDashboard />}
+      </>
+    );
   }
 
   if (role === 'super_admin') {

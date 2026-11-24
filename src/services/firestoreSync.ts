@@ -237,19 +237,22 @@ export const firestoreSync = {
     platformSettings?: Partial<PlatformInterfaceSettings>;
     suppliers?: Supplier[];
     posClients?: POSClient[];
+    inviteLinks?: InviteLink[];
   }> {
     const result: {
       superAdmin?: Partial<SuperAdmin>;
       platformSettings?: Partial<PlatformInterfaceSettings>;
       suppliers?: Supplier[];
       posClients?: POSClient[];
+      inviteLinks?: InviteLink[];
     } = {};
 
-    const [adminRes, settingsRes, suppliersRes, clientsRes] = await Promise.allSettled([
+    const [adminRes, settingsRes, suppliersRes, clientsRes, invitesRes] = await Promise.allSettled([
       getDocPreferServer(() => doc(db, 'system', 'superAdmin')),
       getDocPreferServer(() => doc(db, 'system', 'platformSettings')),
       getDocsPreferServer('suppliers'),
       getDocsPreferServer('posClients'),
+      getDocsPreferServer('inviteLinks'),
     ]);
 
     if (adminRes.status === 'fulfilled' && adminRes.value.exists()) {
@@ -263,6 +266,9 @@ export const firestoreSync = {
     }
     if (clientsRes.status === 'fulfilled') {
       result.posClients = mapDocsById<POSClient>(clientsRes.value.docs);
+    }
+    if (invitesRes.status === 'fulfilled') {
+      result.inviteLinks = mapDocsById<InviteLink>(invitesRes.value.docs);
     }
 
     return result;
@@ -789,6 +795,49 @@ export const firestoreSync = {
     } catch (error) {
       markEntityPendingSync('inviteLinks', link.id);
       handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  },
+
+  async deleteInviteLink(inviteId: string): Promise<void> {
+    const path = `inviteLinks/${inviteId}`;
+    try {
+      await withFirestoreRecovery(() =>
+        deleteDoc(doc(db, 'inviteLinks', inviteId))
+      );
+      clearEntityPendingSync('inviteLinks', inviteId);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  },
+
+  async fetchInviteLinkByCodeFromServer(code: string): Promise<InviteLink | null> {
+    const normalized = (code || '').trim();
+    if (!normalized) return null;
+    try {
+      const snap = await withFirestoreRecovery(() =>
+        getDocsFromServer(
+          query(collection(db, 'inviteLinks'), where('code', '==', normalized))
+        )
+      );
+      if (!snap.empty) {
+        const first = snap.docs[0];
+        return { ...(first.data() as InviteLink), id: first.id };
+      }
+      const upper = normalized.toUpperCase();
+      if (upper !== normalized) {
+        const upperSnap = await withFirestoreRecovery(() =>
+          getDocsFromServer(
+            query(collection(db, 'inviteLinks'), where('code', '==', upper))
+          )
+        );
+        if (!upperSnap.empty) {
+          const first = upperSnap.docs[0];
+          return { ...(first.data() as InviteLink), id: first.id };
+        }
+      }
+      return null;
+    } catch {
+      return null;
     }
   },
 

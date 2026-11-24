@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { UserRole } from '../../types';
+import { TIERS_CONFIG, UserRole } from '../../types';
 import { SupplierSelector } from './SupplierSelector';
 import { ForgotPasswordView } from './ForgotPasswordView';
 import {
@@ -8,6 +8,11 @@ import {
   isValidLoginEmail,
   isValidSixDigitCode
 } from '../../utils/loginCode';
+import {
+  getEnabledInviteFeatureLabels,
+  parseInviteCodeFromInput,
+  resolveValidInviteLink,
+} from '../../utils/inviteLinks';
 import jsQR from 'jsqr';
 import { 
   Lock, 
@@ -33,14 +38,21 @@ import {
   Upload,
   Clipboard,
   ListFilter,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Link2
 } from 'lucide-react';
 
 interface AuthScreenProps {
   initialMode?: 'login' | 'register' | 'forgot_password';
+  initialInviteCode?: string;
+  onClearInviteParam?: () => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({
+  initialMode = 'login',
+  initialInviteCode,
+  onClearInviteParam,
+}) => {
   const { 
     sendLoginOtp, 
     verifyLoginOtpAndLogin, 
@@ -55,6 +67,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
     isSupplierSelectionRequired,
     setIsSupplierSelectionRequired,
     suppliers,
+    inviteLinks,
     setCurrentSupplierId,
     currentUser
   } = useApp();
@@ -92,11 +105,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
   const [regPhone, setRegPhone] = useState('');
   const [regTradeName, setRegTradeName] = useState('');
   const [regSupplierId, setRegSupplierId] = useState('');
+  const [inviteInput, setInviteInput] = useState(initialInviteCode || '');
   const [isScanningQrImage, setIsScanningQrImage] = useState(false);
   const [showSupplierDropdown, setShowSupplierDropdown] = useState(false);
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showRegConfirmPassword, setShowRegConfirmPassword] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
+
+  const parsedInviteCode = parseInviteCodeFromInput(inviteInput);
+  const resolvedInvite = parsedInviteCode
+    ? resolveValidInviteLink({
+        codeOrUrl: parsedInviteCode,
+        inviteLinks,
+        suppliers,
+      })
+    : null;
+
+  useEffect(() => {
+    if (initialInviteCode) {
+      setInviteInput(initialInviteCode);
+      setMode('register');
+      setRegRole('pos_client');
+    }
+  }, [initialInviteCode]);
+
+  useEffect(() => {
+    if (resolvedInvite?.valid) {
+      setRegSupplierId(resolvedInvite.supplier.id);
+    }
+  }, [resolvedInvite?.valid ? resolvedInvite.supplier.id : '']);
 
   // Handle uploading QR Code Image file to decode supplier ID using jsQR
   const handleQrImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -389,11 +426,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
       return;
     }
 
-    if (regRole === 'pos_client' && !regSupplierId.trim()) {
+    if (regRole === 'pos_client' && parsedInviteCode && resolvedInvite && !resolvedInvite.valid && !isCheckingConn) {
+      showToast({
+        type: 'error',
+        title: 'رابط الدعوة غير صالح',
+        description: resolvedInvite.error
+      });
+      return;
+    }
+
+    if (regRole === 'pos_client' && !regSupplierId.trim() && !parsedInviteCode) {
       showToast({
         type: 'error',
         title: 'معرف المتجر مطلوب',
-        description: 'يرجى تقديم معرف المتجر الذي ترغب بإنشاء الحساب لديه (عبر كتابة المعرف، اللصق، أو رفع صورة الكيو أر).'
+        description: 'يرجى تقديم معرف المتجر أو إدخال كود/رابط الدعوة للتسجيل لدى المتجر.'
       });
       return;
     }
@@ -408,7 +454,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
         role: regRole,
         phone: regPhone.trim(),
         tradeName: regTradeName.trim(),
-        supplierId: regRole === 'pos_client' ? regSupplierId.trim() : undefined
+        supplierId: regRole === 'pos_client' ? regSupplierId.trim() : undefined,
+        inviteCode: regRole === 'pos_client' && parsedInviteCode ? parsedInviteCode : undefined
       });
 
       if (res.success) {
@@ -424,6 +471,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
         setRegPhone('');
         setRegTradeName('');
         setRegSupplierId('');
+        setInviteInput('');
+        onClearInviteParam?.();
         setAuthError(null);
         
         setRegistrationBanner(`تم إنشاء الحساب (${createdEmail}) وتوثيقه بنجاح في قاعدة البيانات! يمكنك الآن إدخال كلمة المرور والدخول مباشرة إلى حسابك.`);
@@ -833,108 +882,202 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                   </div>
                 </div>
 
-                {/* Supplier ID Field for POS Clients / Agents */}
+                {/* Invite Link / Code + Supplier ID Field for POS Clients / Agents */}
                 {regRole === 'pos_client' && (
-                  <div className="p-3 sm:p-4 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-2.5 shadow-lg shadow-amber-500/5">
-                    <div className="flex items-center justify-between text-xs">
-                      <label className="font-semibold text-amber-400 flex items-center gap-1.5 text-xs">
-                        <QrCode className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span>معرف المتجر المراد التسجيل لديه (مطلوب):</span>
-                      </label>
-                      <span className="text-[10px] text-amber-300 font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                        ID أو QR Code
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-300 leading-relaxed">
-                      اكتب المعرف، أو قم بلصقه، أو ارفع صورة الكيو أر (QR) للمتجر لاستخراجه وقراءته تلقائياً:
-                    </p>
-
-                    <div className="space-y-2">
-                      <div className="relative flex items-center">
-                        <input
-                          type="text"
-                          required={regRole === 'pos_client'}
-                          value={regSupplierId}
-                          onChange={e => setRegSupplierId(e.target.value)}
-                          placeholder="أدخل معرف المتجر أو امسحه (مثال: sup-jamal-01)"
-                          className="w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white pl-28 focus:outline-none font-mono"
-                          dir="ltr"
-                        />
-
-                        <div className="absolute left-1.5 top-1 sm:top-1.5 flex items-center gap-1">
+                  <div className="space-y-3">
+                    {/* Optional Smart Invite Link / Code Box */}
+                    <div className="p-3 sm:p-4 rounded-2xl bg-slate-950 border border-purple-500/30 space-y-2.5 shadow-lg shadow-purple-500/5">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <label className="font-semibold text-purple-300 flex items-center gap-1.5 text-xs">
+                          <Link2 className="w-4 h-4 text-purple-400 shrink-0" />
+                          <span>رابط أو كود الدعوة المخصص (اختياري):</span>
+                        </label>
+                        {parsedInviteCode && (
                           <button
                             type="button"
-                            onClick={handlePasteSupplierId}
-                            title="لصق المعرف من الحافظة"
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                            onClick={() => {
+                              setInviteInput('');
+                              setRegSupplierId('');
+                              onClearInviteParam?.();
+                            }}
+                            className="text-[10px] text-rose-300 hover:underline font-bold cursor-pointer"
                           >
-                            <Clipboard className="w-3.5 h-3.5" />
+                            إلغاء الدعوة
                           </button>
+                        )}
+                      </div>
 
-                          <label
-                            title="تحميل صورة الكيو أر (QR)"
-                            className="p-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer transition-colors flex items-center gap-1 text-[11px] font-bold shadow-sm"
-                          >
-                            {isScanningQrImage ? (
-                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-950" />
-                            ) : (
-                              <ImageIcon className="w-3.5 h-3.5 text-slate-950" />
-                            )}
-                            <span>رفع QR</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={handleQrImageUpload}
-                              className="hidden"
-                            />
-                          </label>
+                      <input
+                        type="text"
+                        value={inviteInput}
+                        onChange={(e) => setInviteInput(e.target.value)}
+                        placeholder="الصق رابط الدعوة أو الكود هنا (إن وُجد) لتطبيق الرتبة والميزات تلقائياً"
+                        className="w-full bg-slate-900 border border-slate-700 focus:border-purple-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                        dir="ltr"
+                      />
+
+                      {parsedInviteCode && (
+                        <div>
+                          {isCheckingConn && !resolvedInvite?.valid ? (
+                            <div className="flex items-center gap-2 text-[11px] text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
+                              <span>جاري التحقق من رابط الدعوة وصلاحياته من قاعدة البيانات...</span>
+                            </div>
+                          ) : resolvedInvite?.valid ? (
+                            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2 text-[11px]">
+                              <div className="flex items-center gap-1.5 text-emerald-300 font-bold">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                                <span>
+                                  دعوة صالحة من متجر:{' '}
+                                  <strong className="text-white">
+                                    {resolvedInvite.supplier.storeName || resolvedInvite.supplier.name}
+                                  </strong>
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${
+                                    TIERS_CONFIG[resolvedInvite.targetTier].badgeColor
+                                  } ${TIERS_CONFIG[resolvedInvite.targetTier].textColor}`}
+                                >
+                                  الرتبة الممنوحة: {TIERS_CONFIG[resolvedInvite.targetTier].nameAr}
+                                </span>
+                                {getEnabledInviteFeatureLabels(resolvedInvite.features).map((f) => (
+                                  <span
+                                    key={f.key}
+                                    className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-200 border border-emerald-500/30 text-[10px] font-semibold"
+                                  >
+                                    ✓ {f.labelAr}
+                                  </span>
+                                ))}
+                              </div>
+                              {resolvedInvite.features?.isAccreditedPos && (
+                                <p className="text-[10px] text-amber-200/90 bg-amber-500/10 border border-amber-500/25 rounded-lg px-2.5 py-1.5 leading-relaxed">
+                                  يتضمن هذا الرابط اعتماد حسابك كنقطة بيع رسمية للمتجر وإتاحة اطلاع المتجر على واجهة نقطة البيع الخاصة بك بوضع القراءة فقط.
+                                </p>
+                              )}
+                            </div>
+                          ) : resolvedInvite && !resolvedInvite.valid ? (
+                            <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 flex items-center gap-2 text-[11px]">
+                              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                              <span>{resolvedInvite.error}</span>
+                            </div>
+                          ) : null}
                         </div>
+                      )}
+                    </div>
+
+                    <div className="p-3 sm:p-4 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-2.5 shadow-lg shadow-amber-500/5">
+                      <div className="flex items-center justify-between text-xs">
+                        <label className="font-semibold text-amber-400 flex items-center gap-1.5 text-xs">
+                          <QrCode className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>معرف المتجر المراد التسجيل لديه (مطلوب):</span>
+                        </label>
+                        <span className="text-[10px] text-amber-300 font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                          ID أو QR Code
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        {resolvedInvite?.valid
+                          ? 'تم تحديد المتجر تلقائياً عبر رابط الدعوة المرفق.'
+                          : 'اكتب المعرف، أو قم بلصقه، أو ارفع صورة الكيو أر (QR) للمتجر لاستخراجه وقراءته تلقائياً:'}
+                      </p>
+
+                      <div className="space-y-2">
+                        <div className="relative flex items-center">
+                          <input
+                            type="text"
+                            required={regRole === 'pos_client' && !resolvedInvite?.valid}
+                            readOnly={Boolean(resolvedInvite?.valid)}
+                            value={regSupplierId}
+                            onChange={e => setRegSupplierId(e.target.value)}
+                            placeholder="أدخل معرف المتجر أو امسحه (مثال: sup-jamal-01)"
+                            className={`w-full bg-slate-900 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-white focus:outline-none font-mono ${
+                              resolvedInvite?.valid ? 'opacity-80 cursor-not-allowed' : 'pl-28'
+                            }`}
+                            dir="ltr"
+                          />
+
+                        {!resolvedInvite?.valid && (
+                          <div className="absolute left-1.5 top-1 sm:top-1.5 flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={handlePasteSupplierId}
+                              title="لصق المعرف من الحافظة"
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                            >
+                              <Clipboard className="w-3.5 h-3.5" />
+                            </button>
+
+                            <label
+                              title="تحميل صورة الكيو أر (QR)"
+                              className="p-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer transition-colors flex items-center gap-1 text-[11px] font-bold shadow-sm"
+                            >
+                              {isScanningQrImage ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-950" />
+                              ) : (
+                                <ImageIcon className="w-3.5 h-3.5 text-slate-950" />
+                              )}
+                              <span>رفع QR</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={handleQrImageUpload}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+                        )}
                       </div>
 
                       {/* Quick Select Option from system suppliers list */}
-                      <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-800/80">
-                        <span className="text-slate-400">أو اختر من قائمة المتاجر المتاحين:</span>
-                        <button
-                          type="button"
-                          onClick={() => setShowSupplierDropdown(!showSupplierDropdown)}
-                          className="text-amber-400 hover:underline font-semibold flex items-center gap-1 text-[11px]"
-                        >
-                          <ListFilter className="w-3.5 h-3.5" />
-                          <span>{showSupplierDropdown ? 'إغلاق القائمة' : 'استعراض المتاجر'}</span>
-                        </button>
-                      </div>
+                      {!resolvedInvite?.valid && (
+                        <>
+                          <div className="flex items-center justify-between text-[11px] pt-1.5 border-t border-slate-800/80">
+                            <span className="text-slate-400">أو اختر من قائمة المتاجر المتاحين:</span>
+                            <button
+                              type="button"
+                              onClick={() => setShowSupplierDropdown(!showSupplierDropdown)}
+                              className="text-amber-400 hover:underline font-semibold flex items-center gap-1 text-[11px]"
+                            >
+                              <ListFilter className="w-3.5 h-3.5" />
+                              <span>{showSupplierDropdown ? 'إغلاق القائمة' : 'استعراض المتاجر'}</span>
+                            </button>
+                          </div>
 
-                      {showSupplierDropdown && (
-                        <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto p-1.5 bg-slate-900 rounded-xl border border-slate-800 text-xs">
-                          {suppliers.length === 0 ? (
-                            <div className="p-3 text-center text-[11px] text-slate-400">
-                              لا توجد متاجر مسجلة في المنصة حالياً.
-                            </div>
-                          ) : (
-                            suppliers.map(sup => (
-                              <button
-                                key={sup.id}
-                                type="button"
-                                onClick={() => {
-                                  setRegSupplierId(sup.id);
-                                  setShowSupplierDropdown(false);
-                                }}
-                                className={`p-2 rounded-lg text-right transition-colors flex items-center justify-between ${
-                                  regSupplierId === sup.id
-                                    ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30'
-                                    : 'hover:bg-slate-800 text-slate-300'
-                                }`}
-                              >
-                                <div>
-                                  <div className="font-bold text-white text-xs">{sup.name} - {sup.storeName}</div>
-                                  <div className="text-[10px] text-slate-400 font-mono">المعرف: {sup.id}</div>
+                          {showSupplierDropdown && (
+                            <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto p-1.5 bg-slate-900 rounded-xl border border-slate-800 text-xs">
+                              {suppliers.length === 0 ? (
+                                <div className="p-3 text-center text-[11px] text-slate-400">
+                                  لا توجد متاجر مسجلة في المنصة حالياً.
                                 </div>
-                                {regSupplierId === sup.id && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
-                              </button>
-                            ))
+                              ) : (
+                                suppliers.map(sup => (
+                                  <button
+                                    key={sup.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setRegSupplierId(sup.id);
+                                      setShowSupplierDropdown(false);
+                                    }}
+                                    className={`p-2 rounded-lg text-right transition-colors flex items-center justify-between ${
+                                      regSupplierId === sup.id
+                                        ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30'
+                                        : 'hover:bg-slate-800 text-slate-300'
+                                    }`}
+                                  >
+                                    <div>
+                                      <div className="font-bold text-white text-xs">{sup.name} - {sup.storeName}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono">المعرف: {sup.id}</div>
+                                    </div>
+                                    {regSupplierId === sup.id && <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />}
+                                  </button>
+                                ))
+                              )}
+                            </div>
                           )}
-                        </div>
+                        </>
                       )}
 
                       {/* Real-time Verification Status Badge */}
@@ -957,6 +1100,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ initialMode = 'login' })
                           )}
                         </div>
                       )}
+                    </div>
                     </div>
                   </div>
                 )}

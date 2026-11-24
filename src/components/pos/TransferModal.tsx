@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Send, ArrowRight, UserCheck, AlertCircle, QrCode, Scan } from 'lucide-react';
+import { X, Send, ArrowRight, UserCheck, AlertCircle, QrCode, Scan, BadgeCheck } from 'lucide-react';
 
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 
@@ -153,7 +153,15 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
                 <div className="flex items-center gap-2">
                   <UserCheck className="w-4 h-4 text-cyan-400" />
                   <div>
-                    <div className="font-semibold text-white">{targetPos.tradeName}</div>
+                    <div className="font-semibold text-white flex items-center gap-1.5 flex-wrap">
+                      <span>{targetPos.tradeName}</span>
+                      {targetPos.isAccreditedPos && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/35 text-[10px] font-bold">
+                          <BadgeCheck className="w-3 h-3 text-amber-400" />
+                          <span>نقطة بيع معتمدة</span>
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-400">{targetPos.ownerName} · {targetPos.city}</div>
                   </div>
                 </div>
@@ -273,8 +281,15 @@ export const TransferModal: React.FC<TransferModalProps> = ({ onClose }) => {
                       onClick={() => handleSelectScannedCode(pos.posCode)}
                       className="w-full p-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-right flex items-center justify-between text-xs transition-colors"
                     >
-                      <div>
-                        <div className="font-semibold text-white">{pos.tradeName}</div>
+                      <div className="text-right">
+                        <div className="font-semibold text-white flex items-center gap-1.5 flex-wrap">
+                          <span>{pos.tradeName}</span>
+                          {pos.isAccreditedPos && (
+                            <span title="نقطة بيع معتمدة للمتجر" className="inline-flex items-center shrink-0">
+                              <BadgeCheck className="w-3.5 h-3.5 text-amber-400" />
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[10px] text-slate-400">{pos.city}</div>
                       </div>
                       <span className="font-mono text-cyan-400 font-bold">{pos.posCode}</span>

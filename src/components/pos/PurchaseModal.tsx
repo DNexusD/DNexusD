@@ -56,7 +56,7 @@ interface PurchaseModalProps {
 }
 
 export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }) => {
-  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, voucherWarehouses, supplier, platformSettings, executePurchase, showToast, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency, convertToSar } = useApp();
+  const { currentPos, currentPosSupplier, superAdmin, catalogs, services, orders, voucherWarehouses, supplier, platformSettings, isSupplierPosPreviewMode, executePurchase, showToast, activeCurrency, activeExchangeRate, currencyLabel, formatCurrency, convertToSar } = useApp();
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 15000);
@@ -238,6 +238,15 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
   // Handle Purchase Confirmation
   const handleConfirmPurchase = async () => {
     setAccountError(null);
+
+    if (isSupplierPosPreviewMode) {
+      showToast({
+        type: 'info',
+        title: 'وضع الاطلاع فقط',
+        description: 'أنت تستعرض واجهة نقطة البيع المعتمدة في وضع القراءة فقط ولا يمكن تنفيذ الشراء.'
+      });
+      return;
+    }
 
     if (isGiftBlocked) {
       showToast({
@@ -1550,13 +1559,28 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 </div>
               )}
 
+              {isSupplierPosPreviewMode && (
+                <div
+                  role="status"
+                  className="p-3.5 rounded-2xl bg-cyan-500/15 border border-cyan-500/40 text-xs text-cyan-200 space-y-1 text-right"
+                >
+                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>وضع الاطلاع على واجهة نقطة البيع (قراءة فقط)</span>
+                  </div>
+                  <p className="text-cyan-200/90 leading-relaxed">
+                    يمكنك استعراض أسعار الباقات المطبقة لهذا العميل وتفاصيل الخدمة، لكن تنفيذ الشراء والدفع معطلان في وضع المعاينة.
+                  </p>
+                </div>
+              )}
+
               {/* Confirm Purchase Button with clearly displayed price */}
               <button
                 type="button"
-                disabled={orderProcessing || isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg}
+                disabled={isSupplierPosPreviewMode || orderProcessing || isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg}
                 onClick={handleConfirmPurchase}
                 className={`w-full py-3.5 px-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer ${
-                  isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg
+                  isSupplierPosPreviewMode || isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                     : !serviceAvailability.available
                     ? 'bg-rose-500/20 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
@@ -1566,11 +1590,13 @@ export const PurchaseModal: React.FC<PurchaseModalProps> = ({ service, onClose }
                 }`}
               >
                 {selectedPricing.isFreeGiftApplied &&
-                  !(isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg || !serviceAvailability.available) && (
+                  !(isSupplierPosPreviewMode || isGiftBlocked || selectedPkgIsOutOfStock || methodPackages.length === 0 || !selectedPkg || !serviceAvailability.available) && (
                     <Gift className="w-4 h-4" />
                   )}
                 <span>
-                  {isGiftBlocked
+                  {isSupplierPosPreviewMode
+                    ? 'وضع المعاينة (قراءة فقط) — الشراء معطل'
+                    : isGiftBlocked
                     ? giftStatus.isExpired
                       ? 'الهدية غير مفعلة · انتهت الفترة المحددة'
                       : 'الهدية غير مفعلة · تم استنفاد مرات الاستخدام'

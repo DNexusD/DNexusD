@@ -60,8 +60,18 @@ import {
   LogOut,
   Ban,
   Power,
-  Trash2
+  Trash2,
+  BadgeCheck
 } from 'lucide-react';
+import {
+  ClientAccreditationFilter,
+  canSupplierInspectPosInterface,
+  filterStoreClients,
+  formatAccreditationDateAr,
+  getPosUpgradeStatus,
+  hasClientApprovedPosUpgrade,
+  isPosClientAccredited,
+} from '../../utils/posAccreditation';
 import { QRCodeSVG } from 'qrcode.react';
 import { AddServiceModal } from './AddServiceModal';
 import { EditCatalogModal } from './EditCatalogModal';
@@ -129,6 +139,8 @@ export const SupplierDashboard: React.FC = () => {
     togglePosReceiveTransfersPrivilege,
     togglePosBonusPrivilege,
     togglePosGiftsPrivilege,
+    togglePosAccreditedPrivilege,
+    openSupplierPosPreview,
     togglePosClientActiveStatus,
     deletePosClient,
     addCatalog,
@@ -183,6 +195,22 @@ export const SupplierDashboard: React.FC = () => {
   const [showClientsDirectoryModal, setShowClientsDirectoryModal] = useState(false);
   const [clientPendingDelete, setClientPendingDelete] = useState<POSClient | null>(null);
   const [isDeletingClient, setIsDeletingClient] = useState(false);
+  const [clientSearchQuery, setClientSearchQuery] = useState('');
+  const [clientStatusFilter, setClientStatusFilter] = useState<ClientAccreditationFilter>('all');
+
+  const accreditedClientsCount = useMemo(
+    () => storeClients.filter((c) => hasClientApprovedPosUpgrade(c)).length,
+    [storeClients]
+  );
+
+  const filteredStoreClients = useMemo(
+    () =>
+      filterStoreClients(storeClients, {
+        searchQuery: clientSearchQuery,
+        filter: clientStatusFilter,
+      }),
+    [storeClients, clientSearchQuery, clientStatusFilter]
+  );
 
   const perms = useMemo(
     () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
@@ -2788,38 +2816,123 @@ export const SupplierDashboard: React.FC = () => {
               {(isStoreOwner || perms.canUpgradeClientTiers) && (
                 <button
                   onClick={() => setShowInviteModal(true)}
-                  className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1"
+                  className="px-3 py-1.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Link2 className="w-3.5 h-3.5" />
-                  <span>إرسال رابط تسجيل برتبة محددة</span>
+                  <span>إنشاء رابط برتبة وميزات محددة</span>
                 </button>
               )}
             </div>
           </div>
+
+          {/* Search & Accreditation Filter Bar */}
+          {storeClients.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                {[
+                  { id: 'all' as ClientAccreditationFilter, label: `الكل (${storeClients.length})` },
+                  { id: 'accredited' as ClientAccreditationFilter, label: `نقاط البيع المعتمدة (${accreditedClientsCount})` },
+                  { id: 'unaccredited' as ClientAccreditationFilter, label: `غير معتمدين (${storeClients.length - accreditedClientsCount})` },
+                  { id: 'active' as ClientAccreditationFilter, label: 'النشطون' },
+                  { id: 'suspended' as ClientAccreditationFilter, label: 'الموقوفون' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setClientStatusFilter(opt.id)}
+                    className={`px-3 py-1.5 rounded-xl font-bold transition-colors cursor-pointer ${
+                      clientStatusFilter === opt.id
+                        ? opt.id === 'accredited'
+                          ? 'bg-amber-500 text-slate-950 shadow-sm'
+                          : 'bg-slate-200 text-slate-950 shadow-sm'
+                        : 'bg-slate-950 text-slate-300 border border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative w-full lg:w-72">
+                <input
+                  type="text"
+                  value={clientSearchQuery}
+                  onChange={(e) => setClientSearchQuery(e.target.value)}
+                  placeholder="بحث باسم المحل، المالك، المعرّف، الهاتف..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-3 py-2 pr-9 text-xs text-white focus:outline-none"
+                />
+                <Search className="w-4 h-4 text-slate-500 absolute right-3 top-2.5 pointer-events-none" />
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {storeClients.length === 0 ? (
               <div className="md:col-span-2 p-8 rounded-3xl bg-slate-900 border border-slate-800 text-center text-xs text-slate-400">
                 لا توجد نقاط بيع أو عملاء مسجلون لدى هذا المتجر حالياً.
               </div>
+            ) : filteredStoreClients.length === 0 ? (
+              <div className="md:col-span-2 p-8 rounded-3xl bg-slate-900 border border-slate-800 text-center text-xs text-slate-400 space-y-2">
+                <p>لا يوجد عملاء مطابقون لمعايير البحث أو التصفية الحالية.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClientSearchQuery('');
+                    setClientStatusFilter('all');
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold cursor-pointer"
+                >
+                  عرض جميع العملاء
+                </button>
+              </div>
             ) : (
-              storeClients.map(client => {
+              filteredStoreClients.map(client => {
               const currentTier = TIERS_CONFIG[client.tier] || TIERS_CONFIG.regular;
               const clientActive = isPosClientActive(client);
+              const upgradeStatus = getPosUpgradeStatus(client);
+              const clientApprovedPos = hasClientApprovedPosUpgrade(client);
+              const clientAccredited = clientApprovedPos || isPosClientAccredited(client);
+              const canInspectPos = canSupplierInspectPosInterface({
+                client,
+                supplierId: supplier.id,
+                role,
+                canViewClients: perms.canViewClients,
+                canUpgradeClientTiers: perms.canUpgradeClientTiers,
+              });
 
               return (
                 <div
                   key={client.id}
                   className={`p-5 rounded-3xl border space-y-4 text-xs transition-colors ${
-                    clientActive
-                      ? 'bg-slate-900 border-slate-800'
-                      : 'bg-slate-900/80 border-rose-500/40'
+                    !clientActive
+                      ? 'bg-slate-900/80 border-rose-500/40'
+                      : clientApprovedPos
+                      ? 'bg-slate-900 border-amber-500/40 shadow-lg shadow-amber-500/5'
+                      : upgradeStatus === 'pending_client_approval'
+                      ? 'bg-slate-900 border-cyan-500/35'
+                      : 'bg-slate-900 border-slate-800'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-bold text-base text-white">{client.tradeName}</h3>
+                        {clientApprovedPos ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/40">
+                            <BadgeCheck className="w-3 h-3 text-amber-400" />
+                            <span>نقطة بيع معتمدة (وافق العميل) ✓</span>
+                          </span>
+                        ) : upgradeStatus === 'pending_client_approval' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/40">
+                            <Clock className="w-3 h-3 text-cyan-400" />
+                            <span>بانتظار موافقة العميل على الترقية</span>
+                          </span>
+                        ) : upgradeStatus === 'declined' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/35">
+                            <XCircle className="w-3 h-3 text-rose-400" />
+                            <span>رفض العميل الترقية</span>
+                          </span>
+                        ) : null}
                         <span
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
                             clientActive
@@ -2875,6 +2988,53 @@ export const SupplierDashboard: React.FC = () => {
                         {formatCurrency(client.totalSpent)}
                       </strong>
                     </div>
+                  </div>
+
+                  {/* Inspect Accredited POS Interface button (present on every client card; enabled after explicit client upgrade approval) */}
+                  <div>
+                    <button
+                      type="button"
+                      disabled={!canInspectPos}
+                      onClick={() => openSupplierPosPreview(client.id)}
+                      className={`w-full py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all ${
+                        canInspectPos
+                          ? 'bg-gradient-to-r from-cyan-500/20 to-amber-500/15 hover:from-cyan-500/30 hover:to-amber-500/25 text-cyan-200 border-cyan-500/45 shadow-sm cursor-pointer'
+                          : 'bg-slate-950/70 text-slate-500 border-slate-800 cursor-not-allowed opacity-75'
+                      }`}
+                      title={
+                        canInspectPos
+                          ? 'الاطلاع على واجهة نقطة البيع المعتمدة لهذا العميل (قراءة فقط)'
+                          : upgradeStatus === 'pending_client_approval'
+                          ? 'بانتظار موافقة العميل الصريحة على الترقية قبل فتح الواجهة'
+                          : upgradeStatus === 'declined'
+                          ? 'رفض العميل طلب الترقية إلى نقطة بيع معتمدة'
+                          : 'يتطلب ترقية العميل واعتماده وموافقته على الترقية أولاً'
+                      }
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <Eye className={`w-4 h-4 shrink-0 ${canInspectPos ? 'text-cyan-400' : 'text-slate-500'}`} />
+                        <span className="truncate">الاطلاع على واجهة نقطة البيع المعتمدة</span>
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-lg text-[10px] shrink-0 font-semibold ${
+                          canInspectPos
+                            ? 'bg-cyan-500 text-slate-950 font-bold'
+                            : upgradeStatus === 'pending_client_approval'
+                            ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                            : upgradeStatus === 'declined'
+                            ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {canInspectPos
+                          ? 'فتح الواجهة 👁️'
+                          : upgradeStatus === 'pending_client_approval'
+                          ? 'بانتظار موافقة العميل'
+                          : upgradeStatus === 'declined'
+                          ? 'مرفوض من العميل'
+                          : 'غير معتمد بعد'}
+                      </span>
+                    </button>
                   </div>
 
                   {/* Grant balance / loan button for this specific client */}
@@ -3017,6 +3177,78 @@ export const SupplierDashboard: React.FC = () => {
                               {client.canViewGifts ? 'مفعلة ✓' : 'مقفلة'}
                             </span>
                           </button>
+
+                          {/* Accredited POS Point Privilege (requires explicit client upgrade approval) */}
+                          <button
+                            type="button"
+                            onClick={() => togglePosAccreditedPrivilege(client.id)}
+                            className={`sm:col-span-2 p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              clientApprovedPos
+                                ? 'bg-gradient-to-r from-amber-500/20 to-emerald-500/15 text-amber-200 border-amber-500/50 hover:from-amber-500/30 hover:to-emerald-500/25 shadow-sm'
+                                : upgradeStatus === 'pending_client_approval'
+                                ? 'bg-cyan-500/15 text-cyan-200 border-cyan-500/45 hover:bg-cyan-500/25'
+                                : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-amber-500/40 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <BadgeCheck
+                                className={`w-4 h-4 shrink-0 ${
+                                  clientApprovedPos
+                                    ? 'text-amber-400'
+                                    : upgradeStatus === 'pending_client_approval'
+                                    ? 'text-cyan-400'
+                                    : 'text-slate-400'
+                                }`}
+                              />
+                              <div className="text-right min-w-0">
+                                <div className="truncate text-[11px] font-bold">
+                                  {clientApprovedPos
+                                    ? 'اعتماد العميل كنقطة بيع للمتجر (مفعّل)'
+                                    : upgradeStatus === 'pending_client_approval'
+                                    ? 'طلب ترقية إلى نقطة بيع بانتظار موافقة العميل'
+                                    : upgradeStatus === 'declined'
+                                    ? 'إعادة إرسال طلب الترقية إلى نقطة بيع معتمدة'
+                                    : 'ترقية واعتماد العميل كنقطة بيع للمتجر'}
+                                </div>
+                                {clientApprovedPos ? (
+                                  <div className="text-[10px] text-emerald-300/90 font-normal truncate">
+                                    وافق العميل · معتمد منذ: {formatAccreditationDateAr(client.accreditedAt)}
+                                  </div>
+                                ) : upgradeStatus === 'pending_client_approval' ? (
+                                  <div className="text-[10px] text-cyan-300/90 font-normal truncate">
+                                    أُرسل للعميل — اضغط لإلغاء الطلب المعلق
+                                  </div>
+                                ) : upgradeStatus === 'declined' ? (
+                                  <div className="text-[10px] text-rose-300/90 font-normal truncate">
+                                    رفض العميل الطلب السابق — اضغط لإرسال دعوة جديدة
+                                  </div>
+                                ) : (
+                                  <div className="text-[10px] text-slate-400 font-normal truncate">
+                                    يرسل دعوة ترقية تتطلب موافقة العميل الصريحة
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-lg text-[10px] shrink-0 font-mono ${
+                                clientApprovedPos
+                                  ? 'bg-amber-500 text-slate-950 font-bold'
+                                  : upgradeStatus === 'pending_client_approval'
+                                  ? 'bg-cyan-500 text-slate-950 font-bold'
+                                  : upgradeStatus === 'declined'
+                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                  : 'bg-slate-800 text-slate-300'
+                              }`}
+                            >
+                              {clientApprovedPos
+                                ? 'نقطة بيع معتمدة ✓'
+                                : upgradeStatus === 'pending_client_approval'
+                                ? 'إلغاء الطلب المعلق'
+                                : upgradeStatus === 'declined'
+                                ? 'مرفوض · إعادة إرسال'
+                                : 'إرسال طلب ترقية'}
+                            </span>
+                          </button>
                         </div>
                       </div>
 
@@ -3055,13 +3287,26 @@ export const SupplierDashboard: React.FC = () => {
                       </div>
                     </div>
                   ) : (
-                    <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-slate-400">
-                        الرتبة الحالية:{' '}
-                        <strong className={`px-2 py-0.5 rounded ${currentTier.badgeColor} ${currentTier.textColor}`}>
-                          {currentTier.nameAr}
-                        </strong>
-                      </span>
+                    <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[11px] text-slate-400">
+                          الرتبة الحالية:{' '}
+                          <strong className={`px-2 py-0.5 rounded ${currentTier.badgeColor} ${currentTier.textColor}`}>
+                            {currentTier.nameAr}
+                          </strong>
+                        </span>
+                        {clientApprovedPos ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/35">
+                            <BadgeCheck className="w-3 h-3 text-amber-400" />
+                            <span>نقطة بيع معتمدة (وافق العميل)</span>
+                          </span>
+                        ) : upgradeStatus === 'pending_client_approval' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/35">
+                            <Clock className="w-3 h-3 text-cyan-400" />
+                            <span>بانتظار موافقة العميل</span>
+                          </span>
+                        ) : null}
+                      </div>
                       <span className="text-[10px] text-slate-500">
                         صلاحية اطلاع فقط بدون تعديل الرتب أو الميزات
                       </span>

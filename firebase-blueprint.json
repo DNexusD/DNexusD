@@ -50,7 +50,13 @@
         "pendingGiftFees": { "type": "number" },
         "usedGiftServiceIds": { "type": "array" },
         "preferredCurrency": { "type": "string", "enum": ["SAR", "USD"] },
-        "isActive": { "type": "boolean" }
+        "isActive": { "type": "boolean" },
+        "isAccreditedPos": { "type": "boolean" },
+        "accreditedAt": { "type": "string" },
+        "accreditedByName": { "type": "string" },
+        "posUpgradeStatus": { "type": "string", "enum": ["none", "pending_client_approval", "approved", "declined"] },
+        "posUpgradeRequestedAt": { "type": "string" },
+        "posUpgradeRespondedAt": { "type": "string" }
       },
       "required": ["id", "posCode", "tradeName", "ownerName", "phone", "supplierId", "tier", "walletBalance"]
     },
@@ -386,7 +392,7 @@
     },
     "InviteLink": {
       "title": "InviteLink",
-      "description": "Pre-assigned tier invitation links created by suppliers",
+      "description": "Pre-assigned tier and features invitation links created by suppliers",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -394,6 +400,9 @@
         "supplierId": { "type": "string" },
         "supplierName": { "type": "string" },
         "targetTier": { "type": "string", "enum": ["regular", "bronze", "silver", "gold", "vip"] },
+        "features": { "type": "object" },
+        "isActive": { "type": "boolean" },
+        "label": { "type": "string" },
         "createdAt": { "type": "string" },
         "usedCount": { "type": "number" },
         "url": { "type": "string" }

@@ -3,7 +3,9 @@ import { useApp } from '../context/AppContext';
 import { 
   Building2, 
   UserCheck,
-  Coins
+  Coins,
+  Eye,
+  ArrowRight
 } from 'lucide-react';
 import { TIERS_CONFIG } from '../types';
 import { resolveEffectiveAdminPermissions } from '../utils/adminAccounts';
@@ -23,7 +25,9 @@ export const Header: React.FC = () => {
     activeCurrency,
     activeExchangeRate,
     setActiveCurrency,
-    formatCurrency
+    formatCurrency,
+    isSupplierPosPreviewMode,
+    closeSupplierPosPreview
   } = useApp();
 
   return (
@@ -136,6 +140,22 @@ export const Header: React.FC = () => {
                   <span className="text-slate-400 hidden sm:inline">·</span>
                   <span>رصيد مبيعات المتجر: <strong className="text-white font-mono tabular-nums">{formatCurrency(supplier.walletBalance, { withGrouping: true })}</strong></span>
                 </>
+              )}
+              {isSupplierPosPreviewMode && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-200 border border-cyan-500/40 font-bold text-xs flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>معاينة واجهة: {currentPos.tradeName} (قراءة فقط)</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={closeSupplierPosPreview}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <ArrowRight className="w-3 h-3" />
+                    <span>العودة للمتجر</span>
+                  </button>
+                </div>
               )}
             </div>
           )}

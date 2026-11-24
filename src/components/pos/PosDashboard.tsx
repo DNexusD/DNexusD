@@ -39,8 +39,13 @@ import {
   Smartphone,
   Globe,
   Ticket,
-  ShoppingBag
+  ShoppingBag,
+  BadgeCheck,
+  Eye,
+  ArrowRight,
+  XCircle
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { PurchaseModal } from './PurchaseModal';
 import { DepositModal } from './DepositModal';
 import { TransferModal } from './TransferModal';
@@ -69,6 +74,13 @@ import {
 import { downloadVoucherCodesPdf } from '../../utils/voucherPdf';
 import { getStoreCatalogEmptyMessage } from '../../utils/availabilityMessages';
 import { filterOrdersForPosClient } from '../../utils/accountAuth';
+import {
+  downloadPosAccreditationCertificatePdf,
+  formatAccreditationCertificateNumber,
+  formatAccreditationDateAr,
+  hasClientApprovedPosUpgrade,
+  needsPosUpgradeApproval,
+} from '../../utils/posAccreditation';
 
 export const PosDashboard: React.FC = () => {
   const {
@@ -97,6 +109,9 @@ export const PosDashboard: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     clearAllNotifications,
+    isSupplierPosPreviewMode,
+    closeSupplierPosPreview,
+    respondToPosUpgrade,
     logout,
   } = useApp();
 
@@ -144,9 +159,14 @@ export const PosDashboard: React.FC = () => {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showAccreditationModal, setShowAccreditationModal] = useState(false);
+  const [isDownloadingAccreditationPdf, setIsDownloadingAccreditationPdf] = useState(false);
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [copiedPosCode, setCopiedPosCode] = useState(false);
   const [exportingOrderPdfId, setExportingOrderPdfId] = useState<string | null>(null);
+
+  const isAccreditedPos = hasClientApprovedPosUpgrade(currentPos);
+  const showPendingUpgradeApproval = !isSupplierPosPreviewMode && needsPosUpgradeApproval(currentPos);
 
   const tier = TIERS_CONFIG[currentPos.tier] || TIERS_CONFIG.regular;
   const canReceiveSupplierTransfers = hasSupplierTransferPrivilege(currentPos, supplierBankAccounts);
@@ -409,6 +429,88 @@ export const PosDashboard: React.FC = () => {
   return (
     <div className="space-y-6">
 
+      {/* Supplier Read-Only Accredited POS Interface Inspection Banner */}
+      {isSupplierPosPreviewMode && (
+        <div className="sticky top-[108px] z-30 p-4 rounded-2xl bg-gradient-to-r from-cyan-950/95 via-slate-900/95 to-amber-950/85 border-2 border-cyan-500/60 shadow-2xl backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shrink-0">
+              <Eye className="w-5 h-5" />
+            </div>
+            <div className="space-y-0.5">
+              <div className="font-bold text-sm text-white flex items-center gap-2 flex-wrap">
+                <span>وضع الاطلاع على واجهة نقطة البيع المعتمدة</span>
+                <span className="px-2 py-0.5 rounded-lg bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 text-[10px] font-bold">
+                  قراءة فقط
+                </span>
+              </div>
+              <p className="text-slate-300 leading-relaxed">
+                أنت تطلع الآن على واجهة نقطة البيع الخاصة بالعميل{' '}
+                <strong className="text-amber-300">{currentPos.tradeName}</strong>{' '}
+                (<span className="font-mono text-cyan-300">{currentPos.posCode}</span>) بعد موافقته الصريحة على الترقية — جميع عمليات الشراء والتحويل والتعديل معطلة في هذا الوضع.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeSupplierPosPreview}
+            className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-lg shrink-0 cursor-pointer"
+          >
+            <ArrowRight className="w-4 h-4" />
+            <span>العودة إلى إدارة العملاء</span>
+          </button>
+        </div>
+      )}
+
+      {/* Client Explicit POS Upgrade Consent Banner */}
+      {showPendingUpgradeApproval && (
+        <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500/15 via-slate-900 to-cyan-950/40 border-2 border-amber-500/60 shadow-xl space-y-3 text-xs">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+              <BadgeCheck className="w-6 h-6" />
+            </div>
+            <div className="space-y-1 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-sm sm:text-base text-white">
+                  دعوة ترقية حسابك إلى نقطة بيع معتمدة للمتجر
+                </h3>
+                <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/35 text-[10px] font-bold">
+                  يتطلب موافقتك الصريحة
+                </span>
+              </div>
+              <p className="text-slate-200 leading-relaxed">
+                قام متجر{' '}
+                <strong className="text-amber-300">
+                  {currentPosSupplier.storeName || currentPosSupplier.name}
+                </strong>{' '}
+                بترشيح حسابك للترقية إلى <strong className="text-white">نقطة بيع معتمدة رسمياً</strong>.
+                عند الموافقة سيتم إصدار شارة وشهادة الاعتماد الرسمية لحسابك، كما سيتاح للمتجر الاطلاع على واجهة نقطة البيع الخاصة بك بوضع القراءة فقط.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => respondToPosUpgrade('approved')}
+              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>موافقة على الترقية إلى نقطة بيع معتمدة ✓</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => respondToPosUpgrade('declined')}
+              className="px-4 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <XCircle className="w-4 h-4" />
+              <span>رفض الترقية</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Admin Global Interface Notice for POS & Clients */}
       {platformSettings.showPosInterfaceNotice && platformSettings.posInterfaceNotice.trim() && (
         <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/60 via-slate-900 to-slate-900 border border-cyan-500/40 flex items-start gap-3 text-xs shadow-lg">
@@ -423,7 +525,7 @@ export const PosDashboard: React.FC = () => {
       )}
       
       {/* Live Supplier OTP Notification in Client Interface */}
-      {supplierOtpNotification && (
+      {!isSupplierPosPreviewMode && supplierOtpNotification && (
         <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500/20 via-slate-900 to-amber-950/40 border-2 border-amber-500/80 shadow-2xl space-y-3 animate-in slide-in-from-top-4 duration-300">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -494,18 +596,28 @@ export const PosDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Active Special Client Features Banner (Gifts, Free Offers, Loans & Bonus Privileges) */}
-      {(canSeeGiftsInStore || currentPos.canGetBonus || currentPos.canRequestLoans) && (
+      {/* Active Special Client Features Banner (Accredited POS, Gifts, Free Offers, Loans & Bonus Privileges) */}
+      {(isAccreditedPos || canSeeGiftsInStore || currentPos.canGetBonus || currentPos.canRequestLoans) && (
         <div className="p-4 rounded-3xl bg-gradient-to-r from-purple-950/40 via-amber-950/30 to-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
-              <Gift className="w-5 h-5" />
+              {isAccreditedPos ? <BadgeCheck className="w-5 h-5" /> : <Gift className="w-5 h-5" />}
             </div>
             <div>
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
                 <span>الميزات الخاصة الحصرية الممنوحة لك من المتجر:</span>
               </h3>
               <div className="flex flex-wrap items-center gap-2 mt-1">
+                {isAccreditedPos && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAccreditationModal(true)}
+                    className="px-2.5 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-bold flex items-center gap-1 text-[11px] transition-colors cursor-pointer"
+                  >
+                    <BadgeCheck className="w-3.5 h-3.5 text-amber-400" />
+                    <span>نقطة بيع معتمدة للمتجر</span>
+                  </button>
+                )}
                 {currentPos.canRequestLoans && (
                   <span className="px-2.5 py-1 rounded-xl bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-bold flex items-center gap-1 text-[11px]">
                     <HandCoins className="w-3.5 h-3.5 text-cyan-400" />
@@ -528,24 +640,42 @@ export const PosDashboard: React.FC = () => {
             </div>
           </div>
 
-          {canSeeGiftsInStore && (
-            <button
-              type="button"
-              onClick={() => {
-                setActiveNavTab('store');
-                setSelectedCatalogId(freeGiftsTargetId);
-              }}
-              className="px-3.5 py-2 rounded-2xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-500/30 text-purple-200 text-center sm:text-right shrink-0 transition-colors cursor-pointer"
-            >
-              <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
-                <Gift className="w-4 h-4 text-purple-300" />
-                <span>🎁 هدايا وعروض مجانية متاحة (السعر: {formatCurrency(0)} - مجاني)</span>
-              </div>
-              <div className="text-[10px] text-purple-200/80 mt-0.5">
-                {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر لاستعراض الهدايا المجانية المخصصة لك.'}
-              </div>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {isAccreditedPos && (
+              <button
+                type="button"
+                onClick={() => setShowAccreditationModal(true)}
+                className="px-3.5 py-2 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-200 text-center sm:text-right transition-colors cursor-pointer"
+              >
+                <div className="font-bold text-xs text-amber-300 flex items-center gap-1.5 justify-center sm:justify-start">
+                  <BadgeCheck className="w-4 h-4 text-amber-400" />
+                  <span>بطاقة وشهادة الاعتماد</span>
+                </div>
+                <div className="text-[10px] text-amber-200/80 mt-0.5">
+                  عرض وطباعة شهادة نقطة البيع المعتمدة
+                </div>
+              </button>
+            )}
+
+            {canSeeGiftsInStore && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveNavTab('store');
+                  setSelectedCatalogId(freeGiftsTargetId);
+                }}
+                className="px-3.5 py-2 rounded-2xl bg-purple-900/40 hover:bg-purple-800/50 border border-purple-500/30 text-purple-200 text-center sm:text-right shrink-0 transition-colors cursor-pointer"
+              >
+                <div className="font-bold text-xs text-purple-300 flex items-center gap-1.5 justify-center sm:justify-start">
+                  <Gift className="w-4 h-4 text-purple-300" />
+                  <span>🎁 هدايا وعروض مجانية متاحة (السعر: {formatCurrency(0)} - مجاني)</span>
+                </div>
+                <div className="text-[10px] text-purple-200/80 mt-0.5">
+                  {freeGiftsCatalog ? 'اضغط هنا لفتح كتالوج الهدايا المجانية الحصري.' : 'توجه للمتجر لاستعراض الهدايا المجانية المخصصة لك.'}
+                </div>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -573,16 +703,30 @@ export const PosDashboard: React.FC = () => {
                       {currentPos.ownerName}
                     </span>
                   </h1>
+
+                  {isAccreditedPos && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAccreditationModal(true)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500/20 to-emerald-500/20 hover:from-amber-500/30 hover:to-emerald-500/30 text-amber-200 border border-amber-500/40 text-xs font-bold transition-all shrink-0 cursor-pointer shadow-sm"
+                      title="عرض شهادة اعتماد نقطة البيع من المتجر"
+                    >
+                      <BadgeCheck className="w-3.5 h-3.5 text-amber-400" />
+                      <span>نقطة بيع معتمدة للمتجر ✓</span>
+                    </button>
+                  )}
                   
                   {/* Edit profile button */}
-                  <button
-                    onClick={() => setShowEditProfileModal(true)}
-                    className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1 transition-all shrink-0"
-                    title="تعديل الشعار، الاسم التجاري، البريد، هاتف الخدمات والمدينة"
-                  >
-                    <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                    <span>تعديل البيانات</span>
-                  </button>
+                  {!isSupplierPosPreviewMode && (
+                    <button
+                      onClick={() => setShowEditProfileModal(true)}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1 transition-all shrink-0"
+                      title="تعديل الشعار، الاسم التجاري، البريد، هاتف الخدمات والمدينة"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                      <span>تعديل البيانات</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap mt-1">
@@ -632,7 +776,8 @@ export const PosDashboard: React.FC = () => {
                 رتبة الحساب: {tier.nameAr}
               </span>
 
-              {/* Client Notifications Bell + Popover */}
+              {/* Client Notifications Bell + Popover (hidden in read-only supplier inspection mode) */}
+              {!isSupplierPosPreviewMode && (
               <div className="relative">
                 <button
                   type="button"
@@ -762,6 +907,7 @@ export const PosDashboard: React.FC = () => {
                   </>
                 )}
               </div>
+              )}
 
               <button
                 onClick={() => setShowQrModal(true)}
@@ -771,24 +917,38 @@ export const PosDashboard: React.FC = () => {
                 <QrCode className="w-4 h-4 text-amber-400" />
               </button>
 
-              <button
-                onClick={() => setShowEditProfileModal(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-colors"
-                title="تعديل كافة بيانات نقطة البيع (الشعار، الاسم، الاسم التجاري، الإيميل، رقم الهاتف، الدولة، المدينة)"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                <span>تعديل البيانات</span>
-              </button>
+              {!isSupplierPosPreviewMode && (
+                <button
+                  onClick={() => setShowEditProfileModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold transition-colors"
+                  title="تعديل كافة بيانات نقطة البيع (الشعار، الاسم، الاسم التجاري، الإيميل، رقم الهاتف، الدولة، المدينة)"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>تعديل البيانات</span>
+                </button>
+              )}
 
-              <button
-                type="button"
-                onClick={logout}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-colors cursor-pointer"
-                title="تسجيل الخروج والعودة لشاشة الدخول"
-              >
-                <LogOut className="w-3.5 h-3.5 text-rose-400" />
-                <span>تسجيل الخروج</span>
-              </button>
+              {isSupplierPosPreviewMode ? (
+                <button
+                  type="button"
+                  onClick={closeSupplierPosPreview}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-200 border border-cyan-500/40 text-xs font-bold transition-colors cursor-pointer"
+                  title="العودة إلى إدارة العملاء في لوحة المتجر"
+                >
+                  <ArrowRight className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>العودة لإدارة العملاء</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold transition-colors cursor-pointer"
+                  title="تسجيل الخروج والعودة لشاشة الدخول"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                  <span>تسجيل الخروج</span>
+                </button>
+              )}
             </div>
 
             {/* POS Code: 3 letters - 5 digits */}
@@ -828,21 +988,30 @@ export const PosDashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowDepositModal(true)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-amber-500/10"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>{currentPos.canRequestLoans ? 'شحن رصيد كاش أو سلفة' : 'شحن رصيد المحفظة'}</span>
-            </button>
+            {isSupplierPosPreviewMode ? (
+              <span className="px-3.5 py-2 rounded-xl bg-slate-800/80 border border-cyan-500/30 text-cyan-200 text-xs font-semibold flex items-center gap-2">
+                <Eye className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>وضع معاينة نقطة البيع (الشحن والتحويل معطلان)</span>
+              </span>
+            ) : (
+              <>
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-amber-500/10"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>{currentPos.canRequestLoans ? 'شحن رصيد كاش أو سلفة' : 'شحن رصيد المحفظة'}</span>
+                </button>
 
-            <button
-              onClick={() => setShowTransferModal(true)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-            >
-              <Send className="w-4 h-4 text-cyan-400" />
-              <span>تحويل رصيد لوكيل آخر</span>
-            </button>
+                <button
+                  onClick={() => setShowTransferModal(true)}
+                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Send className="w-4 h-4 text-cyan-400" />
+                  <span>تحويل رصيد لوكيل آخر</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1709,35 +1878,176 @@ export const PosDashboard: React.FC = () => {
               <h3 className="font-bold text-base text-white">رمز QR الخاص بنقطة البيع</h3>
               <button
                 onClick={() => setShowQrModal(false)}
-                className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center"
+                className="w-7 h-7 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Generated SVG QR Code representation */}
-            <div className="p-6 bg-white rounded-2xl mx-auto w-56 h-56 flex flex-col items-center justify-center shadow-lg">
-              <QrCode className="w-40 h-40 text-slate-950" />
-              <div className="text-[10px] font-mono font-bold text-slate-900 mt-1">
+            {/* Generated SVG QR Code */}
+            <div className="p-4 bg-white rounded-2xl mx-auto w-56 h-56 flex flex-col items-center justify-center shadow-lg">
+              <QRCodeSVG
+                value={currentPos.qrCodeValue || currentPos.posCode}
+                size={168}
+                level="M"
+                includeMargin={false}
+              />
+              <div className="text-[10px] font-mono font-bold text-slate-900 mt-1.5">
                 {currentPos.posCode}
               </div>
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <div className="font-bold text-base text-white">{currentPos.tradeName}</div>
               <div className="text-xs text-slate-400">{currentPos.ownerName} · {currentPos.city}</div>
-              <div className="text-xs font-mono font-bold text-amber-400 pt-1">
+              {isAccreditedPos && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[11px] font-bold">
+                  <BadgeCheck className="w-3.5 h-3.5 text-amber-400" />
+                  <span>نقطة بيع معتمدة لدى {currentPosSupplier.storeName || currentPosSupplier.name}</span>
+                </div>
+              )}
+              <div className="text-xs font-mono font-bold text-amber-400 pt-0.5">
                 المعرف: {currentPos.posCode}
               </div>
             </div>
 
             <button
               onClick={handleCopyPosCode}
-              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700 cursor-pointer"
             >
               {copiedPosCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               <span>{copiedPosCode ? 'تم نسخ المعرف' : 'نسخ المعرف الرسمي'}</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Official Store POS Accreditation Certificate Modal */}
+      {showAccreditationModal && isAccreditedPos && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto"
+          dir="rtl"
+        >
+          <div className="w-full max-w-lg bg-slate-900 border border-amber-500/40 rounded-3xl p-5 sm:p-6 space-y-4 text-slate-100 shadow-2xl my-4">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                  <BadgeCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-white">شهادة اعتماد نقطة بيع للمتجر</h3>
+                  <p className="text-[11px] text-emerald-300 font-semibold">
+                    نقطة بيع رسمية ومعتمدة ✓
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAccreditationModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/10 via-slate-950 to-emerald-500/10 border border-amber-500/30 space-y-4 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] text-amber-400 font-bold block">المتجر المانح للاعتماد</span>
+                  <div className="font-bold text-sm text-white">
+                    {currentPosSupplier.storeName || currentPosSupplier.name}
+                  </div>
+                  <div className="text-[11px] text-slate-400">{currentPosSupplier.name}</div>
+                </div>
+                <div className="text-left">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold">
+                    <BadgeCheck className="w-3.5 h-3.5" />
+                    <span>معتمد رسمياً</span>
+                  </span>
+                  <div className="text-[10px] font-mono text-slate-400 mt-1" dir="ltr">
+                    {formatAccreditationCertificateNumber(currentPos.posCode, currentPosSupplier.id)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3">
+                <div className="space-y-1 min-w-0">
+                  <div className="text-[10px] text-emerald-400 font-bold">نقطة البيع المعتمدة</div>
+                  <div className="font-bold text-sm text-white truncate">{currentPos.tradeName}</div>
+                  <div className="text-[11px] text-slate-300">المالك: {currentPos.ownerName}</div>
+                  <div className="text-[11px] text-slate-400">{currentPos.country} · {currentPos.city}</div>
+                  <div className="text-[11px] font-mono text-amber-300 font-bold pt-0.5">
+                    المعرف: {currentPos.posCode}
+                  </div>
+                </div>
+
+                <div className="p-2 bg-white rounded-xl shrink-0">
+                  <QRCodeSVG
+                    value={currentPos.qrCodeValue || currentPos.posCode}
+                    size={76}
+                    level="M"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-800/80">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">تاريخ الاعتماد</span>
+                  <strong className="text-white">{formatAccreditationDateAr(currentPos.accreditedAt)}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">رتبة الحساب</span>
+                  <strong className="text-amber-300">{tier.nameAr}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={isDownloadingAccreditationPdf}
+                onClick={async () => {
+                  setIsDownloadingAccreditationPdf(true);
+                  try {
+                    const res = await downloadPosAccreditationCertificatePdf({
+                      client: currentPos,
+                      supplier: currentPosSupplier,
+                      tierNameAr: tier.nameAr,
+                    });
+                    showToast({
+                      type: 'success',
+                      title: 'تم تحميل شهادة الاعتماد',
+                      description: `تم حفظ ملف الشهادة (${res.filename}) بنجاح.`,
+                    });
+                  } catch (err) {
+                    console.error('Failed to generate accreditation PDF:', err);
+                    showToast({
+                      type: 'error',
+                      title: 'تعذر إنشاء ملف PDF',
+                      description: 'حدث خطأ أثناء تجهيز شهادة الاعتماد للتحميل.',
+                    });
+                  } finally {
+                    setIsDownloadingAccreditationPdf(false);
+                  }
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                {isDownloadingAccreditationPdf ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FileDown className="w-4 h-4" />
+                )}
+                <span>{isDownloadingAccreditationPdf ? 'جاري تجهيز الشهادة...' : 'تحميل شهادة الاعتماد PDF'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowAccreditationModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1751,17 +2061,17 @@ export const PosDashboard: React.FC = () => {
       )}
 
       {/* Deposit Modal */}
-      {showDepositModal && (
+      {!isSupplierPosPreviewMode && showDepositModal && (
         <DepositModal onClose={() => setShowDepositModal(false)} />
       )}
 
       {/* Transfer Modal */}
-      {showTransferModal && (
+      {!isSupplierPosPreviewMode && showTransferModal && (
         <TransferModal onClose={() => setShowTransferModal(false)} />
       )}
 
       {/* Edit POS Profile Modal */}
-      {showEditProfileModal && (
+      {!isSupplierPosPreviewMode && showEditProfileModal && (
         <EditPosProfileModal onClose={() => setShowEditProfileModal(false)} />
       )}
 
