@@ -349,12 +349,12 @@ export const AdminStatementView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
             disabled={isExportingPdf}
             onClick={() => buildPdfReport('preview')}
-            className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-60"
+            className="flex-1 sm:flex-none justify-center px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-60"
           >
             {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin text-purple-400" /> : <Eye className="w-4 h-4 text-purple-400" />}
             <span>عرض ومعاينة PDF</span>
@@ -364,7 +364,7 @@ export const AdminStatementView: React.FC = () => {
             type="button"
             disabled={isExportingPdf}
             onClick={() => buildPdfReport('download')}
-            className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-lg shadow-purple-900/30 disabled:opacity-60"
+            className="flex-1 sm:flex-none justify-center px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-lg shadow-purple-900/30 disabled:opacity-60"
           >
             {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             <span>تحميل كشف الحساب PDF</span>
@@ -652,8 +652,8 @@ export const AdminStatementView: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
+          <div className="overflow-x-auto touch-scroll scrollbar-none">
+            <table className="w-full min-w-[760px] text-right text-xs">
               <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
                 <tr>
                   <th className="py-3 px-4">التاريخ والوقت</th>

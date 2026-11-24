@@ -254,7 +254,7 @@ export const StatementView: React.FC = () => {
     <div className="space-y-5">
       
       {/* Header & PDF Actions */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <span>كشف حساب حركة المحفظة والعمليات</span>
@@ -264,12 +264,12 @@ export const StatementView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
             disabled={isExportingPdf}
             onClick={() => buildPdfReport('preview')}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold transition-colors disabled:opacity-60"
+            className="flex-1 sm:flex-none justify-center flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-bold transition-colors disabled:opacity-60"
           >
             {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin text-amber-400" /> : <Eye className="w-4 h-4 text-amber-400" />}
             <span>عرض ومعاينة PDF</span>
@@ -279,7 +279,7 @@ export const StatementView: React.FC = () => {
             type="button"
             disabled={isExportingPdf}
             onClick={() => buildPdfReport('download')}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-600 text-xs font-bold transition-colors disabled:opacity-60"
+            className="flex-1 sm:flex-none justify-center flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-600 text-xs font-bold transition-colors disabled:opacity-60"
           >
             {isExportingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
             <span>تحميل كشف الحساب PDF</span>
@@ -293,10 +293,10 @@ export const StatementView: React.FC = () => {
       />
 
       {/* Filter Segmented Controls */}
-      <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs">
+      <div className="overflow-x-auto touch-scroll scrollbar-none flex sm:flex-wrap items-center gap-1.5 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs -mx-1 px-1 sm:mx-0 sm:px-1.5">
         <button
           onClick={() => selectQuickFilter('all')}
-          className={`px-3 py-1.5 rounded-xl font-medium transition-colors ${
+          className={`px-3 py-1.5 rounded-xl font-medium transition-colors whitespace-nowrap shrink-0 ${
             selectedTransactionType === 'all' && activeFilter === 'all'
               ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
               : 'text-slate-400 hover:text-white'
@@ -413,8 +413,8 @@ export const StatementView: React.FC = () => {
 
       {/* Ledgers Table */}
       <div id="statement-table-to-export" className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-right text-xs">
+        <div className="overflow-x-auto touch-scroll scrollbar-none">
+          <table className="w-full min-w-[620px] text-right text-xs">
             <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold">
               <tr>
                 <th className="py-3 px-3">التاريخ والوقت</th>

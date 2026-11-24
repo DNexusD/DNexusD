@@ -2431,27 +2431,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: connErr };
     }
 
-    // 2. Verify OTP only if an OTP was requested for this email or an OTP code was entered
-    const storedOtp = activeOtps[cleanEmail];
-    const shouldVerifyOtp = Boolean(storedOtp) || cleanOtp.length > 0;
-    if (shouldVerifyOtp) {
-      const now = Date.now();
-      if (!storedOtp) {
-        showToast({ type: 'error', title: 'رمز غير موجود', description: 'يرجى طلب رمز تحقق أولاً عبر زر "إرسال الرمز"' });
-        return { success: false, error: 'يرجى طلب رمز تحقق أولاً عبر زر "إرسال الرمز"' };
-      }
-
-      if (now > storedOtp.expiresAt) {
-        showToast({ type: 'error', title: 'انتهت صلاحية الرمز', description: 'انتهت صلاحية رمز التحقق (مدة الصلاحية دقيقتين فقط). يرجى طلب رمز جديد.' });
-        return { success: false, error: 'انتهت صلاحية رمز التحقق (مدة الصلاحية دقيقتين فقط). يرجى طلب رمز جديد.' };
-      }
-
-      if (storedOtp.code !== cleanOtp) {
-        showToast({ type: 'error', title: 'رمز غير صحيح', description: 'رمز التحقق المدخل غير متطابق. تأكد من الرمز المرسل.' });
-        return { success: false, error: 'رمز التحقق المدخل غير متطابق. تأكد من الرمز المرسل.' };
-      }
-    }
-
     authSessionEpochRef.current += 1;
     const myEpoch = authSessionEpochRef.current;
     isManualAuthInProgressRef.current = true;
@@ -2763,15 +2742,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       if (!applied) {
         return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
-      }
-
-      // Clear used OTP (single-use constraint)
-      if (storedOtp) {
-        setActiveOtps(prev => {
-          const copy = { ...prev };
-          delete copy[cleanEmail];
-          return copy;
-        });
       }
 
       firestoreSync.saveUser(built.authUser).catch(console.error);

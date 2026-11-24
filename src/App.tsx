@@ -197,7 +197,7 @@ export default function App() {
           
           <div className="flex-1 w-full">
             <MobileFrame>
-              <div className="w-full p-4 sm:p-6">
+              <div className="w-full max-w-7xl mx-auto p-3 sm:p-4 md:p-6 lg:p-8">
                 <MainContent />
               </div>
             </MobileFrame>

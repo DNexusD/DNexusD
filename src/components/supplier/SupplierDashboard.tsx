@@ -870,7 +870,7 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           {/* Quick Actions */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full xl:w-auto">
             {isSupplierElVisible('supplier_quick_actions') && (
               <>
             {(isStoreOwner || perms.canAddCatalogs) && (
@@ -886,7 +886,7 @@ export const SupplierDashboard: React.FC = () => {
                   }
                   setShowAddCatalog(true);
                 }}
-                className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md ${
+                className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px] ${
                   platformSettings.allowSuppliersCreateCustomCatalogs
                     ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
                     : 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
@@ -894,9 +894,9 @@ export const SupplierDashboard: React.FC = () => {
                 title={platformSettings.allowSuppliersCreateCustomCatalogs ? 'إضافة كاتالوج جديد' : 'تم تعطيل إنشاء كتالوجات مخصصة من مدير التطبيق'}
               >
                 {platformSettings.allowSuppliersCreateCustomCatalogs ? (
-                  <FolderPlus className="w-4 h-4 text-slate-600" />
+                  <FolderPlus className="w-4 h-4 text-slate-600 shrink-0" />
                 ) : (
-                  <Lock className="w-4 h-4 text-slate-400" />
+                  <Lock className="w-4 h-4 text-slate-400 shrink-0" />
                 )}
                 <span>إضافة كاتالوج</span>
               </button>
@@ -905,20 +905,20 @@ export const SupplierDashboard: React.FC = () => {
             {(isStoreOwner || perms.canAddServices) && (
               <button
                 onClick={() => setShowAddService(true)}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
+                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px]"
               >
-                <PlusCircle className="w-4 h-4" />
-                <span>إضافة خدمة وتسعيرة الرتب</span>
+                <PlusCircle className="w-4 h-4 shrink-0" />
+                <span>إضافة خدمة</span>
               </button>
             )}
 
             {(isStoreOwner || perms.canUpgradeClientTiers) && (
               <button
                 onClick={() => setShowInviteModal(true)}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md"
+                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px]"
               >
-                <Link2 className="w-4 h-4" />
-                <span>رابط دعوة برتبة مسبقة</span>
+                <Link2 className="w-4 h-4 shrink-0" />
+                <span>رابط دعوة</span>
               </button>
             )}
 
@@ -929,11 +929,11 @@ export const SupplierDashboard: React.FC = () => {
                   setGrantModalClientPosId(undefined);
                   setShowGrantModal(true);
                 }}
-                className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer"
+                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer min-h-[38px]"
                 title="منح رصيد مجاني أو سلفة لنقطة بيع"
               >
-                <HandCoins className="w-4 h-4" />
-                <span>دعم رصيد مجاني أو سلفة</span>
+                <HandCoins className="w-4 h-4 shrink-0" />
+                <span>دعم رصيد / سلفة</span>
               </button>
             )}
 
@@ -941,11 +941,11 @@ export const SupplierDashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowClientsDirectoryModal(true)}
-                className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px]"
                 title="عرض عملاء القاعدة المحلية وقاعدة فايربيس مع إيميل تسجيل الدخول والمعرّف"
               >
-                <Database className="w-4 h-4 text-cyan-400" />
-                <span>عملاء المحلي وفايربيس</span>
+                <Database className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>دليل العملاء</span>
               </button>
             )}
 
@@ -953,27 +953,27 @@ export const SupplierDashboard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSubTab('employees')}
-                className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px] ${
                   subTab === 'employees'
                     ? 'bg-amber-500 text-slate-950 border-amber-400'
                     : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-amber-500/40'
                 }`}
               >
-                <ShieldCheck className={`w-4 h-4 ${subTab === 'employees' ? 'text-slate-950' : 'text-amber-400'}`} />
-                <span>صلاحيات الموظفين</span>
+                <ShieldCheck className={`w-4 h-4 shrink-0 ${subTab === 'employees' ? 'text-slate-950' : 'text-amber-400'}`} />
+                <span>الموظفون</span>
               </button>
             )}
 
             <button
               onClick={() => setSubTab('notifications')}
-              className={`flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md relative cursor-pointer ${
+              className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md relative cursor-pointer min-h-[38px] ${
                 subTab === 'notifications'
                   ? 'bg-amber-500 text-slate-950 border-amber-400'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600'
               }`}
               title="مركز إشعارات المتجر وتنبيهات العمليات"
             >
-              <Bell className={`w-4 h-4 ${subTab === 'notifications' ? 'text-slate-950' : 'text-amber-400'}`} />
+              <Bell className={`w-4 h-4 shrink-0 ${subTab === 'notifications' ? 'text-slate-950' : 'text-amber-400'}`} />
               <span>الإشعارات</span>
               {unreadSupplierNotificationsCount > 0 && (
                 <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center shadow-sm ${
@@ -990,14 +990,14 @@ export const SupplierDashboard: React.FC = () => {
               type="button"
               onClick={() => setShowAppearanceModal(true)}
               data-testid="supplier-appearance-control-btn"
-              className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/35 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/35 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap min-h-[38px]"
               title="التحكم بمظهر الصفحة وإخفاء أو إظهار العناصر"
             >
-              <Sliders className="w-4 h-4 text-amber-400" />
+              <Sliders className="w-4 h-4 text-amber-400 shrink-0" />
               <span>مظهر الصفحة</span>
               {supplierAppearanceSummary.hidden > 0 && (
                 <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-mono text-[10px] font-black">
-                  {supplierAppearanceSummary.hidden} مخفي
+                  {supplierAppearanceSummary.hidden}
                 </span>
               )}
             </button>
@@ -1005,11 +1005,11 @@ export const SupplierDashboard: React.FC = () => {
             <button
               type="button"
               onClick={logout}
-              className="flex-1 sm:flex-none px-3.5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[38px]"
               title="تسجيل الخروج والعودة لشاشة الدخول"
             >
-              <LogOut className="w-4 h-4 text-rose-400" />
-              <span>تسجيل الخروج</span>
+              <LogOut className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>خروج</span>
             </button>
           </div>
         </div>
@@ -1184,11 +1184,11 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* Supplier Navigation Subtabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2 text-xs font-medium">
+      <div className="overflow-x-auto touch-scroll scrollbar-none flex xl:flex-wrap items-center gap-1.5 sm:gap-2 border-b border-slate-800 pb-2.5 text-xs font-medium -mx-1 px-1 sm:mx-0 sm:px-0">
         {isEmployeeTabAllowed('catalogs', perms, role) && (
           <button
             onClick={() => setSubTab('catalogs')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'catalogs'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1202,7 +1202,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('pending_orders', perms, role) && (
           <button
             onClick={() => setSubTab('pending_orders')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'pending_orders'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1223,7 +1223,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('account_orders', perms, role) && (
           <button
             onClick={() => setSubTab('account_orders')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'account_orders'
                 ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
                 : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
@@ -1240,7 +1240,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('deposits', perms, role) && (
           <button
             onClick={() => setSubTab('deposits')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'deposits'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1257,7 +1257,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('loans', perms, role) && (
           <button
             onClick={() => setSubTab('loans')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'loans'
                 ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
                 : 'text-cyan-400 hover:text-white bg-slate-900 border border-cyan-500/30'
@@ -1274,7 +1274,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('vouchers', perms, role) && (
           <button
             onClick={() => setSubTab('vouchers')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all relative whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'vouchers'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1293,7 +1293,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('clients', perms, role) && (
           <button
             onClick={() => setSubTab('clients')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'clients'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1307,7 +1307,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('client_statements', perms, role) && (
           <button
             onClick={() => setSubTab('client_statements')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'client_statements'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1321,7 +1321,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('bank_accounts', perms, role) && (
           <button
             onClick={() => setSubTab('bank_accounts')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] cursor-pointer ${
               subTab === 'bank_accounts'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-300 hover:text-white bg-slate-900 border border-slate-800'
@@ -1335,7 +1335,7 @@ export const SupplierDashboard: React.FC = () => {
         {isEmployeeTabAllowed('employees', perms, role) && (
           <button
             onClick={() => setSubTab('employees')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               subTab === 'employees'
                 ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
                 : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1348,7 +1348,7 @@ export const SupplierDashboard: React.FC = () => {
 
         <button
           onClick={() => setSubTab('notifications')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 relative ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] relative ${
             subTab === 'notifications'
               ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
               : 'text-amber-400 hover:text-white bg-slate-900 border border-amber-500/30 hover:border-amber-500/50'
@@ -1622,8 +1622,8 @@ export const SupplierDashboard: React.FC = () => {
                   </div>
 
                   {/* Packages Table with 5 Tier Pricing */}
-                  <div className="overflow-x-auto rounded-2xl border border-slate-800/80">
-                    <table className="w-full text-right text-xs">
+                  <div className="overflow-x-auto touch-scroll scrollbar-none rounded-2xl border border-slate-800/80">
+                    <table className="w-full min-w-[620px] text-right text-xs">
                       <thead className="bg-slate-950 text-slate-400 font-medium border-b border-slate-800">
                         <tr>
                           <th className="py-2.5 px-3">اسم الباقة</th>
@@ -3460,8 +3460,8 @@ export const SupplierDashboard: React.FC = () => {
           </div>
 
           <div id="supplier-statement-table-to-export" className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
+            <div className="overflow-x-auto touch-scroll scrollbar-none">
+              <table className="w-full min-w-[620px] text-right text-xs">
                 <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold">
                   <tr>
                     <th className="py-3 px-3">التاريخ</th>

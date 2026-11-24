@@ -433,23 +433,23 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full sm:w-auto">
             {isAdminElVisible('admin_header_actions') && perms.canManageSuppliers && (
               <>
                 <button
                   onClick={() => setShowAddSupplierModal(true)}
-                  className="px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-md"
+                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px]"
                 >
-                  <PlusCircle className="w-4 h-4" />
-                  <span>إضافة ممول / متجر جديد</span>
+                  <PlusCircle className="w-4 h-4 shrink-0" />
+                  <span className="truncate">إضافة متجر جديد</span>
                 </button>
 
                 <button
                   onClick={() => setShowSupplierInvite(true)}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors min-h-[38px]"
                 >
-                  <Send className="w-3.5 h-3.5 text-purple-400" />
-                  <span>إرسال رابط تسجيل لمتجر</span>
+                  <Send className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                  <span className="truncate">رابط تسجيل لمتجر</span>
                 </button>
               </>
             )}
@@ -458,14 +458,14 @@ export const AdminDashboard: React.FC = () => {
               type="button"
               onClick={() => setShowAppearanceModal(true)}
               data-testid="admin-appearance-control-btn"
-              className="px-3.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/35 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+              className="px-3 sm:px-3.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-200 border border-purple-500/35 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap min-h-[38px]"
               title="التحكم بمظهر الصفحة وإخفاء أو إظهار العناصر"
             >
-              <Sliders className="w-3.5 h-3.5 text-purple-400" />
+              <Sliders className="w-3.5 h-3.5 text-purple-400 shrink-0" />
               <span>مظهر الصفحة</span>
               {adminAppearanceSummary.hidden > 0 && (
                 <span className="px-1.5 py-0.5 rounded-full bg-purple-500 text-slate-950 font-mono text-[10px] font-black">
-                  {adminAppearanceSummary.hidden} مخفي
+                  {adminAppearanceSummary.hidden}
                 </span>
               )}
             </button>
@@ -473,11 +473,11 @@ export const AdminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={logout}
-              className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 sm:px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[38px]"
               title="تسجيل الخروج والعودة لشاشة الدخول"
             >
-              <LogOut className="w-4 h-4 text-rose-400" />
-              <span>تسجيل الخروج</span>
+              <LogOut className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>خروج</span>
             </button>
           </div>
         </div>
@@ -528,73 +528,73 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* Admin Navigation Bar */}
-      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs">
+      <div className="overflow-x-auto touch-scroll scrollbar-none flex lg:flex-wrap items-center gap-1.5 sm:gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl text-xs -mx-1 px-1 sm:mx-0 sm:px-1.5">
         {perms.canViewStatement && (
           <button
             onClick={() => handleSelectAdminTab('statement')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               adminSubTab === 'statement'
                 ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            <span>كشف حساب مدير التطبيق (المحفظة والرسوم)</span>
+            <FileText className="w-4 h-4 shrink-0" />
+            <span>كشف حساب مدير التطبيق</span>
           </button>
         )}
 
         {(perms.canManageSuppliers || perms.canSettleAdminWallet) && (
           <button
             onClick={() => handleSelectAdminTab('overview')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               adminSubTab === 'overview'
                 ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            <Building2 className="w-4 h-4" />
-            <span>إشراف المتاجر والمحافظ والتحويلات</span>
+            <Building2 className="w-4 h-4 shrink-0" />
+            <span>إشراف المتاجر والمحافظ</span>
           </button>
         )}
 
         {perms.canManageFees && (
           <button
             onClick={() => handleSelectAdminTab('fees')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               adminSubTab === 'fees'
                 ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            <Percent className="w-4 h-4" />
-            <span>إعدادات نسب ومبالغ الرسوم</span>
+            <Percent className="w-4 h-4 shrink-0" />
+            <span>إعدادات الرسوم</span>
           </button>
         )}
 
         {perms.canManageInterfaceSettings && (
           <button
             onClick={() => handleSelectAdminTab('interface_settings')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               adminSubTab === 'interface_settings'
                 ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            <Sliders className="w-4 h-4" />
-            <span>إعدادات الواجهات والكتالوجات والقوائم</span>
+            <Sliders className="w-4 h-4 shrink-0" />
+            <span>إعدادات الواجهات والقوائم</span>
           </button>
         )}
 
         {perms.canManageAdminAccounts && (
           <button
             onClick={() => handleSelectAdminTab('admin_accounts')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold transition-all ${
+            className={`flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               adminSubTab === 'admin_accounts'
                 ? 'bg-purple-500 text-slate-950 shadow-lg shadow-purple-500/20'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            <UserCog className="w-4 h-4" />
+            <UserCog className="w-4 h-4 shrink-0" />
             <span>حسابات إدارة التطبيق ({(superAdmin.adminAccounts || []).length})</span>
           </button>
         )}
@@ -604,11 +604,11 @@ export const AdminDashboard: React.FC = () => {
             type="button"
             data-testid="admin-reset-system-btn"
             onClick={() => setShowResetConfirmModal(true)}
-            className="mr-auto flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all font-semibold"
+            className="mr-auto flex items-center gap-1.5 px-3.5 py-2 sm:py-2.5 rounded-xl text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 transition-all font-semibold whitespace-nowrap shrink-0 min-h-[38px]"
             title="تصفير الخدمات والمستخدمين مع الإبقاء على مدير التطبيق وموظفيه"
           >
-            <Trash2 className="w-4 h-4 text-rose-400" />
-            <span>تصفير الخدمات والمستخدمين</span>
+            <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>تصفير النظام</span>
           </button>
         )}
       </div>
@@ -872,15 +872,15 @@ export const AdminDashboard: React.FC = () => {
                             </strong>
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
                             <button
                               type="button"
                               onClick={() =>
                                 setSupervisedStoreState({ supplierId: sup.id, initialTab: 'overview' })
                               }
-                              className="flex-1 px-3 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                              className="col-span-2 sm:flex-1 px-3 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[36px]"
                             >
-                              <Eye className="w-3.5 h-3.5" />
+                              <Eye className="w-3.5 h-3.5 shrink-0" />
                               <span>إشراف وإدارة المتجر</span>
                             </button>
 
@@ -889,10 +889,10 @@ export const AdminDashboard: React.FC = () => {
                               onClick={() =>
                                 setSupervisedStoreState({ supplierId: sup.id, initialTab: 'profile' })
                               }
-                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer min-h-[36px]"
                               title="البيانات الشخصية والبنكية"
                             >
-                              <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                              <Edit3 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                               <span>البيانات</span>
                             </button>
 
@@ -901,10 +901,10 @@ export const AdminDashboard: React.FC = () => {
                               onClick={() =>
                                 setSupervisedStoreState({ supplierId: sup.id, initialTab: 'clients' })
                               }
-                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer min-h-[36px]"
                               title="عرض عملاء المتجر"
                             >
-                              <Users className="w-3.5 h-3.5" />
+                              <Users className="w-3.5 h-3.5 shrink-0" />
                               <span>العملاء</span>
                             </button>
 
@@ -913,24 +913,24 @@ export const AdminDashboard: React.FC = () => {
                               onClick={() =>
                                 setSupervisedStoreState({ supplierId: sup.id, initialTab: 'activity' })
                               }
-                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-700 text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                              className="px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer min-h-[36px]"
                               title="عرض حركة المتجر"
                             >
-                              <Activity className="w-3.5 h-3.5" />
+                              <Activity className="w-3.5 h-3.5 shrink-0" />
                               <span>الحركة</span>
                             </button>
 
                             <button
                               type="button"
                               onClick={() => toggleSupplierActiveStatus(sup.id)}
-                              className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+                              className={`p-2 rounded-xl border transition-colors cursor-pointer flex items-center justify-center min-h-[36px] ${
                                 supActive
                                   ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
                                   : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                               }`}
                               title={supActive ? 'إيقاف المتجر مؤقتاً' : 'إعادة تفعيل المتجر'}
                             >
-                              <Power className="w-3.5 h-3.5" />
+                              <Power className="w-3.5 h-3.5 shrink-0" />
                             </button>
                           </div>
                         </div>

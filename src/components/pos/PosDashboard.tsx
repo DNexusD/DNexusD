@@ -791,8 +791,8 @@ export const PosDashboard: React.FC = () => {
           </div>
 
           {/* POS Code & QR Action + Tier Badge + Client Notifications & Logout */}
-          <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
-            <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-col sm:items-end justify-between sm:justify-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center justify-start sm:justify-end gap-1.5 sm:gap-2">
               <span className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${tier.badgeColor} ${tier.borderColor} ${tier.textColor}`}>
                 رتبة الحساب: {tier.nameAr}
               </span>
@@ -1031,9 +1031,9 @@ export const PosDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
             {isSupplierPosPreviewMode ? (
-              <span className="px-3.5 py-2 rounded-xl bg-slate-800/80 border border-cyan-500/30 text-cyan-200 text-xs font-semibold flex items-center gap-2">
+              <span className="px-3.5 py-2.5 rounded-xl bg-slate-800/80 border border-cyan-500/30 text-cyan-200 text-xs font-semibold flex items-center justify-center gap-2 min-h-[40px]">
                 <Eye className="w-4 h-4 text-cyan-400 shrink-0" />
                 <span>وضع معاينة نقطة البيع (الشحن والتحويل معطلان)</span>
               </span>
@@ -1041,17 +1041,17 @@ export const PosDashboard: React.FC = () => {
               <>
                 <button
                   onClick={() => setShowDepositModal(true)}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-amber-500/10"
+                  className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-amber-500/10 min-h-[40px] w-full sm:w-auto"
                 >
-                  <PlusCircle className="w-4 h-4" />
+                  <PlusCircle className="w-4 h-4 shrink-0" />
                   <span>{currentPos.canRequestLoans ? 'شحن رصيد كاش أو سلفة' : 'شحن رصيد المحفظة'}</span>
                 </button>
 
                 <button
                   onClick={() => setShowTransferModal(true)}
-                  className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors min-h-[40px] w-full sm:w-auto"
                 >
-                  <Send className="w-4 h-4 text-cyan-400" />
+                  <Send className="w-4 h-4 text-cyan-400 shrink-0" />
                   <span>تحويل رصيد لوكيل آخر</span>
                 </button>
               </>
@@ -1062,10 +1062,10 @@ export const PosDashboard: React.FC = () => {
       </div>
 
       {/* Main Tab Navigation inside POS view */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2 text-xs font-medium">
+      <div className="overflow-x-auto touch-scroll scrollbar-none flex md:flex-wrap items-center gap-1.5 sm:gap-2 border-b border-slate-800 pb-2.5 text-xs font-medium -mx-1 px-1 sm:mx-0 sm:px-0">
         <button
           onClick={() => setActiveNavTab('store')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
             activeNavTab === 'store'
               ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
               : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1077,7 +1077,7 @@ export const PosDashboard: React.FC = () => {
 
         <button
           onClick={() => setActiveNavTab('statement')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
             activeNavTab === 'statement'
               ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
               : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1089,7 +1089,7 @@ export const PosDashboard: React.FC = () => {
 
         <button
           onClick={() => setActiveNavTab('orders')}
-          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all ${
+          className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
             activeNavTab === 'orders'
               ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
               : 'text-slate-400 hover:text-white bg-slate-900 border border-slate-800'
@@ -1102,7 +1102,7 @@ export const PosDashboard: React.FC = () => {
         {currentPos.canRequestLoans && (
           <button
             onClick={() => setActiveNavTab('loans')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] ${
               activeNavTab === 'loans'
                 ? 'bg-cyan-500 text-slate-950 font-bold shadow-sm'
                 : 'text-cyan-300 hover:text-white bg-slate-900 border border-cyan-500/30'
@@ -1118,7 +1118,7 @@ export const PosDashboard: React.FC = () => {
         {canReceiveSupplierTransfers && (
           <button
             onClick={() => setActiveNavTab('incoming_transfers')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl transition-all whitespace-nowrap shrink-0 min-h-[38px] cursor-pointer ${
               activeNavTab === 'incoming_transfers'
                 ? 'bg-emerald-500 text-slate-950 font-bold shadow-sm'
                 : 'text-emerald-300 hover:text-white bg-slate-900 border border-emerald-500/30'
@@ -1194,7 +1194,7 @@ export const PosDashboard: React.FC = () => {
             </div>
 
             {/* Catalogs Quick-Navigation Strip & Free Gifts */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap text-xs">
+            <div className="flex items-center gap-2 overflow-x-auto touch-scroll scrollbar-none pb-1 sm:flex-wrap text-xs">
               <button
                 type="button"
                 onClick={() => {
@@ -1310,7 +1310,7 @@ export const PosDashboard: React.FC = () => {
           )}
 
           {/* Services Grid */}
-          <div ref={servicesGridRef} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div ref={servicesGridRef} className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 sm:gap-4">
             {filteredServices.map(srv => {
               // Get primary package price for this tier including platform fee / free gift / 0.5 SAR floor rules
               const rawPrimaryPkg = srv.packages[0];
@@ -1548,7 +1548,7 @@ export const PosDashboard: React.FC = () => {
                   </div>
 
                   {/* Pricing footer & CTA */}
-                  <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-3">
+                  <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     {isGiftService && srv.packages.length > 1 ? (
                       <div>
                         <span className="text-[10px] text-purple-300 block">سعر الهدية لك:</span>
@@ -1642,7 +1642,7 @@ export const PosDashboard: React.FC = () => {
                         if (isGiftDeactivated) return;
                         setActivePurchaseService(srv);
                       }}
-                      className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md shrink-0 whitespace-nowrap ${
+                      className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-md shrink-0 whitespace-nowrap w-full sm:w-auto min-h-[40px] ${
                         isGiftDeactivated
                           ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed shadow-none'
                           : isGiftService
