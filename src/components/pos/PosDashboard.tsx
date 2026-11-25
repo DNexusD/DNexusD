@@ -818,27 +818,27 @@ export const PosDashboard: React.FC = () => {
                 {showNotificationsPopover && (
                   <>
                     <div
-                      className="fixed inset-0 z-40"
+                      className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs sm:bg-black/20"
                       onClick={() => setShowNotificationsPopover(false)}
                     />
-                    <div className="absolute left-0 mt-2 w-80 sm:w-96 bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl z-50 overflow-hidden text-right animate-in fade-in zoom-in-95 duration-150">
-                      <div className="p-3.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Bell className="w-4 h-4 text-amber-400" />
-                          <h3 className="font-bold text-white text-sm">إشعارات العميل</h3>
+                    <div className="fixed inset-x-3 top-20 sm:top-full sm:mt-2 sm:absolute sm:inset-x-auto sm:left-0 sm:w-96 max-w-[calc(100vw-1.5rem)] sm:max-w-none bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl z-50 overflow-hidden text-right animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[82vh] sm:max-h-[32rem]">
+                      <div className="p-3.5 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Bell className="w-4 h-4 text-amber-400 shrink-0" />
+                          <h3 className="font-bold text-white text-sm whitespace-nowrap">إشعارات العميل</h3>
                           {unreadPosNotificationsCount > 0 && (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30">
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30 whitespace-nowrap shrink-0">
                               {unreadPosNotificationsCount} جديد
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1 shrink-0">
                           {clientNotifications.length > 0 && (
                             <>
                               <button
                                 type="button"
                                 onClick={markAllNotificationsAsRead}
-                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer"
+                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-amber-400 transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
                                 title="تحديد الكل كقراءة"
                               >
                                 <Check className="w-3 h-3" />
@@ -847,7 +847,7 @@ export const PosDashboard: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={clearAllNotifications}
-                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-rose-400 transition-colors flex items-center gap-1 cursor-pointer"
+                                className="px-2 py-1 text-[11px] font-medium text-slate-400 hover:text-rose-400 transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
                                 title="مسح الإشعارات"
                               >
                                 <Trash2 className="w-3 h-3" />
@@ -855,10 +855,18 @@ export const PosDashboard: React.FC = () => {
                               </button>
                             </>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => setShowNotificationsPopover(false)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="إغلاق"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
 
-                      <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60 custom-scrollbar">
+                      <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60 custom-scrollbar">
                         {clientNotifications.length === 0 ? (
                           <div className="p-8 text-center text-slate-400 space-y-2">
                             <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center mx-auto text-slate-500">
@@ -903,17 +911,17 @@ export const PosDashboard: React.FC = () => {
                                 </div>
                                 <div className="flex-1 min-w-0 space-y-1">
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="font-bold text-xs text-white truncate">{notif.title}</span>
+                                    <span className="font-bold text-xs text-white break-words">{notif.title}</span>
                                     {isUnread && (
                                       <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
                                     )}
                                   </div>
-                                  <p className="text-xs text-slate-300 leading-normal">{notif.message}</p>
+                                  <p className="text-xs text-slate-300 leading-normal break-words">{notif.message}</p>
                                   <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
-                                    <span className="text-amber-400/80 font-medium">
+                                    <span className="text-amber-400/80 font-medium truncate">
                                       المتجر: {notif.supplierName || currentPosSupplier.storeName || currentPosSupplier.name || ''}
                                     </span>
-                                    <span className="flex items-center gap-1 dir-ltr">
+                                    <span className="flex items-center gap-1 dir-ltr shrink-0">
                                       <Clock className="w-3 h-3 text-slate-400" />
                                       {notif.createdAt}
                                     </span>
