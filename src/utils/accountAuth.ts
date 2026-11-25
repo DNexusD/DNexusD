@@ -137,6 +137,22 @@ export function isLegacyPrefixedUserId(id?: string | null): boolean {
   return /^(usr-|emp-|adm-|sup-usr-|pos-usr-|sup-|pos-)/.test(clean);
 }
 
+export function isLegacyUsrUserDocId(
+  id?: string | null,
+  data?: { uid?: string | null } | null
+): boolean {
+  const clean = typeof id === 'string' ? id.trim() : '';
+  if (!clean || !clean.startsWith('usr')) return false;
+  if (clean === 'usr' || clean.startsWith('usr-') || clean.startsWith('usr_')) {
+    return true;
+  }
+  const hasRealMatchingAuthUid =
+    typeof data?.uid === 'string' &&
+    data.uid.trim() === clean &&
+    clean.length === 28;
+  return !hasRealMatchingAuthUid;
+}
+
 export function normalizePhoneForMatch(phone?: string | null): string {
   const digits = typeof phone === 'string' ? phone.replace(/\D+/g, '') : '';
   if (!digits || digits.length < 7) return '';

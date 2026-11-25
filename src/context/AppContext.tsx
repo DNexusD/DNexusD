@@ -533,6 +533,7 @@ interface AppContextType {
   }) => Promise<{ success: boolean; error?: string }>;
   updateAdminAccount: (accountId: string, updates: Partial<AdminAccount>) => Promise<{ success: boolean; error?: string }>;
   removeAdminAccount: (accountId: string) => void;
+  cleanupLegacyUsrUsersDocs: () => Promise<{ success: boolean; deletedCount: number; message: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -1281,6 +1282,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             suppliersRec.toPushToRemote,
             posClientsRec.toPushToRemote
           );
+        }
+
+        if (currentUserRef.current?.role === 'super_admin' && auth.currentUser) {
+          await firestoreSync.deleteLegacyUsrUsersDocs().catch(() => ({ deletedCount: 0, deletedIds: [] }));
         }
 
         for (const [colKey, docId] of pushedMarkers) {
@@ -9851,6 +9856,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const cleanupLegacyUsrUsersDocs = async (): Promise<{
+    success: boolean;
+    deletedCount: number;
+    message: string;
+  }> => {
+    if (currentUserRef.current?.role !== 'super_admin' || !auth.currentUser) {
+      const msg = 'يجب تسجيل الدخول كمدير عام (Super Admin) لحذف مستندات usr من جدول users.';
+      showToast({ type: 'error', title: 'صلاحية مطلوبة', description: msg });
+      return { success: false, deletedCount: 0, message: msg };
+    }
+    const res = await firestoreSync.deleteLegacyUsrUsersDocs();
+    const msg =
+      res.deletedCount > 0
+        ? `تم حذف ${res.deletedCount} مستنداً يبدأ بـ usr من جدول users بنجاح.`
+        : 'لا توجد أي مستندات تبدأ بـ usr في جدول users.';
+    showToast({
+      type: res.deletedCount > 0 ? 'success' : 'info',
+      title: 'تنظيف جدول users',
+      description: msg,
+    });
+    return { success: true, deletedCount: res.deletedCount, message: msg };
+  };
+
   const guardedSetRole = (nextRole: UserRole) => {
     if (!canSwitchRole({ isAuthenticated, currentUser, nextRole })) {
       return;
@@ -10057,7 +10085,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeOfficeEmployee,
         addAdminAccount,
         updateAdminAccount,
-        removeAdminAccount
+        removeAdminAccount,
+        cleanupLegacyUsrUsersDocs
       }}
     >
       {children}

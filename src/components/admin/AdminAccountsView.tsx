@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 
 export const AdminAccountsView: React.FC = () => {
-  const { superAdmin, currentUser, updateAdminAccount, removeAdminAccount } = useApp();
+  const { superAdmin, currentUser, updateAdminAccount, removeAdminAccount, cleanupLegacyUsrUsersDocs } = useApp();
   const accounts = superAdmin.adminAccounts || [];
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,6 +28,17 @@ export const AdminAccountsView: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAccount, setEditingAccount] = useState<AdminAccount | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [isCleaningUsrDocs, setIsCleaningUsrDocs] = useState(false);
+
+  const handleCleanupUsrDocs = async () => {
+    if (isCleaningUsrDocs) return;
+    setIsCleaningUsrDocs(true);
+    try {
+      await cleanupLegacyUsrUsersDocs();
+    } finally {
+      setIsCleaningUsrDocs(false);
+    }
+  };
 
   const activeCount = useMemo(
     () => accounts.filter(acc => acc.isActive).length,
@@ -65,13 +76,26 @@ export const AdminAccountsView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="px-4 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-2 transition-colors shadow-md shadow-purple-500/15 shrink-0"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>إنشاء حساب إدارة جديد</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {currentUser?.role === 'super_admin' && (
+            <button
+              type="button"
+              disabled={isCleaningUsrDocs}
+              onClick={handleCleanupUsrDocs}
+              className="px-3.5 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>{isCleaningUsrDocs ? 'جاري حذف usr...' : 'حذف مستندات usr القديمة'}</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-2 transition-colors shadow-md shadow-purple-500/15"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>إنشاء حساب إدارة جديد</span>
+          </button>
+        </div>
       </div>
 
       {/* Master Admin Read-only Reference Card */}

@@ -10,6 +10,7 @@ import {
   evaluatePosClientLoginEligibility,
   findMatchingPosClientRecord,
   isLegacyPrefixedUserId,
+  isLegacyUsrUserDocId,
   isMasterAdminEmail,
   isPosClientActive,
   normalizePhoneForMatch,
@@ -691,6 +692,16 @@ test('findMatchingPosClientRecord detects existing store clients by uid, normali
   assert.equal(normalizePhoneForMatch('+966 55 000 0000'), '');
 });
 
-
-
-
+test('isLegacyUsrUserDocId detects all legacy usr* documents while protecting genuine 28-char Auth UIDs', () => {
+  assert.equal(isLegacyUsrUserDocId('usr-1730000000'), true);
+  assert.equal(isLegacyUsrUserDocId('usr-master-admin'), true);
+  assert.equal(isLegacyUsrUserDocId('usr_custom_1'), true);
+  assert.equal(isLegacyUsrUserDocId('usr12345'), true);
+  assert.equal(isLegacyUsrUserDocId('usr'), true);
+  assert.equal(isLegacyUsrUserDocId('usr-1730000000', { uid: 'usr-1730000000' }), true);
+  assert.equal(
+    isLegacyUsrUserDocId('usrAbcDefGhijKlmnOpqrstUvw12', { uid: 'usrAbcDefGhijKlmnOpqrstUvw12' }),
+    false
+  );
+  assert.equal(isLegacyUsrUserDocId('k9LmNpQrStUvWxYz123456789012', { uid: 'k9LmNpQrStUvWxYz123456789012' }), false);
+});

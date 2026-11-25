@@ -80,6 +80,7 @@ import {
   findAdminAccountByEmail,
   findMatchingPosClientRecord,
   isLegacyPrefixedUserId,
+  isLegacyUsrUserDocId,
   isMasterAdminEmail,
   normalizePhoneForMatch,
   resolveAuthoritativeIdentityFromFirestore
@@ -923,9 +924,16 @@ export const firestoreSync = {
       ).catch(() => null);
       if (!usersSnap) return 0;
 
+      const nowIso = new Date().toISOString();
+      const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
+      const duplicateRefsToDelete: DocumentReference[] = [];
       const docsByEmail = new Map<string, Array<{ id: string; data: Partial<AuthUser> }>>();
       for (const docSnap of usersSnap.docs) {
         const data = docSnap.data() as Partial<AuthUser>;
+        if (isLegacyUsrUserDocId(docSnap.id, data)) {
+          duplicateRefsToDelete.push(doc(db, 'users', docSnap.id));
+          continue;
+        }
         const cleanEmail = normalizeStoreEmail(data?.email);
         if (!cleanEmail) continue;
         const list = docsByEmail.get(cleanEmail) || [];
@@ -933,9 +941,6 @@ export const firestoreSync = {
         docsByEmail.set(cleanEmail, list);
       }
 
-      const nowIso = new Date().toISOString();
-      const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
-      const duplicateRefsToDelete: DocumentReference[] = [];
       const accountByEmail = new Map<string, AuthUser & { updatedAt: string }>();
 
       const registerEmployee = (emp: OfficeEmployee, fallbackSupId?: string) => {
@@ -1050,6 +1055,34 @@ export const firestoreSync = {
       return this.commitBatchSets(userEntries);
     } catch {
       return 0;
+    }
+  },
+
+  async deleteLegacyUsrUsersDocs(): Promise<{ deletedCount: number; deletedIds: string[] }> {
+    if (!auth.currentUser) {
+      return { deletedCount: 0, deletedIds: [] };
+    }
+    try {
+      const usersSnap = await withFirestoreRecovery(() =>
+        getDocsFromServer(collection(db, 'users'))
+      );
+      const refsToDelete: DocumentReference[] = [];
+      const deletedIds: string[] = [];
+      for (const docSnap of usersSnap.docs) {
+        const data = docSnap.data() as Partial<AuthUser>;
+        if (isLegacyUsrUserDocId(docSnap.id, data)) {
+          refsToDelete.push(doc(db, 'users', docSnap.id));
+          deletedIds.push(docSnap.id);
+        }
+      }
+      if (refsToDelete.length === 0) {
+        return { deletedCount: 0, deletedIds: [] };
+      }
+      const deletedCount = await this.commitBatchDeletes(refsToDelete);
+      return { deletedCount, deletedIds: deletedIds.slice(0, deletedCount) };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'users');
+      return { deletedCount: 0, deletedIds: [] };
     }
   },
 
