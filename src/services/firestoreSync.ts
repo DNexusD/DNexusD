@@ -9,7 +9,10 @@ import {
   getDocsFromServer,
   query,
   where,
+  limit,
   setDoc,
+  updateDoc,
+  deleteField,
   deleteDoc,
   writeBatch,
   DocumentReference,
@@ -43,7 +46,10 @@ import {
   AuthUser,
   SupplierBankAccount,
   PlatformInterfaceSettings,
-  VoucherWarehouse
+  VoucherWarehouse,
+  OfficeEmployee,
+  EmployeePermissionRecord,
+  AppNotification
 } from '../types';
 import {
   FIRESTORE_COLLECTIONS_TO_CLEAR,
@@ -56,7 +62,16 @@ import {
   FullDatabaseSnapshot,
   markEntityPendingSync
 } from '../utils/localFirestoreSync';
-import { normalizeEmployeePermissions, normalizeStoreEmail } from '../utils/employeePermissions';
+import {
+  buildEmployeePermissionRecord,
+  buildSeparatedEmployeeDoc,
+  extractUnmigratedEmployeesFromSuppliers,
+  hydrateEmployeeWithPermissionRecord,
+  hydrateSuppliersWithEmployeesAndPermissions,
+  normalizeEmployeePermissions,
+  normalizeStoreEmail,
+  stripEmployeesFromSupplierForStorage
+} from '../utils/employeePermissions';
 
 function sanitizeData<T>(obj: T): T {
   if (obj === undefined || obj === null) return obj;
@@ -171,29 +186,64 @@ function mapDocsById<T extends { id?: string }>(
 }
 
 export const firestoreSync = {
-  // Authoritative server-only identity fetch for post-login & session restoration.
-  // Never relies on local memory cache so role & store routing strictly reflect Firestore state.
-  async fetchAuthoritativeIdentityDataFromFirestore(
+  /**
+   * Fast, targeted user-scoped login lookup:
+   * Searches Firestore specifically for the entered user's email/UID across `users`,
+   * `employees`, `employeePermissions`, `suppliers`, `posClients`, and `system/superAdmin`,
+   * then fetches ONLY the linked store document(s) and permissions instead of downloading
+   * full collections.
+   */
+  async fetchUserLoginContextFromFirestore(
     email: string,
     uid?: string
   ): Promise<{
     connected: boolean;
     superAdmin: Partial<SuperAdmin> | null;
     suppliers: Supplier[] | null;
+    employees: OfficeEmployee[];
+    employeePermissions: EmployeePermissionRecord[];
     posClients: POSClient[] | null;
     userDoc: AuthUser | null;
     error?: unknown;
   }> {
     const cleanEmail = normalizeStoreEmail(email);
     try {
-      const [adminSnap, suppliersSnap, clientsSnap, uidUserSnap, emailUsersSnap] = await Promise.all([
-        safeGetDocFromServer(['system', 'superAdmin']),
-        safeGetDocsFromServer('suppliers'),
-        safeGetDocsFromServer('posClients'),
+      const [
+        adminSnap,
+        uidUserSnap,
+        emailUsersSnap,
+        employeesSnap,
+        empPermsSnap,
+        ownerSuppliersSnap,
+        posClientsSnap,
+      ] = await Promise.all([
+        safeGetDocFromServer(['system', 'superAdmin']).catch(() => null),
         uid ? safeGetDocFromServer(['users', uid]).catch(() => null) : Promise.resolve(null),
         cleanEmail
           ? withFirestoreRecovery(() =>
               getDocsFromServer(query(collection(db, 'users'), where('email', '==', cleanEmail)))
+            ).catch(() => null)
+          : Promise.resolve(null),
+        cleanEmail
+          ? withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, 'employees'), where('email', '==', cleanEmail)))
+            ).catch(() => null)
+          : Promise.resolve(null),
+        cleanEmail
+          ? withFirestoreRecovery(() =>
+              getDocsFromServer(
+                query(collection(db, 'employeePermissions'), where('email', '==', cleanEmail))
+              )
+            ).catch(() => null)
+          : Promise.resolve(null),
+        cleanEmail
+          ? withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, 'suppliers'), where('email', '==', cleanEmail)))
+            ).catch(() => null)
+          : Promise.resolve(null),
+        cleanEmail
+          ? withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, 'posClients'), where('email', '==', cleanEmail)))
             ).catch(() => null)
           : Promise.resolve(null),
       ]);
@@ -212,11 +262,165 @@ export const firestoreSync = {
         };
       }
 
+      const rawEmployees = employeesSnap ? mapDocsById<OfficeEmployee>(employeesSnap.docs) : [];
+      const permRecords = empPermsSnap
+        ? mapDocsById<EmployeePermissionRecord>(empPermsSnap.docs)
+        : [];
+      const matchedSuppliers = ownerSuppliersSnap
+        ? mapDocsById<Supplier>(ownerSuppliersSnap.docs)
+        : [];
+      const matchedPosClients = posClientsSnap
+        ? mapDocsById<POSClient>(posClientsSnap.docs)
+        : [];
+
+      // Fetch any missing permission records directly by employeeId (O(1) doc get)
+      const missingPermEmpIds = rawEmployees
+        .map((e) => e.id)
+        .filter((id) => !permRecords.some((p) => p.employeeId === id || p.id === id));
+
+      if (missingPermEmpIds.length > 0) {
+        const extraPermSnaps = await Promise.all(
+          missingPermEmpIds.map((empId) =>
+            safeGetDocFromServer(['employeePermissions', empId]).catch(() => null)
+          )
+        );
+        for (const snap of extraPermSnaps) {
+          if (snap && snap.exists()) {
+            permRecords.push({
+              ...(snap.data() as EmployeePermissionRecord),
+              id: snap.id,
+            });
+          }
+        }
+      }
+
+      // Collect ONLY the specific store ID(s) linked to this user
+      const knownSupIds = new Set(matchedSuppliers.map((s) => s.id));
+      const neededSupIds = new Set<string>();
+
+      for (const emp of rawEmployees) {
+        if (emp.supplierId && !knownSupIds.has(emp.supplierId)) {
+          neededSupIds.add(emp.supplierId);
+        }
+      }
+      for (const perm of permRecords) {
+        if (perm.supplierId && !knownSupIds.has(perm.supplierId)) {
+          neededSupIds.add(perm.supplierId);
+        }
+      }
+      for (const pos of matchedPosClients) {
+        if (pos.supplierId && !knownSupIds.has(pos.supplierId)) {
+          neededSupIds.add(pos.supplierId);
+        }
+      }
+      if (userDoc?.supplierId && !knownSupIds.has(userDoc.supplierId)) {
+        neededSupIds.add(userDoc.supplierId);
+      }
+      if (
+        userDoc?.associatedId &&
+        (userDoc.role === 'supplier' || userDoc.role === 'employee') &&
+        !knownSupIds.has(userDoc.associatedId)
+      ) {
+        neededSupIds.add(userDoc.associatedId);
+      }
+
+      if (neededSupIds.size > 0) {
+        const storeSnaps = await Promise.all(
+          Array.from(neededSupIds).map((supId) =>
+            safeGetDocFromServer(['suppliers', supId]).catch(() => null)
+          )
+        );
+        for (const snap of storeSnaps) {
+          if (snap && snap.exists()) {
+            matchedSuppliers.push({
+              ...(snap.data() as Supplier),
+              id: snap.id,
+            });
+          }
+        }
+      }
+
+      // If this user is a store owner (and has employees stored in `employees` collection),
+      // fetch ONLY their own store's employees & permissions in parallel
+      if (ownerSuppliersSnap && !ownerSuppliersSnap.empty) {
+        const ownerSupIds = matchedSuppliers
+          .filter((s) => normalizeStoreEmail(s.email) === cleanEmail)
+          .map((s) => s.id);
+
+        if (ownerSupIds.length > 0) {
+          const [storeEmpsList, storePermsList] = await Promise.all([
+            Promise.all(
+              ownerSupIds.map((supId) =>
+                withFirestoreRecovery(() =>
+                  getDocsFromServer(
+                    query(collection(db, 'employees'), where('supplierId', '==', supId))
+                  )
+                ).catch(() => null)
+              )
+            ),
+            Promise.all(
+              ownerSupIds.map((supId) =>
+                withFirestoreRecovery(() =>
+                  getDocsFromServer(
+                    query(collection(db, 'employeePermissions'), where('supplierId', '==', supId))
+                  )
+                ).catch(() => null)
+              )
+            ),
+          ]);
+          for (const s of storeEmpsList) {
+            if (s) {
+              for (const emp of mapDocsById<OfficeEmployee>(s.docs)) {
+                if (!rawEmployees.some((existing) => existing.id === emp.id)) {
+                  rawEmployees.push(emp);
+                }
+              }
+            }
+          }
+          for (const p of storePermsList) {
+            if (p) {
+              for (const perm of mapDocsById<EmployeePermissionRecord>(p.docs)) {
+                if (!permRecords.some((existing) => existing.id === perm.id)) {
+                  permRecords.push(perm);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // If still unregistered (e.g. first-time Google Sign-In), fetch a minimal list of stores
+      // to select a default active supplier without downloading the whole collection
+      if (
+        matchedSuppliers.length === 0 &&
+        matchedPosClients.length === 0 &&
+        rawEmployees.length === 0
+      ) {
+        const defaultSupSnap = await withFirestoreRecovery(() =>
+          getDocsFromServer(query(collection(db, 'suppliers'), limit(5)))
+        ).catch(() => null);
+        if (defaultSupSnap && !defaultSupSnap.empty) {
+          matchedSuppliers.push(...mapDocsById<Supplier>(defaultSupSnap.docs));
+        }
+      }
+
+      const hydratedEmployees = rawEmployees.map((emp) =>
+        hydrateEmployeeWithPermissionRecord(emp, permRecords)
+      );
+      const hydratedSuppliers = hydrateSuppliersWithEmployeesAndPermissions(
+        matchedSuppliers,
+        hydratedEmployees,
+        permRecords
+      );
+
       return {
         connected: true,
-        superAdmin: adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
-        suppliers: mapDocsById<Supplier>(suppliersSnap.docs),
-        posClients: mapDocsById<POSClient>(clientsSnap.docs),
+        superAdmin:
+          adminSnap && adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
+        suppliers: hydratedSuppliers,
+        employees: hydratedEmployees,
+        employeePermissions: permRecords,
+        posClients: matchedPosClients,
         userDoc,
       };
     } catch (error) {
@@ -224,11 +428,30 @@ export const firestoreSync = {
         connected: false,
         superAdmin: null,
         suppliers: null,
+        employees: [],
+        employeePermissions: [],
         posClients: null,
         userDoc: null,
         error,
       };
     }
+  },
+
+  // Authoritative server-only identity fetch (delegates to user-scoped lookup)
+  async fetchAuthoritativeIdentityDataFromFirestore(
+    email: string,
+    uid?: string
+  ): Promise<{
+    connected: boolean;
+    superAdmin: Partial<SuperAdmin> | null;
+    suppliers: Supplier[] | null;
+    employees: OfficeEmployee[];
+    employeePermissions: EmployeePermissionRecord[];
+    posClients: POSClient[] | null;
+    userDoc: AuthUser | null;
+    error?: unknown;
+  }> {
+    return this.fetchUserLoginContextFromFirestore(email, uid);
   },
 
   // Lightweight one-time bootstrap for login / registration screens without opening Watch streams
@@ -277,12 +500,15 @@ export const firestoreSync = {
   // Fetch all remote databases directly from Firestore server in staggered batches
   // to avoid opening 14 concurrent Watch targets on PersistentListenStream at once.
   async fetchAllDatabasesFromServer(): Promise<FullDatabaseSnapshot> {
-    const [adminSnap, settingsSnap, suppliersSnap, posClientsSnap] = await Promise.all([
-      safeGetDocFromServer(['system', 'superAdmin']),
-      safeGetDocFromServer(['system', 'platformSettings']),
-      safeGetDocsFromServer('suppliers'),
-      safeGetDocsFromServer('posClients'),
-    ]);
+    const [adminSnap, settingsSnap, suppliersSnap, employeesSnap, empPermsSnap, posClientsSnap] =
+      await Promise.all([
+        safeGetDocFromServer(['system', 'superAdmin']),
+        safeGetDocFromServer(['system', 'platformSettings']),
+        safeGetDocsFromServer('suppliers'),
+        safeGetDocsFromServer('employees').catch(() => null),
+        safeGetDocsFromServer('employeePermissions').catch(() => null),
+        safeGetDocsFromServer('posClients'),
+      ]);
 
     const [catalogsSnap, servicesSnap, voucherWarehousesSnap, supplierBankAccountsSnap] =
       await Promise.all([
@@ -298,18 +524,35 @@ export const firestoreSync = {
       safeGetDocsFromServer('loanRepaymentRequests'),
     ]);
 
-    const [accountingEntriesSnap, adminAccountingEntriesSnap, inviteLinksSnap] = await Promise.all([
-      safeGetDocsFromServer('accountingEntries'),
-      safeGetDocsFromServer('adminAccountingEntries'),
-      safeGetDocsFromServer('inviteLinks'),
-    ]);
+    const [accountingEntriesSnap, adminAccountingEntriesSnap, inviteLinksSnap, notificationsSnap] =
+      await Promise.all([
+        safeGetDocsFromServer('accountingEntries'),
+        safeGetDocsFromServer('adminAccountingEntries'),
+        safeGetDocsFromServer('inviteLinks'),
+        safeGetDocsFromServer('notifications').catch(() => null),
+      ]);
+
+    const rawPerms = empPermsSnap
+      ? mapDocsById<EmployeePermissionRecord>(empPermsSnap.docs)
+      : [];
+    const rawEmployees = employeesSnap ? mapDocsById<OfficeEmployee>(employeesSnap.docs) : [];
+    const hydratedEmployees = rawEmployees.map((emp) =>
+      hydrateEmployeeWithPermissionRecord(emp, rawPerms)
+    );
+    const rawSuppliers = mapDocsById<Supplier>(suppliersSnap.docs);
 
     return {
       superAdmin: adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
       platformSettings: settingsSnap.exists()
         ? (settingsSnap.data() as Partial<PlatformInterfaceSettings>)
         : null,
-      suppliers: mapDocsById<Supplier>(suppliersSnap.docs),
+      suppliers: hydrateSuppliersWithEmployeesAndPermissions(
+        rawSuppliers,
+        hydratedEmployees,
+        rawPerms
+      ),
+      employees: hydratedEmployees,
+      employeePermissions: rawPerms,
       posClients: mapDocsById<POSClient>(posClientsSnap.docs),
       catalogs: mapDocsById<Catalog>(catalogsSnap.docs),
       services: mapDocsById<DigitalService>(servicesSnap.docs),
@@ -321,6 +564,7 @@ export const firestoreSync = {
       accountingEntries: mapDocsById<AccountingEntry>(accountingEntriesSnap.docs),
       adminAccountingEntries: mapDocsById<AdminAccountingEntry>(adminAccountingEntriesSnap.docs),
       inviteLinks: mapDocsById<InviteLink>(inviteLinksSnap.docs),
+      notifications: notificationsSnap ? mapDocsById<AppNotification>(notificationsSnap.docs) : [],
     };
   },
 
@@ -576,19 +820,164 @@ export const firestoreSync = {
     }
   },
 
-  // Supplier operations
+  async fetchSupplierByIdFromServer(supplierId: string): Promise<Supplier | null> {
+    const cleanId = (supplierId || '').trim();
+    if (!cleanId) return null;
+    try {
+      const snap = await safeGetDocFromServer(['suppliers', cleanId]);
+      if (!snap.exists()) return null;
+      return { ...(snap.data() as Supplier), id: snap.id };
+    } catch {
+      return null;
+    }
+  },
+
+  // Supplier operations (stores remain compact in Firestore without embedded employee arrays)
   async saveSupplier(supplier: Supplier): Promise<void> {
     const path = `suppliers/${supplier.id}`;
     try {
-      const cleanSupplier = sanitizeData(supplier);
+      const compactSupplier = sanitizeData(stripEmployeesFromSupplierForStorage(supplier));
       await withFirestoreRecovery(() =>
-        setDoc(doc(db, 'suppliers', supplier.id), cleanSupplier, { merge: true })
+        setDoc(doc(db, 'suppliers', supplier.id), compactSupplier, { merge: true })
       );
       clearEntityPendingSync('suppliers', supplier.id);
     } catch (error) {
       markEntityPendingSync('suppliers', supplier.id);
       handleFirestoreError(error, OperationType.WRITE, path);
     }
+  },
+
+  // Separated Store Employee & Employee Permissions operations
+  async saveEmployeeWithPermissions(employee: OfficeEmployee): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const cleanEmail = normalizeStoreEmail(employee.email);
+    const employeeDoc = sanitizeData(
+      buildSeparatedEmployeeDoc({ ...employee, email: cleanEmail }, nowIso)
+    );
+    const permissionDoc = sanitizeData(
+      buildEmployeePermissionRecord({ ...employee, email: cleanEmail }, nowIso)
+    );
+    const userDoc: AuthUser & { updatedAt: string } = sanitizeData({
+      id: employee.id,
+      email: cleanEmail,
+      name: employee.name,
+      role: 'employee',
+      phone: employee.phone,
+      associatedId: employee.supplierId,
+      supplierId: employee.supplierId,
+      employeeId: employee.id,
+      roleTitle: employee.roleTitle,
+      permissions: permissionDoc.permissions,
+      updatedAt: nowIso,
+    });
+
+    try {
+      await withFirestoreRecovery(async () => {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'employees', employee.id), employeeDoc, { merge: true });
+        batch.set(doc(db, 'employeePermissions', employee.id), permissionDoc, { merge: true });
+        batch.set(doc(db, 'users', employee.id), userDoc, { merge: true });
+        await batch.commit();
+      });
+      clearEntityPendingSync('employees', employee.id);
+      clearEntityPendingSync('employeePermissions', employee.id);
+    } catch (error) {
+      markEntityPendingSync('employees', employee.id);
+      markEntityPendingSync('employeePermissions', employee.id);
+      handleFirestoreError(error, OperationType.WRITE, `employees/${employee.id}`);
+    }
+  },
+
+  async deleteEmployeeAndPermissions(employeeId: string): Promise<void> {
+    try {
+      await withFirestoreRecovery(async () => {
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'employees', employeeId));
+        batch.delete(doc(db, 'employeePermissions', employeeId));
+        batch.delete(doc(db, 'users', employeeId));
+        await batch.commit();
+      });
+      clearEntityPendingSync('employees', employeeId);
+      clearEntityPendingSync('employeePermissions', employeeId);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `employees/${employeeId}`);
+    }
+  },
+
+  async migrateLegacyStoreEmployees(
+    suppliers: Supplier[],
+    existingEmployees: OfficeEmployee[] = []
+  ): Promise<number> {
+    const unmigrated = extractUnmigratedEmployeesFromSuppliers(suppliers, existingEmployees);
+    if (unmigrated.length === 0) return 0;
+
+    const nowIso = new Date().toISOString();
+    const entries: Array<{ path: [string, string]; data: unknown }> = [];
+    for (const emp of unmigrated) {
+      entries.push({
+        path: ['employees', emp.id],
+        data: buildSeparatedEmployeeDoc(emp, nowIso),
+      });
+      entries.push({
+        path: ['employeePermissions', emp.id],
+        data: buildEmployeePermissionRecord(emp, nowIso),
+      });
+      entries.push({
+        path: ['users', emp.id],
+        data: {
+          id: emp.id,
+          email: normalizeStoreEmail(emp.email),
+          name: emp.name,
+          role: 'employee',
+          phone: emp.phone,
+          associatedId: emp.supplierId,
+          supplierId: emp.supplierId,
+          employeeId: emp.id,
+          roleTitle: emp.roleTitle,
+          permissions: normalizeEmployeePermissions(emp.permissions),
+          updatedAt: nowIso,
+        },
+      });
+    }
+    await this.commitBatchSets(entries);
+    // Clean legacy embedded `employees` array from migrated store documents
+    const migratedSupIds = Array.from(new Set(unmigrated.map((e) => e.supplierId).filter(Boolean)));
+    await Promise.all(
+      migratedSupIds.map((supId) =>
+        withFirestoreRecovery(() =>
+          updateDoc(doc(db, 'suppliers', supId), { employees: deleteField() })
+        ).catch(() => {})
+      )
+    );
+    return unmigrated.length;
+  },
+
+  // Notifications operations (real-time cross-device client <-> supplier alerts)
+  async saveNotification(notif: AppNotification): Promise<void> {
+    const path = `notifications/${notif.id}`;
+    try {
+      const cleanNotif = sanitizeData(notif);
+      await withFirestoreRecovery(() =>
+        setDoc(doc(db, 'notifications', notif.id), cleanNotif, { merge: true })
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  },
+
+  async markNotificationsReadBatch(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.commitBatchSets(
+      ids.map((id) => ({
+        path: ['notifications', id] as [string, string],
+        data: { isRead: true },
+      }))
+    );
+  },
+
+  async deleteNotificationsBatch(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.commitBatchDeletes(ids.map((id) => doc(db, 'notifications', id)));
   },
 
   // Super Admin operations
@@ -872,6 +1261,8 @@ export const firestoreSync = {
   async seedInitialDataToFirestore(data: {
     posClients: POSClient[];
     suppliers: Supplier[];
+    employees?: OfficeEmployee[];
+    employeePermissions?: EmployeePermissionRecord[];
     superAdmin: SuperAdmin;
     platformSettings?: PlatformInterfaceSettings;
     catalogs: Catalog[];
@@ -884,8 +1275,10 @@ export const firestoreSync = {
     accountingEntries: AccountingEntry[];
     adminAccountingEntries: AdminAccountingEntry[];
     inviteLinks: InviteLink[];
+    notifications?: AppNotification[];
   }): Promise<{ success: boolean; error?: string }> {
     try {
+      const nowIso = new Date().toISOString();
       const entries: Array<{ path: [string, string]; data: unknown }> = [
         { path: ['system', 'superAdmin'], data: data.superAdmin },
       ];
@@ -898,7 +1291,30 @@ export const firestoreSync = {
         entries.push({ path: ['posClients', client.id], data: client });
       }
       for (const sup of data.suppliers) {
-        entries.push({ path: ['suppliers', sup.id], data: sup });
+        entries.push({ path: ['suppliers', sup.id], data: stripEmployeesFromSupplierForStorage(sup) });
+        for (const emp of sup.employees || []) {
+          if (!emp?.id) continue;
+          entries.push({
+            path: ['employees', emp.id],
+            data: buildSeparatedEmployeeDoc({ ...emp, supplierId: emp.supplierId || sup.id }, nowIso),
+          });
+          entries.push({
+            path: ['employeePermissions', emp.id],
+            data: buildEmployeePermissionRecord({ ...emp, supplierId: emp.supplierId || sup.id }, nowIso),
+          });
+        }
+      }
+      for (const emp of data.employees || []) {
+        if (!emp?.id) continue;
+        entries.push({ path: ['employees', emp.id], data: buildSeparatedEmployeeDoc(emp, nowIso) });
+        entries.push({
+          path: ['employeePermissions', emp.id],
+          data: buildEmployeePermissionRecord(emp, nowIso),
+        });
+      }
+      for (const perm of data.employeePermissions || []) {
+        if (!perm?.id) continue;
+        entries.push({ path: ['employeePermissions', perm.id], data: perm });
       }
       for (const cat of data.catalogs) {
         entries.push({ path: ['catalogs', cat.id], data: cat });
@@ -930,6 +1346,9 @@ export const firestoreSync = {
       for (const inv of data.inviteLinks) {
         entries.push({ path: ['inviteLinks', inv.id], data: inv });
       }
+      for (const notif of data.notifications || []) {
+        entries.push({ path: ['notifications', notif.id], data: notif });
+      }
 
       await this.commitBatchSets(entries);
       await this.syncUsersForAccounts(data.suppliers, data.posClients);
@@ -955,7 +1374,18 @@ export const firestoreSync = {
         }
       }
 
-      // 2. Delete matching posClients
+      // 2. Delete matching employees & their separated permissions
+      const empsSnap = await getDocs(collection(db, 'employees'));
+      for (const docSnap of empsSnap.docs) {
+        const data = docSnap.data();
+        if (data.email && String(data.email).trim().toLowerCase() === targetEmail) {
+          await deleteDoc(doc(db, 'employees', docSnap.id));
+          await deleteDoc(doc(db, 'employeePermissions', docSnap.id)).catch(() => {});
+          deletedCount++;
+        }
+      }
+
+      // 3. Delete matching posClients
       const posSnap = await getDocs(collection(db, 'posClients'));
       for (const docSnap of posSnap.docs) {
         const data = docSnap.data();
@@ -965,7 +1395,7 @@ export const firestoreSync = {
         }
       }
 
-      // 3. Delete matching suppliers or remove matching employee
+      // 4. Delete matching suppliers or remove matching legacy embedded employee
       const supSnap = await getDocs(collection(db, 'suppliers'));
       for (const docSnap of supSnap.docs) {
         const data = docSnap.data() as Supplier;

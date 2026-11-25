@@ -37,6 +37,8 @@ export const FIRESTORE_COLLECTIONS_TO_CLEAR: readonly string[] = [
   'services',
   'voucherWarehouses',
   'suppliers',
+  'employees',
+  'employeePermissions',
   'posClients',
   'supplierBankAccounts',
   'orders',
@@ -46,6 +48,7 @@ export const FIRESTORE_COLLECTIONS_TO_CLEAR: readonly string[] = [
   'adminAccountingEntries',
   'balanceTransfers',
   'inviteLinks',
+  'notifications',
 ];
 
 export const EMPTY_SUPPLIER_FALLBACK: Supplier = {

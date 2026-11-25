@@ -12,7 +12,8 @@ import {
   updateProfile,
   sendPasswordResetEmail,
   verifyPasswordResetCode,
-  confirmPasswordReset
+  confirmPasswordReset,
+  updatePassword
 } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import {
@@ -82,6 +83,59 @@ export {
   confirmPasswordReset,
   isTransientFirestoreError
 };
+
+let secondaryAuthApp: FirebaseApp | null = null;
+function getSecondaryAuth() {
+  if (!secondaryAuthApp) {
+    secondaryAuthApp = initializeApp(firebaseConfig, 'secondary-auth-worker');
+  }
+  return getAuth(secondaryAuthApp);
+}
+
+/**
+ * Creates or updates a Firebase Authentication user (e.g., for an office employee or
+ * admin-created supplier) on a secondary Auth instance so the active store owner / admin
+ * session is never signed out.
+ */
+export async function provisionSecondaryAuthAccount(params: {
+  email: string;
+  password?: string;
+  previousEmail?: string;
+  previousPassword?: string;
+}): Promise<{ ok: boolean; uid?: string; reason?: string }> {
+  const cleanEmail = (params.email || '').trim().toLowerCase();
+  const cleanPassword = (params.password || '').trim();
+  if (!cleanEmail || cleanPassword.length < 6) {
+    return { ok: false, reason: 'invalid_input_or_short_password' };
+  }
+
+  const secAuth = getSecondaryAuth();
+  try {
+    try {
+      const cred = await createUserWithEmailAndPassword(secAuth, cleanEmail, cleanPassword);
+      return { ok: true, uid: cred.user.uid };
+    } catch (err: unknown) {
+      const fbErr = err as { code?: string };
+      if (fbErr?.code === 'auth/email-already-in-use') {
+        const oldPwd = (params.previousPassword || '').trim();
+        const oldEmail = (params.previousEmail || cleanEmail).trim().toLowerCase();
+        if (oldEmail === cleanEmail && oldPwd && oldPwd !== cleanPassword) {
+          try {
+            const signInCred = await signInWithEmailAndPassword(secAuth, cleanEmail, oldPwd);
+            await updatePassword(signInCred.user, cleanPassword);
+            return { ok: true, uid: signInCred.user.uid };
+          } catch {
+            return { ok: true, reason: 'already_exists' };
+          }
+        }
+        return { ok: true, reason: 'already_exists' };
+      }
+      return { ok: false, reason: fbErr?.code || 'auth_provision_failed' };
+    }
+  } finally {
+    await signOut(secAuth).catch(() => {});
+  }
+}
 
 let isNetworkExplicitlyDisabled = false;
 let recoveryGeneration = 0;

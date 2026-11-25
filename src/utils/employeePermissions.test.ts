@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildEmployeePermissionRecord,
+  buildSeparatedEmployeeDoc,
   countActiveEmployeePermissions,
+  extractUnmigratedEmployeesFromSuppliers,
   filterSupplierNotificationsForEmployee,
   getFirstAllowedSupplierTab,
+  hydrateEmployeeWithPermissionRecord,
+  hydrateSuppliersWithEmployeesAndPermissions,
   isDepositVisibleToEmployee,
   isEmployeeActive,
   isEmployeeTabAllowed,
@@ -11,9 +16,11 @@ import {
   resolveEffectiveEmployeePermissions,
   resolveStoreActorByEmail,
   sanitizeServiceUpdatesForEmployeePermissions,
+  stripEmployeesFromSupplierForStorage,
   validateOfficeEmployeeInput,
   verifyEmployeeCredentials,
 } from './employeePermissions';
+import { filterNotificationsForPosClient } from './accountAuth';
 import { AppNotification, AuthUser, DigitalService, OfficeEmployee, Supplier } from '../types';
 
 function makeSupplier(overrides: Partial<Supplier> = {}): Supplier {
@@ -388,4 +395,67 @@ test('sanitizeServiceUpdatesForEmployeePermissions enforces field-level restrict
   assert.equal(sanitizedDetailOnly.nameAr, 'ببجي العالمية');
   assert.equal(sanitizedDetailOnly.packages?.[0].name, '60 UC');
   assert.equal(sanitizedDetailOnly.packages?.[0].tierPrices.regular, 1);
+});
+
+test('separated employee and permission records strip store arrays and hydrate cleanly by store and employeeId', () => {
+  const emp = makeEmployee({
+    id: 'emp-sep-1',
+    supplierId: 'sup-1',
+    email: 'Staff.One@Store.sa',
+    permissions: {
+      canManagePlayerIdOrders: true,
+      canReviewCashDeposits: true,
+    },
+  });
+
+  const separatedEmp = buildSeparatedEmployeeDoc(emp, '2026-06-01T00:00:00.000Z');
+  assert.equal('permissions' in separatedEmp, false);
+  assert.equal(separatedEmp.supplierId, 'sup-1');
+  assert.equal(separatedEmp.permissionId, 'emp-sep-1');
+  assert.equal(separatedEmp.email, 'staff.one@store.sa');
+
+  const permRec = buildEmployeePermissionRecord(emp, '2026-06-01T00:00:00.000Z');
+  assert.equal(permRec.id, 'emp-sep-1');
+  assert.equal(permRec.employeeId, 'emp-sep-1');
+  assert.equal(permRec.supplierId, 'sup-1');
+  assert.equal(permRec.permissions.canManagePlayerIdOrders, true);
+  assert.equal(permRec.permissions.canReviewCashDeposits, true);
+  assert.equal(permRec.permissions.canManageEmployees, false);
+
+  const hydratedEmp = hydrateEmployeeWithPermissionRecord(separatedEmp, [permRec]);
+  assert.equal(hydratedEmp.permissions.canManagePlayerIdOrders, true);
+  assert.equal(hydratedEmp.permissions.canReviewCashDeposits, true);
+  assert.equal(hydratedEmp.permissions.canManageAccountOrders, false);
+
+  const rawSupWithLegacy = makeSupplier({
+    id: 'sup-1',
+    employees: [makeEmployee({ id: 'emp-legacy', supplierId: 'sup-1', email: 'legacy@store.sa' })],
+  });
+  const compactSup = stripEmployeesFromSupplierForStorage(rawSupWithLegacy);
+  assert.equal('employees' in compactSup, false);
+
+  const sup2 = makeSupplier({ id: 'sup-2', email: 'other@store.sa', employees: [] });
+  const joined = hydrateSuppliersWithEmployeesAndPermissions([compactSup as Supplier, sup2], [separatedEmp], [permRec]);
+  assert.equal(joined[0].employees?.length, 1);
+  assert.equal(joined[0].employees?.[0].id, 'emp-sep-1');
+  assert.equal(joined[0].employees?.[0].permissions.canManagePlayerIdOrders, true);
+  assert.equal(joined[1].employees?.length, 0);
+
+  const unmigrated = extractUnmigratedEmployeesFromSuppliers([rawSupWithLegacy], [hydratedEmp]);
+  assert.equal(unmigrated.length, 1);
+  assert.equal(unmigrated[0].id, 'emp-legacy');
+  assert.equal(unmigrated[0].supplierId, 'sup-1');
+});
+
+test('filterNotificationsForPosClient strictly scopes notifications to the active POS client and store', () => {
+  const notifs: AppNotification[] = [
+    { id: 'n1', posId: 'pos-1', supplierId: 'sup-1', targetRole: 'pos', title: 'direct', message: '', type: 'order_status', isRead: false, createdAt: '' },
+    { id: 'n2', posId: 'pos-2', supplierId: 'sup-1', targetRole: 'pos', title: 'other client', message: '', type: 'order_status', isRead: false, createdAt: '' },
+    { id: 'n3', supplierId: 'sup-1', targetRole: 'pos', title: 'store broadcast', message: '', type: 'order_status', isRead: false, createdAt: '' },
+    { id: 'n4', supplierId: 'sup-2', targetRole: 'pos', title: 'other store', message: '', type: 'order_status', isRead: false, createdAt: '' },
+    { id: 'n5', posId: 'pos-1', supplierId: 'sup-1', targetRole: 'supplier', title: 'supplier alert', message: '', type: 'deposit', isRead: false, createdAt: '' },
+  ];
+
+  const scoped = filterNotificationsForPosClient(notifs, 'pos-1', 'sup-1');
+  assert.deepEqual(scoped.map(n => n.id), ['n1', 'n3']);
 });

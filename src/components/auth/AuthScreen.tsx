@@ -356,7 +356,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
 
-    if (regRole === 'pos_client' && parsedInviteCode && resolvedInvite && !resolvedInvite.valid && !isCheckingConn) {
+    if (regRole === 'pos_client' && parsedInviteCode && inviteLinks.length > 0 && resolvedInvite && !resolvedInvite.valid && !isCheckingConn) {
       showToast({
         type: 'error',
         title: 'رابط الدعوة غير صالح',
@@ -781,6 +781,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                                   يتضمن هذا الرابط اعتماد حسابك كنقطة بيع رسمية للمتجر وإتاحة اطلاع المتجر على واجهة نقطة البيع الخاصة بك بوضع القراءة فقط.
                                 </p>
                               )}
+                            </div>
+                          ) : inviteLinks.length === 0 ? (
+                            <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-200 flex items-center gap-2 text-[11px]">
+                              <Link2 className="w-4 h-4 text-purple-400 shrink-0" />
+                              <span>سيتم التحقق من كود الدعوة ({parsedInviteCode}) وتطبيق ميزات المتجر تلقائياً عند تأكيد التسجيل.</span>
                             </div>
                           ) : resolvedInvite && !resolvedInvite.valid ? (
                             <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 flex items-center gap-2 text-[11px]">

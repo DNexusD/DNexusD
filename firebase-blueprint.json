@@ -426,6 +426,62 @@
         "lastSentAtMs": { "type": "number" }
       },
       "required": ["email", "codeHash", "salt", "createdAt", "expiresAt", "attempts"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Real-time client and supplier alerts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "posId": { "type": "string" },
+        "posName": { "type": "string" },
+        "posCode": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "targetRole": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "message", "type", "isRead", "createdAt"]
+    },
+    "OfficeEmployee": {
+      "title": "OfficeEmployee",
+      "description": "Store office employee record linked to its parent supplier store",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "permissionId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "password": { "type": "string" },
+        "phone": { "type": "string" },
+        "country": { "type": "string" },
+        "roleTitle": { "type": "string" },
+        "isTransferReceiverOnly": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "supplierId", "name", "email", "roleTitle", "createdAt"]
+    },
+    "EmployeePermission": {
+      "title": "EmployeePermission",
+      "description": "Separated permission record linked to a specific employee and store",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "email": { "type": "string" },
+        "permissions": { "type": "object" },
+        "isActive": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "employeeId", "supplierId", "email", "permissions", "isActive", "updatedAt"]
     }
   },
   "firestore": {
@@ -440,6 +496,14 @@
     "/suppliers/{supplierId}": {
       "schema": { "$ref": "#/entities/Supplier" },
       "description": "Digital service supplier registry and wallets"
+    },
+    "/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/OfficeEmployee" },
+      "description": "Separated store employees linked to their supplier store via supplierId"
+    },
+    "/employeePermissions/{employeeId}": {
+      "schema": { "$ref": "#/entities/EmployeePermission" },
+      "description": "Separated employee permissions linked to employeeId and supplierId"
     },
     "/system/superAdmin": {
       "schema": { "$ref": "#/entities/SuperAdmin" },
@@ -489,9 +553,14 @@
       "schema": { "$ref": "#/entities/SupplierBankAccount" },
       "description": "Supplier bank accounts registry and POS client transfer-receiving delegations"
     },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Real-time client and supplier alerts"
+    },
     "/loginCodes/{email}": {
       "schema": { "$ref": "#/entities/LoginCode" },
       "description": "Server-only hashed OTP login codes (client access denied)"
     }
   }
 }
+

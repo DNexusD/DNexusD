@@ -294,9 +294,20 @@ export interface PlatformFeesConfig {
   clientServices: ClientServiceFeesConfig;
 }
 
+export interface EmployeePermissionRecord {
+  id: string; // matches employeeId for direct O(1) lookup
+  employeeId: string;
+  supplierId: string;
+  email: string;
+  permissions: Required<EmployeePermissions>;
+  isActive: boolean;
+  updatedAt: string;
+}
+
 export interface OfficeEmployee {
   id: string;
   supplierId: string;
+  permissionId?: string;
   name: string;
   email: string;
   password?: string;
@@ -307,6 +318,7 @@ export interface OfficeEmployee {
   isActive?: boolean;
   permissions: EmployeePermissions;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface SupplierCustomSocialLink {

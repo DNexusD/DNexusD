@@ -3,6 +3,7 @@ import {
   AuthUser,
   DepositRequest,
   DigitalService,
+  EmployeePermissionRecord,
   EmployeePermissions,
   OfficeEmployee,
   Order,
@@ -792,3 +793,161 @@ export function validateOfficeEmployeeInput(
 
   return { valid: true };
 }
+
+export type SeparatedEmployeeDoc = Omit<OfficeEmployee, 'permissions'> & {
+  permissionId: string;
+};
+
+/**
+ * Produces a lightweight employee document for the `employees/{employeeId}` collection
+ * linked to its store (`supplierId`) and detached permissions record (`permissionId`).
+ */
+export function buildSeparatedEmployeeDoc(
+  emp: OfficeEmployee,
+  nowIso: string = new Date().toISOString()
+): SeparatedEmployeeDoc {
+  const { permissions: _detachedPermissions, ...rest } = emp;
+  return {
+    ...rest,
+    email: normalizeStoreEmail(emp.email),
+    permissionId: emp.id,
+    isActive: emp.isActive !== false,
+    updatedAt: emp.updatedAt || nowIso,
+  };
+}
+
+/**
+ * Produces a dedicated permission record for the `employeePermissions/{employeeId}` collection
+ * linked to both the employee (`employeeId`) and their store (`supplierId`).
+ */
+export function buildEmployeePermissionRecord(
+  emp: Pick<OfficeEmployee, 'id' | 'supplierId' | 'email' | 'permissions' | 'isActive'>,
+  nowIso: string = new Date().toISOString()
+): EmployeePermissionRecord {
+  return {
+    id: emp.id,
+    employeeId: emp.id,
+    supplierId: emp.supplierId,
+    email: normalizeStoreEmail(emp.email),
+    permissions: normalizeEmployeePermissions(emp.permissions),
+    isActive: emp.isActive !== false,
+    updatedAt: nowIso,
+  };
+}
+
+/**
+ * Strips the embedded `employees` array from a Supplier document before writing to
+ * `suppliers/{supplierId}` so store records remain compact and normalized.
+ */
+export function stripEmployeesFromSupplierForStorage(
+  supplier: Supplier
+): Omit<Supplier, 'employees'> {
+  const { employees: _legacyEmployees, ...cleanSupplier } = supplier;
+  return cleanSupplier;
+}
+
+/**
+ * Hydrates an employee record by merging its separated EmployeePermissionRecord
+ * (strictly matching both `employeeId` and `supplierId`).
+ */
+export function hydrateEmployeeWithPermissionRecord(
+  employee: OfficeEmployee | SeparatedEmployeeDoc,
+  permissionRecords: EmployeePermissionRecord[] = []
+): OfficeEmployee {
+  const matchedPerm = permissionRecords.find(
+    (rec) =>
+      rec &&
+      (rec.employeeId === employee.id || rec.id === employee.id) &&
+      (!rec.supplierId || rec.supplierId === employee.supplierId)
+  );
+  const rawPerms =
+    matchedPerm?.permissions ??
+    ('permissions' in employee ? employee.permissions : undefined);
+
+  return {
+    ...employee,
+    email: normalizeStoreEmail(employee.email),
+    permissionId: employee.permissionId || employee.id,
+    isActive:
+      matchedPerm?.isActive !== undefined
+        ? matchedPerm.isActive && employee.isActive !== false
+        : employee.isActive !== false,
+    permissions: normalizeEmployeePermissions(rawPerms),
+  };
+}
+
+/**
+ * Joins normalized `suppliers`, `employees`, and `employeePermissions` collections in memory
+ * so all UI views receive each store's up-to-date `employees` list without duplicating
+ * employee arrays inside `suppliers/{supplierId}` in Firestore.
+ * Falls back cleanly to any unmigrated legacy `supplier.employees` records.
+ */
+export function hydrateSuppliersWithEmployeesAndPermissions(
+  rawSuppliers: Supplier[],
+  employees: Array<OfficeEmployee | SeparatedEmployeeDoc> = [],
+  permissionRecords: EmployeePermissionRecord[] = []
+): Supplier[] {
+  if (!Array.isArray(rawSuppliers)) return [];
+
+  return rawSuppliers.map((sup) => {
+    const dedicatedEmployees = employees
+      .filter((e) => e && e.supplierId === sup.id)
+      .map((e) => hydrateEmployeeWithPermissionRecord(e, permissionRecords));
+
+    const legacyEmployees = Array.isArray(sup.employees)
+      ? sup.employees
+          .filter((e) => e && (!e.supplierId || e.supplierId === sup.id))
+          .map((e) =>
+            hydrateEmployeeWithPermissionRecord(
+              { ...e, supplierId: sup.id },
+              permissionRecords
+            )
+          )
+      : [];
+
+    const mergedById = new Map<string, OfficeEmployee>();
+    for (const legacyEmp of legacyEmployees) {
+      if (legacyEmp.id) mergedById.set(legacyEmp.id, legacyEmp);
+    }
+    for (const dedicatedEmp of dedicatedEmployees) {
+      if (dedicatedEmp.id) mergedById.set(dedicatedEmp.id, dedicatedEmp);
+    }
+
+    return {
+      ...sup,
+      employees: Array.from(mergedById.values()),
+    };
+  });
+}
+
+/**
+ * Extracts legacy embedded `supplier.employees` entries that have not yet been
+ * persisted into the separated `employees` and `employeePermissions` collections.
+ */
+export function extractUnmigratedEmployeesFromSuppliers(
+  suppliers: Supplier[],
+  existingEmployees: Array<Pick<OfficeEmployee, 'id' | 'supplierId'>> = []
+): OfficeEmployee[] {
+  const knownKeys = new Set(
+    existingEmployees.map((e) => `${e.supplierId}::${e.id}`)
+  );
+  const unmigrated: OfficeEmployee[] = [];
+
+  for (const sup of suppliers || []) {
+    for (const emp of sup.employees || []) {
+      if (!emp?.id || !emp.email) continue;
+      const scopedSupId = emp.supplierId || sup.id;
+      if (!scopedSupId) continue;
+      if (knownKeys.has(`${scopedSupId}::${emp.id}`)) continue;
+      unmigrated.push({
+        ...emp,
+        supplierId: scopedSupId,
+        email: normalizeStoreEmail(emp.email),
+        permissions: normalizeEmployeePermissions(emp.permissions),
+      });
+    }
+  }
+
+  return unmigrated;
+}
+

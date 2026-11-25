@@ -2,12 +2,15 @@ import {
   AccountingEntry,
   AdminAccount,
   AdminAccountingEntry,
+  AppNotification,
   BalanceTransfer,
   Catalog,
   DepositRequest,
   DigitalService,
+  EmployeePermissionRecord,
   InviteLink,
   LoanRepaymentRequest,
+  OfficeEmployee,
   Order,
   POSClient,
   PlatformInterfaceSettings,
@@ -20,6 +23,8 @@ import { mergePlatformSettings } from './platformSettings';
 
 export type SyncCollectionKey =
   | 'suppliers'
+  | 'employees'
+  | 'employeePermissions'
   | 'posClients'
   | 'catalogs'
   | 'services'
@@ -30,10 +35,13 @@ export type SyncCollectionKey =
   | 'supplierBankAccounts'
   | 'accountingEntries'
   | 'adminAccountingEntries'
-  | 'inviteLinks';
+  | 'inviteLinks'
+  | 'notifications';
 
 export const SYNC_COLLECTION_KEYS: SyncCollectionKey[] = [
   'suppliers',
+  'employees',
+  'employeePermissions',
   'posClients',
   'catalogs',
   'services',
@@ -45,6 +53,7 @@ export const SYNC_COLLECTION_KEYS: SyncCollectionKey[] = [
   'accountingEntries',
   'adminAccountingEntries',
   'inviteLinks',
+  'notifications',
 ];
 
 export type PendingSyncMap = Partial<Record<SyncCollectionKey | 'superAdmin' | 'platformSettings', string[]>>;
@@ -297,6 +306,8 @@ export interface FullDatabaseSnapshot {
   superAdmin?: Partial<SuperAdmin> | null;
   platformSettings?: Partial<PlatformInterfaceSettings> | null;
   suppliers: Supplier[];
+  employees?: OfficeEmployee[];
+  employeePermissions?: EmployeePermissionRecord[];
   posClients: POSClient[];
   catalogs: Catalog[];
   services: DigitalService[];
@@ -309,4 +320,5 @@ export interface FullDatabaseSnapshot {
   adminAccountingEntries: AdminAccountingEntry[];
   inviteLinks: InviteLink[];
   balanceTransfers?: BalanceTransfer[];
+  notifications?: AppNotification[];
 }
