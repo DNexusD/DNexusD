@@ -725,57 +725,57 @@ export const SupplierDashboard: React.FC = () => {
       )}
 
       {/* Supplier Top Header Card */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-4 sm:p-6 shadow-xl">
-        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-5">
-          <div className="flex flex-col gap-3 min-w-0 flex-1">
-            <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden shadow-inner">
-                {supplier.logoUrl ? (
-                  <img src={supplier.logoUrl} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <Building2 className="w-7 h-7" />
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-4 sm:p-6 shadow-xl space-y-4 sm:space-y-5">
+        {/* Tier 1: Store Profile & Identity (Full width across all screen sizes) */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start sm:items-center gap-3.5 min-w-0 flex-1">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 overflow-hidden shadow-inner">
+              {supplier.logoUrl ? (
+                <img src={supplier.logoUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <Building2 className="w-7 h-7 sm:w-8 sm:h-8" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+                <h1 className="text-base sm:text-lg lg:text-xl font-bold text-white tracking-tight flex flex-wrap items-center gap-2">
+                  <span className="text-white font-bold">{supplier.storeName}</span>
+                  <span className="text-slate-600 font-normal select-none">·</span>
+                  <span className="text-amber-400 font-semibold text-sm sm:text-base">
+                    {supplier.name}
+                  </span>
+                </h1>
+                {isStoreOwner && (
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditProfileSection('profile');
+                        setShowEditProfileModal(true);
+                      }}
+                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 inline-flex items-center justify-center cursor-pointer shadow-sm"
+                      title="تعديل بيانات المتجر والشعار وروابط التواصل"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditProfileSection('social');
+                        setShowEditProfileModal(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+                      title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
+                    >
+                      <Share2 className="w-3 h-3 text-amber-400" />
+                      <span>روابط التواصل</span>
+                    </button>
+                  </div>
                 )}
               </div>
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <h1 className="text-base sm:text-lg lg:text-xl font-bold text-white tracking-tight flex flex-wrap items-center gap-2">
-                    <span className="text-white font-bold">{supplier.storeName}</span>
-                    <span className="text-slate-600 font-normal select-none">·</span>
-                    <span className="text-amber-400 font-semibold text-sm sm:text-base">
-                      {supplier.name}
-                    </span>
-                  </h1>
-                  {isStoreOwner && (
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditProfileSection('profile');
-                          setShowEditProfileModal(true);
-                        }}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 transition-colors shrink-0 inline-flex items-center justify-center cursor-pointer shadow-sm"
-                        title="تعديل بيانات المتجر والشعار وروابط التواصل"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditProfileSection('social');
-                          setShowEditProfileModal(true);
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors shrink-0 inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
-                        title="إضافة أو تعديل روابط التواصل الاجتماعي (اتصل بالمتجر)"
-                      >
-                        <Share2 className="w-3 h-3 text-amber-400" />
-                        <span>روابط التواصل</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
 
-                {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
-                {isSupplierElVisible('supplier_role_badge') && (
+              {/* Single line showing Store Owner vs Logged-in Employee + Granted Permissions */}
+              {isSupplierElVisible('supplier_role_badge') && (
                 <div className="text-xs text-slate-300 flex items-center gap-2 flex-wrap">
                   {activeEmployee ? (
                     <div className="flex flex-wrap items-center gap-1.5 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 text-xs">
@@ -816,173 +816,186 @@ export const SupplierDashboard: React.FC = () => {
                     </div>
                   )}
                 </div>
-                )}
-              </div>
+              )}
             </div>
+          </div>
 
-            {/* Bottom Row: QR & ID Bar + Social Links */}
-            {(isSupplierElVisible('supplier_qr_id_bar') || (isSupplierElVisible('supplier_social_links') && supplier.socialLinks)) && (
-            <div className="flex flex-wrap items-center gap-3 pt-1">
+          {/* Right/End Side: QR & ID Bar + Social Contact Links */}
+          {(isSupplierElVisible('supplier_qr_id_bar') || (isSupplierElVisible('supplier_social_links') && supplier.socialLinks)) && (
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0 self-start lg:self-center">
               {isSupplierElVisible('supplier_qr_id_bar') && (
-              <div className="flex items-center gap-2 bg-slate-950/70 px-2.5 py-1.5 rounded-xl border border-slate-800/80 w-fit shrink-0">
-                <button
-                  type="button"
-                  onClick={handleDownloadQrImage}
-                  className="p-0.5 bg-white rounded shrink-0 shadow-sm hover:scale-105 hover:ring-2 hover:ring-amber-400 transition-all cursor-pointer group relative"
-                  title="اضغط لتحميل صورة الكيو أر إلى جهازك"
-                >
-                  <QRCodeSVG id="supplier-qr-code-svg" value={supplier.qrCodeValue || supplier.id} size={20} />
-                </button>
-
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2 bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-slate-800/80 shrink-0">
                   <button
                     type="button"
-                    onClick={() => handleCopyField(supplier.id, 'supplier_id', 'المعرف')}
-                    className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-                    title="نسخ المعرف"
+                    onClick={handleDownloadQrImage}
+                    className="p-0.5 bg-white rounded shrink-0 shadow-sm hover:scale-105 hover:ring-2 hover:ring-amber-400 transition-all cursor-pointer group relative"
+                    title="اضغط لتحميل صورة الكيو أر إلى جهازك"
                   >
-                    {copiedFields['supplier_id'] ? (
-                      <Check className="w-3 h-3 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3 h-3" />
-                    )}
+                    <QRCodeSVG id="supplier-qr-code-svg" value={supplier.qrCodeValue || supplier.id} size={22} />
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleShareSupplierInfo}
-                    className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-                    title="مشاركة الكيو أر والمعرف"
-                  >
-                    <Share2 className="w-3 h-3" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyField(supplier.id, 'supplier_id', 'المعرف')}
+                      className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+                      title="نسخ المعرف"
+                    >
+                      {copiedFields['supplier_id'] ? (
+                        <Check className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleShareSupplierInfo}
+                      className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-800 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+                      title="مشاركة الكيو أر والمعرف"
+                    >
+                      <Share2 className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  <span className="font-mono text-amber-400 font-bold tracking-wider select-all text-xs">{supplier.id}</span>
                 </div>
-
-                <span className="font-mono text-amber-400 font-bold tracking-wider select-all text-xs">{supplier.id}</span>
-              </div>
               )}
 
               {isSupplierElVisible('supplier_social_links') && supplier.socialLinks && (
                 <SupplierContactLinks socialLinks={supplier.socialLinks} className="pt-0" />
               )}
             </div>
+          )}
+        </div>
+
+        {/* Tier 2: Dedicated Quick Actions Toolbar (Full-width, responsive across mobile, tablet, laptop, and PC) */}
+        <div className="pt-3 sm:pt-3.5 border-t border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2.5 w-full">
+          {/* Primary Action Buttons */}
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+            {isSupplierElVisible('supplier_quick_actions') && (
+              <>
+                {(isStoreOwner || perms.canAddCatalogs) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!platformSettings.allowSuppliersCreateCustomCatalogs) {
+                        showToast({
+                          type: 'error',
+                          title: 'ميزة معطّلة من الإدارة',
+                          description: 'تم تقييد إضافة كتالوجات خاصة حالياً والالتزام بالكتالوجات الثابتة المعتمدة.',
+                        });
+                        return;
+                      }
+                      setShowAddCatalog(true);
+                    }}
+                    className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px] whitespace-nowrap cursor-pointer ${
+                      platformSettings.allowSuppliersCreateCustomCatalogs
+                        ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
+                    }`}
+                    title={platformSettings.allowSuppliersCreateCustomCatalogs ? 'إضافة كاتالوج جديد' : 'تم تعطيل إنشاء كتالوجات مخصصة من مدير التطبيق'}
+                  >
+                    {platformSettings.allowSuppliersCreateCustomCatalogs ? (
+                      <FolderPlus className="w-4 h-4 text-slate-950 shrink-0" />
+                    ) : (
+                      <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                    )}
+                    <span>إضافة كاتالوج</span>
+                  </button>
+                )}
+
+                {(isStoreOwner || perms.canAddServices) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAddService(true)}
+                    className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px] whitespace-nowrap cursor-pointer"
+                  >
+                    <PlusCircle className="w-4 h-4 shrink-0" />
+                    <span>إضافة خدمة</span>
+                  </button>
+                )}
+
+                {(isStoreOwner || perms.canUpgradeClientTiers) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowInviteModal(true)}
+                    className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px] whitespace-nowrap cursor-pointer"
+                  >
+                    <Link2 className="w-4 h-4 shrink-0" />
+                    <span>رابط دعوة</span>
+                  </button>
+                )}
+
+                {(isStoreOwner || perms.canReviewCashDeposits || perms.canReviewLoanDeposits) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGrantModalClientPosId(undefined);
+                      setShowGrantModal(true);
+                    }}
+                    className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer min-h-[38px] whitespace-nowrap"
+                    title="منح رصيد مجاني أو سلفة لنقطة بيع"
+                  >
+                    <HandCoins className="w-4 h-4 shrink-0" />
+                    <span>دعم رصيد / سلفة</span>
+                  </button>
+                )}
+
+                {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowClientsDirectoryModal(true)}
+                    className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px]"
+                    title="عرض عملاء القاعدة المحلية وقاعدة فايربيس مع إيميل تسجيل الدخول والمعرّف"
+                  >
+                    <Database className="w-4 h-4 text-cyan-400 shrink-0" />
+                    <span>دليل العملاء</span>
+                  </button>
+                )}
+              </>
             )}
           </div>
 
-          {/* Quick Actions */}
-          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-stretch sm:items-center gap-2 w-full xl:w-auto">
+          {/* Management & Session Buttons */}
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
             {isSupplierElVisible('supplier_quick_actions') && (
               <>
-            {(isStoreOwner || perms.canAddCatalogs) && (
-              <button
-                onClick={() => {
-                  if (!platformSettings.allowSuppliersCreateCustomCatalogs) {
-                    showToast({
-                      type: 'error',
-                      title: 'ميزة معطّلة من الإدارة',
-                      description: 'تم تقييد إضافة كتالوجات خاصة حالياً والالتزام بالكتالوجات الثابتة المعتمدة.',
-                    });
-                    return;
-                  }
-                  setShowAddCatalog(true);
-                }}
-                className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px] ${
-                  platformSettings.allowSuppliersCreateCustomCatalogs
-                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
-                }`}
-                title={platformSettings.allowSuppliersCreateCustomCatalogs ? 'إضافة كاتالوج جديد' : 'تم تعطيل إنشاء كتالوجات مخصصة من مدير التطبيق'}
-              >
-                {platformSettings.allowSuppliersCreateCustomCatalogs ? (
-                  <FolderPlus className="w-4 h-4 text-slate-600 shrink-0" />
-                ) : (
-                  <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                {(isStoreOwner || perms.canManageEmployees) && (
+                  <button
+                    type="button"
+                    onClick={() => setSubTab('employees')}
+                    className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px] ${
+                      subTab === 'employees'
+                        ? 'bg-amber-500 text-slate-950 border-amber-400'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-amber-500/40'
+                    }`}
+                  >
+                    <ShieldCheck className={`w-4 h-4 shrink-0 ${subTab === 'employees' ? 'text-slate-950' : 'text-amber-400'}`} />
+                    <span>الموظفون</span>
+                  </button>
                 )}
-                <span>إضافة كاتالوج</span>
-              </button>
-            )}
 
-            {(isStoreOwner || perms.canAddServices) && (
-              <button
-                onClick={() => setShowAddService(true)}
-                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px]"
-              >
-                <PlusCircle className="w-4 h-4 shrink-0" />
-                <span>إضافة خدمة</span>
-              </button>
-            )}
-
-            {(isStoreOwner || perms.canUpgradeClientTiers) && (
-              <button
-                onClick={() => setShowInviteModal(true)}
-                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md min-h-[38px]"
-              >
-                <Link2 className="w-4 h-4 shrink-0" />
-                <span>رابط دعوة</span>
-              </button>
-            )}
-
-            {(isStoreOwner || perms.canReviewCashDeposits || perms.canReviewLoanDeposits) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setGrantModalClientPosId(undefined);
-                  setShowGrantModal(true);
-                }}
-                className="px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer min-h-[38px]"
-                title="منح رصيد مجاني أو سلفة لنقطة بيع"
-              >
-                <HandCoins className="w-4 h-4 shrink-0" />
-                <span>دعم رصيد / سلفة</span>
-              </button>
-            )}
-
-            {(isStoreOwner || perms.canViewClients || perms.canUpgradeClientTiers) && (
-              <button
-                type="button"
-                onClick={() => setShowClientsDirectoryModal(true)}
-                className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px]"
-                title="عرض عملاء القاعدة المحلية وقاعدة فايربيس مع إيميل تسجيل الدخول والمعرّف"
-              >
-                <Database className="w-4 h-4 text-cyan-400 shrink-0" />
-                <span>دليل العملاء</span>
-              </button>
-            )}
-
-            {(isStoreOwner || perms.canManageEmployees) && (
-              <button
-                type="button"
-                onClick={() => setSubTab('employees')}
-                className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 min-h-[38px] ${
-                  subTab === 'employees'
-                    ? 'bg-amber-500 text-slate-950 border-amber-400'
-                    : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-amber-500/40'
-                }`}
-              >
-                <ShieldCheck className={`w-4 h-4 shrink-0 ${subTab === 'employees' ? 'text-slate-950' : 'text-amber-400'}`} />
-                <span>الموظفون</span>
-              </button>
-            )}
-
-            <button
-              onClick={() => setSubTab('notifications')}
-              className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md relative cursor-pointer min-h-[38px] ${
-                subTab === 'notifications'
-                  ? 'bg-amber-500 text-slate-950 border-amber-400'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600'
-              }`}
-              title="مركز إشعارات المتجر وتنبيهات العمليات"
-            >
-              <Bell className={`w-4 h-4 shrink-0 ${subTab === 'notifications' ? 'text-slate-950' : 'text-amber-400'}`} />
-              <span>الإشعارات</span>
-              {unreadSupplierNotificationsCount > 0 && (
-                <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center shadow-sm ${
-                  subTab === 'notifications' ? 'bg-slate-950 text-amber-400' : 'bg-rose-500 text-white animate-pulse'
-                }`}>
-                  {unreadSupplierNotificationsCount > 99 ? '99+' : unreadSupplierNotificationsCount}
-                </span>
-              )}
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setSubTab('notifications')}
+                  className={`px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md relative cursor-pointer min-h-[38px] whitespace-nowrap ${
+                    subTab === 'notifications'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600'
+                  }`}
+                  title="مركز إشعارات المتجر وتنبيهات العمليات"
+                >
+                  <Bell className={`w-4 h-4 shrink-0 ${subTab === 'notifications' ? 'text-slate-950' : 'text-amber-400'}`} />
+                  <span>الإشعارات</span>
+                  {unreadSupplierNotificationsCount > 0 && (
+                    <span className={`min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center shadow-sm ${
+                      subTab === 'notifications' ? 'bg-slate-950 text-amber-400' : 'bg-rose-500 text-white animate-pulse'
+                    }`}>
+                      {unreadSupplierNotificationsCount > 99 ? '99+' : unreadSupplierNotificationsCount}
+                    </span>
+                  )}
+                </button>
               </>
             )}
 
@@ -1005,7 +1018,7 @@ export const SupplierDashboard: React.FC = () => {
             <button
               type="button"
               onClick={logout}
-              className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[38px]"
+              className="px-3 sm:px-3.5 py-2 sm:py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap min-h-[38px]"
               title="تسجيل الخروج والعودة لشاشة الدخول"
             >
               <LogOut className="w-4 h-4 text-rose-400 shrink-0" />
