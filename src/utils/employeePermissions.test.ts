@@ -7,6 +7,7 @@ import {
   extractUnmigratedEmployeesFromSuppliers,
   filterSupplierNotificationsForEmployee,
   getFirstAllowedSupplierTab,
+  getSupplierIdsWithLegacyEmployeesField,
   hydrateEmployeeWithPermissionRecord,
   hydrateSuppliersWithEmployeesAndPermissions,
   isDepositVisibleToEmployee,
@@ -459,3 +460,33 @@ test('filterNotificationsForPosClient strictly scopes notifications to the activ
   const scoped = filterNotificationsForPosClient(notifs, 'pos-1', 'sup-1');
   assert.deepEqual(scoped.map(n => n.id), ['n1', 'n3']);
 });
+
+test('getSupplierIdsWithLegacyEmployeesField detects legacy embedded arrays and extractUnmigratedEmployeesFromSuppliers catches missing permissions', () => {
+  const legacySup = makeSupplier({
+    id: 'sup-legacy',
+    employees: [makeEmployee({ id: 'emp-1', supplierId: 'sup-legacy', email: 'e1@store.sa' })],
+  });
+  const emptyArraySup = makeSupplier({ id: 'sup-empty-arr', employees: [] });
+  const normalizedSup = stripEmployeesFromSupplierForStorage(makeSupplier({ id: 'sup-clean' })) as Supplier;
+
+  assert.deepEqual(
+    getSupplierIdsWithLegacyEmployeesField([legacySup, emptyArraySup, normalizedSup]),
+    ['sup-legacy', 'sup-empty-arr']
+  );
+
+  // When employee exists in `employees` collection, missing permission record still flags it when `existingPermissions` is passed
+  const alreadyInEmp = makeEmployee({ id: 'emp-1', supplierId: 'sup-legacy', email: 'e1@store.sa' });
+  assert.equal(
+    extractUnmigratedEmployeesFromSuppliers([legacySup], [alreadyInEmp], []).length,
+    1
+  );
+  assert.equal(
+    extractUnmigratedEmployeesFromSuppliers(
+      [legacySup],
+      [alreadyInEmp],
+      [buildEmployeePermissionRecord(alreadyInEmp)]
+    ).length,
+    0
+  );
+});
+

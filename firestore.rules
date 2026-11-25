@@ -23,9 +23,10 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
-    // Test connection endpoint
+    // Test connection endpoint (read-only probe)
     match /test/connection {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
 
     // Users collection

@@ -20,6 +20,7 @@ import {
 } from 'firebase/firestore';
 import {
   db,
+  auth,
   handleFirestoreError,
   OperationType,
   isTransientFirestoreError,
@@ -66,12 +67,35 @@ import {
   buildEmployeePermissionRecord,
   buildSeparatedEmployeeDoc,
   extractUnmigratedEmployeesFromSuppliers,
+  getSupplierIdsWithLegacyEmployeesField,
   hydrateEmployeeWithPermissionRecord,
   hydrateSuppliersWithEmployeesAndPermissions,
   normalizeEmployeePermissions,
   normalizeStoreEmail,
+  resolveStoreActorByEmail,
   stripEmployeesFromSupplierForStorage
 } from '../utils/employeePermissions';
+import {
+  filterNotificationsForPosClient,
+  findAdminAccountByEmail,
+  isMasterAdminEmail,
+  resolveAuthoritativeIdentityFromFirestore
+} from '../utils/accountAuth';
+
+export interface ScopedLoginData {
+  platformSettings: Partial<PlatformInterfaceSettings> | null;
+  storePosClients?: POSClient[];
+  catalogs: Catalog[];
+  services: DigitalService[];
+  voucherWarehouses: VoucherWarehouse[];
+  supplierBankAccounts: SupplierBankAccount[];
+  orders: Order[];
+  depositRequests: DepositRequest[];
+  loanRepaymentRequests: LoanRepaymentRequest[];
+  accountingEntries: AccountingEntry[];
+  inviteLinks: InviteLink[];
+  notifications: AppNotification[];
+}
 
 function sanitizeData<T>(obj: T): T {
   if (obj === undefined || obj === null) return obj;
@@ -188,10 +212,13 @@ function mapDocsById<T extends { id?: string }>(
 export const firestoreSync = {
   /**
    * Fast, targeted user-scoped login lookup:
-   * Searches Firestore specifically for the entered user's email/UID across `users`,
-   * `employees`, `employeePermissions`, `suppliers`, `posClients`, and `system/superAdmin`,
-   * then fetches ONLY the linked store document(s) and permissions instead of downloading
-   * full collections.
+   * 1. Searches Firestore specifically for the entered user's email/UID across `users`,
+   *    `employees`, `employeePermissions`, `suppliers`, `posClients`, `system/superAdmin`,
+   *    and `system/platformSettings`.
+   * 2. Fetches ONLY the linked store document(s) and separated permissions.
+   * 3. Fetches strictly the store/client-scoped collections displayed to this user
+   *    (catalogs, services, warehouses, banks, orders, deposits, repayments, accounting,
+   *    invites, and notifications) in parallel via fast indexed `where(...)` queries.
    */
   async fetchUserLoginContextFromFirestore(
     email: string,
@@ -204,12 +231,14 @@ export const firestoreSync = {
     employeePermissions: EmployeePermissionRecord[];
     posClients: POSClient[] | null;
     userDoc: AuthUser | null;
+    scopedData?: ScopedLoginData;
     error?: unknown;
   }> {
     const cleanEmail = normalizeStoreEmail(email);
     try {
       const [
         adminSnap,
+        settingsSnap,
         uidUserSnap,
         emailUsersSnap,
         employeesSnap,
@@ -218,6 +247,7 @@ export const firestoreSync = {
         posClientsSnap,
       ] = await Promise.all([
         safeGetDocFromServer(['system', 'superAdmin']).catch(() => null),
+        safeGetDocFromServer(['system', 'platformSettings']).catch(() => null),
         uid ? safeGetDocFromServer(['users', uid]).catch(() => null) : Promise.resolve(null),
         cleanEmail
           ? withFirestoreRecovery(() =>
@@ -247,6 +277,13 @@ export const firestoreSync = {
             ).catch(() => null)
           : Promise.resolve(null),
       ]);
+
+      const superAdminData =
+        adminSnap && adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null;
+      const platformSettingsData =
+        settingsSnap && settingsSnap.exists()
+          ? (settingsSnap.data() as Partial<PlatformInterfaceSettings>)
+          : null;
 
       let userDoc: AuthUser | null = null;
       if (uidUserSnap && uidUserSnap.exists()) {
@@ -290,6 +327,42 @@ export const firestoreSync = {
               ...(snap.data() as EmployeePermissionRecord),
               id: snap.id,
             });
+          }
+        }
+      }
+
+      const isAdminEmail =
+        isMasterAdminEmail(cleanEmail, superAdminData?.email) ||
+        Boolean(findAdminAccountByEmail(cleanEmail, superAdminData?.adminAccounts || []));
+
+      // Edge-case fallback ONLY if fast indexed queries returned nothing for a non-admin account:
+      // check legacy unmigrated embedded employees on suppliers so they still authenticate and auto-migrate.
+      if (
+        !isAdminEmail &&
+        matchedSuppliers.length === 0 &&
+        matchedPosClients.length === 0 &&
+        rawEmployees.length === 0 &&
+        !userDoc &&
+        cleanEmail
+      ) {
+        const legacySupsSnap = await safeGetDocsFromServer('suppliers').catch(() => null);
+        if (legacySupsSnap && !legacySupsSnap.empty) {
+          const allSups = mapDocsById<Supplier>(legacySupsSnap.docs);
+          const actor = resolveStoreActorByEmail(cleanEmail, allSups);
+          if (actor?.kind === 'owner') {
+            matchedSuppliers.push(actor.supplier);
+          } else if (actor?.kind === 'employee') {
+            matchedSuppliers.push(actor.supplier);
+            const scopedEmp: OfficeEmployee = {
+              ...actor.employee,
+              supplierId: actor.employee.supplierId || actor.supplier.id,
+              email: cleanEmail,
+            };
+            rawEmployees.push(scopedEmp);
+            permRecords.push(buildEmployeePermissionRecord(scopedEmp));
+            if (auth.currentUser) {
+              void this.migrateLegacyStoreEmployees([actor.supplier], [], []).catch(() => {});
+            }
           }
         }
       }
@@ -340,49 +413,51 @@ export const firestoreSync = {
         }
       }
 
-      // If this user is a store owner (and has employees stored in `employees` collection),
-      // fetch ONLY their own store's employees & permissions in parallel
-      if (ownerSuppliersSnap && !ownerSuppliersSnap.empty) {
-        const ownerSupIds = matchedSuppliers
-          .filter((s) => normalizeStoreEmail(s.email) === cleanEmail)
-          .map((s) => s.id);
+      // If this user is a store owner OR an employee with staff management permissions,
+      // fetch ONLY their own store's separated employees & permissions in parallel
+      const ownerSupIds = matchedSuppliers
+        .filter((s) => normalizeStoreEmail(s.email) === cleanEmail)
+        .map((s) => s.id);
+      const hrEmpSupIds = permRecords
+        .filter((p) => p.permissions?.canManageEmployees && p.isActive !== false && p.supplierId)
+        .map((p) => p.supplierId);
+      const staffSupIdsToFetch = Array.from(new Set([...ownerSupIds, ...hrEmpSupIds]));
 
-        if (ownerSupIds.length > 0) {
-          const [storeEmpsList, storePermsList] = await Promise.all([
-            Promise.all(
-              ownerSupIds.map((supId) =>
-                withFirestoreRecovery(() =>
-                  getDocsFromServer(
-                    query(collection(db, 'employees'), where('supplierId', '==', supId))
-                  )
-                ).catch(() => null)
-              )
-            ),
-            Promise.all(
-              ownerSupIds.map((supId) =>
-                withFirestoreRecovery(() =>
-                  getDocsFromServer(
-                    query(collection(db, 'employeePermissions'), where('supplierId', '==', supId))
-                  )
-                ).catch(() => null)
-              )
-            ),
-          ]);
-          for (const s of storeEmpsList) {
-            if (s) {
-              for (const emp of mapDocsById<OfficeEmployee>(s.docs)) {
-                if (!rawEmployees.some((existing) => existing.id === emp.id)) {
-                  rawEmployees.push(emp);
-                }
+      if (staffSupIdsToFetch.length > 0) {
+        const [storeEmpsList, storePermsList] = await Promise.all([
+          Promise.all(
+            staffSupIdsToFetch.map((supId) =>
+              withFirestoreRecovery(() =>
+                getDocsFromServer(
+                  query(collection(db, 'employees'), where('supplierId', '==', supId))
+                )
+              ).catch(() => null)
+            )
+          ),
+          Promise.all(
+            staffSupIdsToFetch.map((supId) =>
+              withFirestoreRecovery(() =>
+                getDocsFromServer(
+                  query(collection(db, 'employeePermissions'), where('supplierId', '==', supId))
+                )
+              ).catch(() => null)
+            )
+          ),
+        ]);
+        for (const s of storeEmpsList) {
+          if (s) {
+            for (const emp of mapDocsById<OfficeEmployee>(s.docs)) {
+              if (!rawEmployees.some((existing) => existing.id === emp.id)) {
+                rawEmployees.push(emp);
               }
             }
           }
-          for (const p of storePermsList) {
-            if (p) {
-              for (const perm of mapDocsById<EmployeePermissionRecord>(p.docs)) {
-                if (!permRecords.some((existing) => existing.id === perm.id)) {
-                  permRecords.push(perm);
-                }
+        }
+        for (const p of storePermsList) {
+          if (p) {
+            for (const perm of mapDocsById<EmployeePermissionRecord>(p.docs)) {
+              if (!permRecords.some((existing) => existing.id === perm.id)) {
+                permRecords.push(perm);
               }
             }
           }
@@ -392,6 +467,7 @@ export const firestoreSync = {
       // If still unregistered (e.g. first-time Google Sign-In), fetch a minimal list of stores
       // to select a default active supplier without downloading the whole collection
       if (
+        !isAdminEmail &&
         matchedSuppliers.length === 0 &&
         matchedPosClients.length === 0 &&
         rawEmployees.length === 0
@@ -413,15 +489,211 @@ export const firestoreSync = {
         permRecords
       );
 
+      // Resolve exact identity so we can preload strictly what belongs to this user
+      // and what their linked store displays to them via fast indexed queries.
+      const identity = resolveAuthoritativeIdentityFromFirestore({
+        email: cleanEmail,
+        superAdmin: superAdminData
+          ? {
+              email: superAdminData.email || '',
+              adminAccounts: superAdminData.adminAccounts || [],
+            }
+          : null,
+        suppliers: hydratedSuppliers,
+        posClients: matchedPosClients,
+        userDoc,
+      });
+
+      const scopedData: ScopedLoginData = {
+        platformSettings: platformSettingsData,
+        catalogs: [],
+        services: [],
+        voucherWarehouses: [],
+        supplierBankAccounts: [],
+        orders: [],
+        depositRequests: [],
+        loanRepaymentRequests: [],
+        accountingEntries: [],
+        inviteLinks: [],
+        notifications: [],
+      };
+
+      const mergeSnapList = <T extends { id?: string }>(
+        snaps: Array<{ docs: Array<{ id: string; data: () => unknown }> } | null>
+      ): T[] => {
+        const map = new Map<string, T>();
+        for (const s of snaps) {
+          if (!s) continue;
+          for (const item of mapDocsById<T>(s.docs)) {
+            if (item.id) map.set(item.id, item);
+          }
+        }
+        return Array.from(map.values());
+      };
+
+      const queryCol = (colName: string, field: string, value: string | boolean) =>
+        withFirestoreRecovery(() =>
+          getDocsFromServer(query(collection(db, colName), where(field, '==', value)))
+        ).catch(() => null);
+
+      const sortByDateDesc = <T extends { date?: string }>(items: T[]): T[] =>
+        [...items].sort(
+          (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+        );
+
+      if (identity.kind === 'supplier' || identity.kind === 'employee') {
+        const supId = identity.supplier.id;
+        if (supId) {
+          const [
+            storeClientsSnap,
+            supCatalogsSnap,
+            allCatalogsSnap,
+            fixedCatalogsSnap,
+            servicesSnap,
+            warehousesSnap,
+            banksSnap,
+            ordersSnap,
+            depositsSnap,
+            repaymentsSnap,
+            accountingSnap,
+            invitesSnap,
+            notifsSnap,
+          ] = await Promise.all([
+            queryCol('posClients', 'supplierId', supId),
+            queryCol('catalogs', 'supplierId', supId),
+            queryCol('catalogs', 'supplierId', 'all'),
+            queryCol('catalogs', 'isFixedByAdmin', true),
+            queryCol('services', 'supplierId', supId),
+            queryCol('voucherWarehouses', 'supplierId', supId),
+            queryCol('supplierBankAccounts', 'supplierId', supId),
+            queryCol('orders', 'supplierId', supId),
+            queryCol('depositRequests', 'supplierId', supId),
+            queryCol('loanRepaymentRequests', 'supplierId', supId),
+            queryCol('accountingEntries', 'supplierId', supId),
+            queryCol('inviteLinks', 'supplierId', supId),
+            queryCol('notifications', 'supplierId', supId),
+          ]);
+
+          scopedData.storePosClients = mergeSnapList<POSClient>([storeClientsSnap]);
+          scopedData.catalogs = mergeSnapList<Catalog>([
+            supCatalogsSnap,
+            allCatalogsSnap,
+            fixedCatalogsSnap,
+          ]);
+          scopedData.services = mergeSnapList<DigitalService>([servicesSnap]);
+          scopedData.voucherWarehouses = mergeSnapList<VoucherWarehouse>([warehousesSnap]);
+          scopedData.supplierBankAccounts = mergeSnapList<SupplierBankAccount>([banksSnap]);
+          scopedData.orders = sortByDateDesc(mergeSnapList<Order>([ordersSnap]));
+          scopedData.depositRequests = sortByDateDesc(mergeSnapList<DepositRequest>([depositsSnap]));
+          scopedData.loanRepaymentRequests = sortByDateDesc(
+            mergeSnapList<LoanRepaymentRequest>([repaymentsSnap])
+          );
+          scopedData.accountingEntries = sortByDateDesc(
+            mergeSnapList<AccountingEntry>([accountingSnap])
+          );
+          scopedData.inviteLinks = mergeSnapList<InviteLink>([invitesSnap]);
+          scopedData.notifications = mergeSnapList<AppNotification>([notifsSnap]).sort((a, b) =>
+            (b.createdAt || '').localeCompare(a.createdAt || '')
+          );
+        }
+      } else if (identity.kind === 'pos_client') {
+        const scopedPosIds = Array.from(
+          new Set(identity.posRecords.map((p) => p.id).filter(Boolean))
+        );
+        const scopedSupIds = Array.from(
+          new Set(identity.posRecords.map((p) => p.supplierId).filter(Boolean))
+        );
+        const needsPeerClients = identity.posRecords.some((p) => p.canReceiveSupplierTransfers);
+
+        const [
+          allCatalogsSnap,
+          fixedCatalogsSnap,
+          supCatalogSnaps,
+          servicesSnaps,
+          warehousesSnaps,
+          banksSnaps,
+          ordersSnaps,
+          depositsSnaps,
+          repaymentsSnaps,
+          accountingSnaps,
+          posNotifSnaps,
+          supNotifSnaps,
+          peerClientSnaps,
+        ] = await Promise.all([
+          queryCol('catalogs', 'supplierId', 'all'),
+          queryCol('catalogs', 'isFixedByAdmin', true),
+          Promise.all(scopedSupIds.map((supId) => queryCol('catalogs', 'supplierId', supId))),
+          Promise.all(scopedSupIds.map((supId) => queryCol('services', 'supplierId', supId))),
+          Promise.all(scopedSupIds.map((supId) => queryCol('voucherWarehouses', 'supplierId', supId))),
+          Promise.all(
+            scopedSupIds.map((supId) => queryCol('supplierBankAccounts', 'supplierId', supId))
+          ),
+          Promise.all(scopedPosIds.map((posId) => queryCol('orders', 'posId', posId))),
+          Promise.all(
+            scopedSupIds.map((supId) => queryCol('depositRequests', 'supplierId', supId))
+          ),
+          Promise.all(
+            scopedSupIds.map((supId) => queryCol('loanRepaymentRequests', 'supplierId', supId))
+          ),
+          Promise.all(scopedPosIds.map((posId) => queryCol('accountingEntries', 'posId', posId))),
+          Promise.all(scopedPosIds.map((posId) => queryCol('notifications', 'posId', posId))),
+          Promise.all(scopedSupIds.map((supId) => queryCol('notifications', 'supplierId', supId))),
+          needsPeerClients
+            ? Promise.all(scopedSupIds.map((supId) => queryCol('posClients', 'supplierId', supId)))
+            : Promise.resolve([]),
+        ]);
+
+        scopedData.catalogs = mergeSnapList<Catalog>([
+          allCatalogsSnap,
+          fixedCatalogsSnap,
+          ...supCatalogSnaps,
+        ]);
+        scopedData.services = mergeSnapList<DigitalService>(servicesSnaps);
+        scopedData.voucherWarehouses = mergeSnapList<VoucherWarehouse>(warehousesSnaps);
+        scopedData.supplierBankAccounts = mergeSnapList<SupplierBankAccount>(banksSnaps);
+        scopedData.orders = sortByDateDesc(mergeSnapList<Order>(ordersSnaps));
+        scopedData.depositRequests = sortByDateDesc(mergeSnapList<DepositRequest>(depositsSnaps));
+        scopedData.loanRepaymentRequests = sortByDateDesc(
+          mergeSnapList<LoanRepaymentRequest>(repaymentsSnaps)
+        );
+        scopedData.accountingEntries = sortByDateDesc(
+          mergeSnapList<AccountingEntry>(accountingSnaps)
+        );
+
+        const rawNotifs = mergeSnapList<AppNotification>([...posNotifSnaps, ...supNotifSnaps]);
+        const allowedNotifsMap = new Map<string, AppNotification>();
+        for (const rec of identity.posRecords) {
+          for (const n of filterNotificationsForPosClient(rawNotifs, rec.id, rec.supplierId)) {
+            allowedNotifsMap.set(n.id, n);
+          }
+        }
+        scopedData.notifications = Array.from(allowedNotifsMap.values()).sort((a, b) =>
+          (b.createdAt || '').localeCompare(a.createdAt || '')
+        );
+
+        if (needsPeerClients && peerClientSnaps.length > 0) {
+          const mergedPeerMap = new Map<string, POSClient>();
+          for (const own of matchedPosClients) {
+            if (own.id) mergedPeerMap.set(own.id, own);
+          }
+          for (const peer of mergeSnapList<POSClient>(peerClientSnaps)) {
+            if (peer.id && !mergedPeerMap.has(peer.id)) {
+              mergedPeerMap.set(peer.id, peer);
+            }
+          }
+          scopedData.storePosClients = Array.from(mergedPeerMap.values());
+        }
+      }
+
       return {
         connected: true,
-        superAdmin:
-          adminSnap && adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null,
+        superAdmin: superAdminData,
         suppliers: hydratedSuppliers,
         employees: hydratedEmployees,
         employeePermissions: permRecords,
         posClients: matchedPosClients,
         userDoc,
+        scopedData,
       };
     } catch (error) {
       return {
@@ -449,6 +721,7 @@ export const firestoreSync = {
     employeePermissions: EmployeePermissionRecord[];
     posClients: POSClient[] | null;
     userDoc: AuthUser | null;
+    scopedData?: ScopedLoginData;
     error?: unknown;
   }> {
     return this.fetchUserLoginContextFromFirestore(email, uid);
@@ -617,13 +890,44 @@ export const firestoreSync = {
     return written;
   },
 
-  async syncUsersForAccounts(suppliers: Supplier[], posClients: POSClient[]): Promise<number> {
+  async syncUsersForAccounts(
+    suppliers: Supplier[],
+    posClients: POSClient[],
+    separatedEmployees: OfficeEmployee[] = []
+  ): Promise<number> {
     const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
+    const seenUserIds = new Set<string>();
     const nowIso = new Date().toISOString();
+
+    const pushEmployeeUser = (emp: OfficeEmployee, fallbackSupId?: string) => {
+      if (!emp?.id || !emp.email || seenUserIds.has(emp.id)) return;
+      const scopedSupId = emp.supplierId || fallbackSupId || '';
+      if (!scopedSupId) return;
+      seenUserIds.add(emp.id);
+      const empUser: AuthUser & { updatedAt: string } = {
+        id: emp.id,
+        email: normalizeStoreEmail(emp.email),
+        name: emp.name,
+        role: 'employee',
+        phone: emp.phone,
+        associatedId: scopedSupId,
+        supplierId: scopedSupId,
+        employeeId: emp.id,
+        roleTitle: emp.roleTitle,
+        permissions: normalizeEmployeePermissions(emp.permissions),
+        updatedAt: nowIso,
+      };
+      userEntries.push({ path: ['users', emp.id], data: empUser });
+    };
+
+    for (const emp of separatedEmployees) {
+      pushEmployeeUser(emp);
+    }
 
     for (const sup of suppliers) {
       if (!sup?.id) continue;
-      if (sup.email) {
+      if (sup.email && !seenUserIds.has(sup.id)) {
+        seenUserIds.add(sup.id);
         const cleanSupEmail = normalizeStoreEmail(sup.email);
         const supUser: AuthUser & { updatedAt: string } = {
           id: sup.id,
@@ -637,26 +941,13 @@ export const firestoreSync = {
         userEntries.push({ path: ['users', sup.id], data: supUser });
       }
       for (const emp of sup.employees || []) {
-        if (!emp?.id || !emp.email) continue;
-        const empUser: AuthUser & { updatedAt: string } = {
-          id: emp.id,
-          email: normalizeStoreEmail(emp.email),
-          name: emp.name,
-          role: 'employee',
-          phone: emp.phone,
-          associatedId: sup.id,
-          supplierId: sup.id,
-          employeeId: emp.id,
-          roleTitle: emp.roleTitle,
-          permissions: normalizeEmployeePermissions(emp.permissions),
-          updatedAt: nowIso,
-        };
-        userEntries.push({ path: ['users', emp.id], data: empUser });
+        pushEmployeeUser(emp, sup.id);
       }
     }
 
     for (const client of posClients) {
-      if (!client?.id || !client.email) continue;
+      if (!client?.id || !client.email || seenUserIds.has(client.id)) continue;
+      seenUserIds.add(client.id);
       const clientUser: AuthUser & { updatedAt: string } = {
         id: client.id,
         email: normalizeStoreEmail(client.email),
@@ -832,11 +1123,44 @@ export const firestoreSync = {
     }
   },
 
+  async stripLegacyEmployeesFieldFromSuppliers(supplierIds: string[]): Promise<number> {
+    const uniqueIds = Array.from(new Set(supplierIds.map((id) => (id || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return 0;
+    const CHUNK_SIZE = 400;
+    let cleaned = 0;
+    for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
+      await withFirestoreRecovery(async () => {
+        const batch = writeBatch(db);
+        for (const supId of chunk) {
+          batch.update(doc(db, 'suppliers', supId), { employees: deleteField() });
+        }
+        await batch.commit();
+      }).catch(async () => {
+        await Promise.all(
+          chunk.map((supId) =>
+            withFirestoreRecovery(() =>
+              updateDoc(doc(db, 'suppliers', supId), { employees: deleteField() })
+            ).catch(() => {})
+          )
+        );
+      });
+      cleaned += chunk.length;
+    }
+    return cleaned;
+  },
+
   // Supplier operations (stores remain compact in Firestore without embedded employee arrays)
   async saveSupplier(supplier: Supplier): Promise<void> {
     const path = `suppliers/${supplier.id}`;
     try {
-      const compactSupplier = sanitizeData(stripEmployeesFromSupplierForStorage(supplier));
+      const compactSupplier = sanitizeData(
+        stripEmployeesFromSupplierForStorage({
+          ...supplier,
+          email: normalizeStoreEmail(supplier.email),
+        })
+      ) as Record<string, unknown>;
+      compactSupplier.employees = deleteField();
       await withFirestoreRecovery(() =>
         setDoc(doc(db, 'suppliers', supplier.id), compactSupplier, { merge: true })
       );
@@ -906,22 +1230,45 @@ export const firestoreSync = {
 
   async migrateLegacyStoreEmployees(
     suppliers: Supplier[],
-    existingEmployees: OfficeEmployee[] = []
-  ): Promise<number> {
-    const unmigrated = extractUnmigratedEmployeesFromSuppliers(suppliers, existingEmployees);
-    if (unmigrated.length === 0) return 0;
+    existingEmployees: OfficeEmployee[] = [],
+    existingPermissions?: EmployeePermissionRecord[]
+  ): Promise<{
+    migratedEmployeesCount: number;
+    cleanedStoresCount: number;
+    migratedEmployees: OfficeEmployee[];
+    migratedPermissions: EmployeePermissionRecord[];
+  }> {
+    const unmigratedFromStores = extractUnmigratedEmployeesFromSuppliers(
+      suppliers,
+      existingEmployees,
+      existingPermissions
+    );
+
+    // Also ensure any existing separated employee missing an `employeePermissions` doc gets backfilled
+    const permByEmpKey = new Set(
+      (existingPermissions || []).map((p) => `${p.supplierId}::${p.employeeId || p.id}`)
+    );
+    const missingPermEmployees = Array.isArray(existingPermissions)
+      ? existingEmployees.filter(
+          (emp) => emp?.id && emp.supplierId && !permByEmpKey.has(`${emp.supplierId}::${emp.id}`)
+        )
+      : [];
+
+    const mergedToMigrateMap = new Map<string, OfficeEmployee>();
+    for (const emp of [...unmigratedFromStores, ...missingPermEmployees]) {
+      if (emp?.id) mergedToMigrateMap.set(emp.id, emp);
+    }
+    const toMigrate = Array.from(mergedToMigrateMap.values());
 
     const nowIso = new Date().toISOString();
     const entries: Array<{ path: [string, string]; data: unknown }> = [];
-    for (const emp of unmigrated) {
-      entries.push({
-        path: ['employees', emp.id],
-        data: buildSeparatedEmployeeDoc(emp, nowIso),
-      });
-      entries.push({
-        path: ['employeePermissions', emp.id],
-        data: buildEmployeePermissionRecord(emp, nowIso),
-      });
+    const migratedPermissions: EmployeePermissionRecord[] = [];
+    for (const emp of toMigrate) {
+      const sepEmp = buildSeparatedEmployeeDoc(emp, nowIso);
+      const permRec = buildEmployeePermissionRecord(emp, nowIso);
+      migratedPermissions.push(permRec);
+      entries.push({ path: ['employees', emp.id], data: sepEmp });
+      entries.push({ path: ['employeePermissions', emp.id], data: permRec });
       entries.push({
         path: ['users', emp.id],
         data: {
@@ -934,22 +1281,30 @@ export const firestoreSync = {
           supplierId: emp.supplierId,
           employeeId: emp.id,
           roleTitle: emp.roleTitle,
-          permissions: normalizeEmployeePermissions(emp.permissions),
+          permissions: permRec.permissions,
           updatedAt: nowIso,
         },
       });
     }
-    await this.commitBatchSets(entries);
-    // Clean legacy embedded `employees` array from migrated store documents
-    const migratedSupIds = Array.from(new Set(unmigrated.map((e) => e.supplierId).filter(Boolean)));
-    await Promise.all(
-      migratedSupIds.map((supId) =>
-        withFirestoreRecovery(() =>
-          updateDoc(doc(db, 'suppliers', supId), { employees: deleteField() })
-        ).catch(() => {})
-      )
+    if (entries.length > 0) {
+      await this.commitBatchSets(entries);
+    }
+
+    // Clean legacy embedded `employees` field from any store document carrying it
+    const storeIdsToStrip = Array.from(
+      new Set([
+        ...getSupplierIdsWithLegacyEmployeesField(suppliers),
+        ...unmigratedFromStores.map((e) => e.supplierId).filter(Boolean),
+      ])
     );
-    return unmigrated.length;
+    const cleanedStoresCount = await this.stripLegacyEmployeesFieldFromSuppliers(storeIdsToStrip);
+
+    return {
+      migratedEmployeesCount: toMigrate.length,
+      cleanedStoresCount,
+      migratedEmployees: toMigrate,
+      migratedPermissions,
+    };
   },
 
   // Notifications operations (real-time cross-device client <-> supplier alerts)
@@ -1351,7 +1706,10 @@ export const firestoreSync = {
       }
 
       await this.commitBatchSets(entries);
-      await this.syncUsersForAccounts(data.suppliers, data.posClients);
+      await this.stripLegacyEmployeesFieldFromSuppliers(
+        data.suppliers.map((s) => s.id).filter(Boolean)
+      );
+      await this.syncUsersForAccounts(data.suppliers, data.posClients, data.employees || []);
       return { success: true };
     } catch (err: unknown) {
       console.error('Error seeding data to Firestore:', err);

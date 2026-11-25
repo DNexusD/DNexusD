@@ -204,12 +204,15 @@
         "accountHolderName": { "type": "string" },
         "accountHolderEmail": { "type": "string" },
         "accountHolderPhone": { "type": "string" },
+        "holderType": { "type": "string", "enum": ["employee", "client", "supplier"] },
         "delegatedPosId": { "type": "string" },
         "delegatedPosName": { "type": "string" },
         "delegatedPosCode": { "type": "string" },
+        "delegatedEmployeeId": { "type": "string" },
         "canReceiveSupplierTransfers": { "type": "boolean" },
         "isPrimary": { "type": "boolean" },
         "isActive": { "type": "boolean" },
+        "currency": { "type": "string" },
         "notes": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
@@ -443,9 +446,38 @@
         "message": { "type": "string" },
         "type": { "type": "string" },
         "isRead": { "type": "boolean" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "orderId": { "type": "string" },
+        "depositId": { "type": "string" },
+        "loanId": { "type": "string" },
+        "repaymentRequestId": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "remainingStock": { "type": "number" },
+        "lowStockThreshold": { "type": "number" },
+        "amount": { "type": "number" },
+        "actionTab": { "type": "string" }
       },
       "required": ["id", "title", "message", "type", "isRead", "createdAt"]
+    },
+    "PlatformInterfaceSettings": {
+      "title": "PlatformInterfaceSettings",
+      "description": "Global platform interface notices, feature toggles, and dynamic dropdown options",
+      "type": "object",
+      "properties": {
+        "supplierInterfaceNotice": { "type": "string" },
+        "showSupplierInterfaceNotice": { "type": "boolean" },
+        "posInterfaceNotice": { "type": "string" },
+        "showPosInterfaceNotice": { "type": "boolean" },
+        "allowSuppliersCreateCustomCatalogs": { "type": "boolean" },
+        "showResaleMarginInPosPurchase": { "type": "boolean" },
+        "showTierComparisonInPosStore": { "type": "boolean" },
+        "statementTransactionTypes": { "type": "array" },
+        "adminStatementTransactionTypes": { "type": "array" },
+        "approvedBankNames": { "type": "array" },
+        "socialLinks": { "type": "object" },
+        "updatedAt": { "type": "string" }
+      }
     },
     "OfficeEmployee": {
       "title": "OfficeEmployee",
@@ -508,6 +540,10 @@
     "/system/superAdmin": {
       "schema": { "$ref": "#/entities/SuperAdmin" },
       "description": "Central system administrator configuration and platform balance"
+    },
+    "/system/platformSettings": {
+      "schema": { "$ref": "#/entities/PlatformInterfaceSettings" },
+      "description": "Global platform interface notices and configuration"
     },
     "/catalogs/{catalogId}": {
       "schema": { "$ref": "#/entities/Catalog" },

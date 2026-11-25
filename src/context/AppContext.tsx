@@ -70,6 +70,7 @@ import {
   extractUnmigratedEmployeesFromSuppliers,
   filterSupplierNotificationsForEmployee,
   getFirstAllowedSupplierTab,
+  getSupplierIdsWithLegacyEmployeesField,
   hydrateEmployeeWithPermissionRecord,
   hydrateSuppliersWithEmployeesAndPermissions,
   isEmployeeActive,
@@ -209,7 +210,7 @@ import {
 } from '../utils/posAccreditation';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { collection, doc, getDocFromServer, query, where } from 'firebase/firestore';
-import { firestoreSync } from '../services/firestoreSync';
+import { firestoreSync, ScopedLoginData } from '../services/firestoreSync';
 
 interface ToastMessage {
   id: string;
@@ -1091,6 +1092,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const remote = await firestoreSync.fetchAllDatabasesFromServer();
         const syncedMap = readSyncedIdsMap();
 
+        // Automatically normalize any legacy embedded `supplier.employees` or missing permission docs
+        const legacyFieldSupIds = getSupplierIdsWithLegacyEmployeesField(remote.suppliers);
+        const pendingEmpMig = extractUnmigratedEmployeesFromSuppliers(
+          remote.suppliers,
+          remote.employees || [],
+          remote.employeePermissions || []
+        );
+        if (legacyFieldSupIds.length > 0 || pendingEmpMig.length > 0) {
+          const empMigRes = await firestoreSync
+            .migrateLegacyStoreEmployees(
+              remote.suppliers,
+              remote.employees || [],
+              remote.employeePermissions || []
+            )
+            .catch(() => null);
+          if (empMigRes) {
+            const empMap = new Map<string, OfficeEmployee>(
+              (remote.employees || []).map((e) => [e.id, e])
+            );
+            for (const migratedEmp of empMigRes.migratedEmployees) {
+              empMap.set(migratedEmp.id, migratedEmp);
+            }
+            const permMap = new Map<string, EmployeePermissionRecord>(
+              (remote.employeePermissions || []).map((p) => [p.id, p])
+            );
+            for (const migratedPerm of empMigRes.migratedPermissions) {
+              permMap.set(migratedPerm.id, migratedPerm);
+            }
+            remote.employees = Array.from(empMap.values()).map((emp) =>
+              hydrateEmployeeWithPermissionRecord(emp, Array.from(permMap.values()))
+            );
+            remote.employeePermissions = Array.from(permMap.values());
+            remote.suppliers = hydrateSuppliersWithEmployeesAndPermissions(
+              remote.suppliers.map((s) => stripEmployeesFromSupplierForStorage(s)),
+              remote.employees,
+              remote.employeePermissions
+            );
+          }
+        }
+
         const adminRec = reconcileSuperAdminWithRemote(
           superAdminRef.current,
           remote.superAdmin,
@@ -1538,12 +1579,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     built: ReturnType<typeof buildAuthUserFromIdentity>;
     epoch: number;
     clearCachesFirst?: boolean;
+    employees?: OfficeEmployee[];
+    employeePermissions?: EmployeePermissionRecord[];
+    scopedData?: ScopedLoginData;
   }): boolean => {
     if (authSessionEpochRef.current !== params.epoch) {
       return false;
     }
 
-    const { built } = params;
+    const { built, scopedData } = params;
     const prevUser = currentUserRef.current;
     const isSameAccount =
       Boolean(prevUser?.email) &&
@@ -1553,6 +1597,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (params.clearCachesFirst || !isSameAccount) {
       clearTransientSessionCaches();
+    }
+
+    if (Array.isArray(params.employeePermissions)) {
+      employeePermissionRecordsRef.current = params.employeePermissions;
+      setEmployeePermissionRecords(params.employeePermissions);
+    }
+    if (Array.isArray(params.employees)) {
+      officeEmployeesRef.current = params.employees;
+      setOfficeEmployees(params.employees);
+    }
+
+    if (scopedData) {
+      if (scopedData.platformSettings) {
+        const mergedSettings = mergePlatformSettings(scopedData.platformSettings);
+        platformSettingsRef.current = mergedSettings;
+        setPlatformSettings(mergedSettings);
+      }
+      if (Array.isArray(scopedData.storePosClients)) {
+        posClientsRef.current = scopedData.storePosClients;
+        setPosClients(scopedData.storePosClients);
+      }
+      catalogsRef.current = scopedData.catalogs;
+      servicesRef.current = scopedData.services;
+      voucherWarehousesRef.current = scopedData.voucherWarehouses;
+      supplierBankAccountsRef.current = scopedData.supplierBankAccounts;
+      ordersRef.current = scopedData.orders;
+      depositRequestsRef.current = scopedData.depositRequests;
+      loanRepaymentRequestsRef.current = scopedData.loanRepaymentRequests;
+      accountingEntriesRef.current = scopedData.accountingEntries;
+      inviteLinksRef.current = scopedData.inviteLinks;
+      notificationsRef.current = scopedData.notifications;
+
+      setCatalogs(scopedData.catalogs);
+      setServices(scopedData.services);
+      setVoucherWarehouses(scopedData.voucherWarehouses);
+      setSupplierBankAccounts(scopedData.supplierBankAccounts);
+      setOrders(scopedData.orders);
+      setDepositRequests(scopedData.depositRequests);
+      setLoanRepaymentRequests(scopedData.loanRepaymentRequests);
+      setAccountingEntries(scopedData.accountingEntries);
+      setInviteLinks(scopedData.inviteLinks);
+      setNotifications(scopedData.notifications);
     }
 
     currentPosIdRef.current = built.posId;
@@ -1693,6 +1779,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             built,
             epoch: myEpoch,
             clearCachesFirst: !isSameActiveAccount,
+            employees: reconciled.employees,
+            employeePermissions: reconciled.employeePermissions,
+            scopedData: authData.scopedData,
           });
         })();
       } else {
@@ -2014,6 +2103,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const syncedSuppliers = Array.from(supMap.values());
               setRawSuppliers(syncedSuppliers);
               enforceSupplierSessionRules(syncedSuppliers, snapshot.metadata.fromCache);
+
+              // Automatically migrate any legacy embedded employees into separated collections
+              if (!snapshot.metadata.fromCache) {
+                const hasLegacyField = getSupplierIdsWithLegacyEmployeesField(syncedSuppliers).length > 0;
+                const hasUnmigrated =
+                  extractUnmigratedEmployeesFromSuppliers(
+                    syncedSuppliers,
+                    officeEmployeesRef.current,
+                    employeePermissionRecordsRef.current
+                  ).length > 0;
+                if (hasLegacyField || hasUnmigrated) {
+                  void firestoreSync
+                    .migrateLegacyStoreEmployees(
+                      syncedSuppliers,
+                      officeEmployeesRef.current,
+                      employeePermissionRecordsRef.current
+                    )
+                    .catch(() => {});
+                }
+              }
             },
             (err) => {
               handleSnapshotError(err, OperationType.LIST, 'suppliers', handleTransientOffline);
@@ -2031,15 +2140,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   enforceSupplierSessionRules(next, docSnap.metadata.fromCache);
                   return next;
                 });
-                // Silently migrate legacy embedded employees if any exist on this store doc
+                // Silently migrate legacy embedded employees and strip legacy array from store document
                 if (
                   (role === 'supplier' || canEmployeeManageStaff) &&
-                  Array.isArray(storeData.employees) &&
-                  storeData.employees.length > 0 &&
+                  getSupplierIdsWithLegacyEmployeesField([storeData]).length > 0 &&
                   !docSnap.metadata.fromCache
                 ) {
                   void firestoreSync
-                    .migrateLegacyStoreEmployees([storeData], officeEmployeesRef.current)
+                    .migrateLegacyStoreEmployees(
+                      [storeData],
+                      officeEmployeesRef.current,
+                      employeePermissionRecordsRef.current
+                    )
                     .catch(() => {});
                 }
               } else if (!docSnap.metadata.fromCache && (role === 'supplier' || role === 'employee')) {
@@ -2818,6 +2930,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         built,
         epoch: myEpoch,
         clearCachesFirst: true,
+        employees: reconciled.employees,
+        employeePermissions: reconciled.employeePermissions,
+        scopedData: authData.scopedData,
       });
       if (!applied) {
         return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
@@ -2896,16 +3011,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (res.success) {
+        // Ensure all separated employees, suppliers, and sub-admins with 6+ char passwords
+        // also have corresponding Firebase Auth accounts ready for direct login.
+        const authCandidates: Array<{ email: string; password: string }> = [];
+        for (const sup of suppliersRef.current) {
+          if (sup.email && (sup.password || '').trim().length >= 6) {
+            authCandidates.push({ email: sup.email, password: sup.password!.trim() });
+          }
+        }
+        for (const emp of officeEmployeesRef.current) {
+          if (emp.email && (emp.password || '').trim().length >= 6) {
+            authCandidates.push({ email: emp.email, password: emp.password!.trim() });
+          }
+        }
+        for (const adm of superAdminRef.current.adminAccounts || []) {
+          if (adm.email && (adm.password || '').trim().length >= 6) {
+            authCandidates.push({ email: adm.email, password: adm.password!.trim() });
+          }
+        }
+        if (authCandidates.length > 0) {
+          void (async () => {
+            for (const candidate of authCandidates) {
+              await provisionSecondaryAuthAccount(candidate).catch(() => {});
+            }
+          })();
+        }
+
         setIsFirestoreConnected(true);
         const nowIso = new Date().toISOString();
         lastFirestoreSyncAtRef.current = nowIso;
         setLastFirestoreSyncAt(nowIso);
-        setDatabaseSyncMessage('تمت مزامنة كافة القواعد المحلية وقاعدة بيانات فايربيس بنجاح.');
+        const migratedSummary = `تمت مزامنة وترقية هيكل قاعدة البيانات (${suppliersRef.current.length} متجر، ${officeEmployeesRef.current.length} موظف مفصول، ${employeePermissionRecordsRef.current.length} سجل صلاحيات، ${posClientsRef.current.length} نقطة بيع).`;
+        setDatabaseSyncMessage(migratedSummary);
         triggerConfetti();
         showToast({
           type: 'success',
-          title: 'تمت مزامنة كافة البيانات مع فايربيس بنجاح!',
-          description: 'تم قيد وتوثيق الطلبات، والمحافظ، والعملاء، والسلف، والعمليات المالية في قاعدة بيانات Firestore السحابية.'
+          title: 'تمت مزامنة وترقية قاعدة البيانات بنجاح!',
+          description: migratedSummary
         });
       } else {
         showToast({
@@ -3344,6 +3486,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         built,
         epoch: myEpoch,
         clearCachesFirst: true,
+        employees: reconciled.employees,
+        employeePermissions: reconciled.employeePermissions,
+        scopedData: authData.scopedData,
       });
       if (!applied) {
         return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };

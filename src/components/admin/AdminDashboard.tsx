@@ -53,7 +53,8 @@ import {
   CheckCircle2,
   XCircle,
   Store,
-  Clock
+  Clock,
+  RefreshCw
 } from 'lucide-react';
 import { getBalanceRequestAvailability } from '../../utils/availabilityMessages';
 import { AppearanceControlModal } from '../common/AppearanceControlModal';
@@ -97,7 +98,9 @@ export const AdminDashboard: React.FC = () => {
     formatCurrency,
     logout,
     getMyAppearanceSettings,
-    updateMyAppearanceSettings
+    updateMyAppearanceSettings,
+    syncAllToFirestore,
+    isSyncingWithFirestore
   } = useApp();
 
   const [showAppearanceModal, setShowAppearanceModal] = useState(false);
@@ -452,6 +455,20 @@ export const AdminDashboard: React.FC = () => {
                   <span className="truncate">رابط تسجيل لمتجر</span>
                 </button>
               </>
+            )}
+
+            {(perms.canManageSuppliers || perms.canManageAdminAccounts || perms.canClearSystemData) && (
+              <button
+                type="button"
+                onClick={() => void syncAllToFirestore()}
+                disabled={isSyncingWithFirestore}
+                data-testid="admin-sync-upgrade-db-btn"
+                className="px-3 sm:px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-60 text-emerald-300 border border-emerald-500/35 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap min-h-[38px]"
+                title="مزامنة الجداول المفصولة (الموظفين والصلاحيات والإشعارات) وترقية هيكل قاعدة البيانات في Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 shrink-0 ${isSyncingWithFirestore ? 'animate-spin' : ''}`} />
+                <span>{isSyncingWithFirestore ? 'جاري الترقية...' : 'مزامنة وترقية قاعدة البيانات'}</span>
+              </button>
             )}
 
             <button

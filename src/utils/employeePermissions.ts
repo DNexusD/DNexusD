@@ -926,20 +926,28 @@ export function hydrateSuppliersWithEmployeesAndPermissions(
  */
 export function extractUnmigratedEmployeesFromSuppliers(
   suppliers: Supplier[],
-  existingEmployees: Array<Pick<OfficeEmployee, 'id' | 'supplierId'>> = []
+  existingEmployees: Array<Pick<OfficeEmployee, 'id' | 'supplierId'>> = [],
+  existingPermissions?: Array<Pick<EmployeePermissionRecord, 'id' | 'employeeId' | 'supplierId'>>
 ): OfficeEmployee[] {
-  const knownKeys = new Set(
+  const knownEmpKeys = new Set(
     existingEmployees.map((e) => `${e.supplierId}::${e.id}`)
   );
-  const unmigrated: OfficeEmployee[] = [];
+  const checkPerms = Array.isArray(existingPermissions);
+  const knownPermKeys = new Set(
+    (existingPermissions || []).map((p) => `${p.supplierId}::${p.employeeId || p.id}`)
+  );
+  const unmigratedMap = new Map<string, OfficeEmployee>();
 
   for (const sup of suppliers || []) {
     for (const emp of sup.employees || []) {
       if (!emp?.id || !emp.email) continue;
       const scopedSupId = emp.supplierId || sup.id;
       if (!scopedSupId) continue;
-      if (knownKeys.has(`${scopedSupId}::${emp.id}`)) continue;
-      unmigrated.push({
+      const key = `${scopedSupId}::${emp.id}`;
+      const missingEmp = !knownEmpKeys.has(key);
+      const missingPerm = checkPerms && !knownPermKeys.has(key);
+      if (!missingEmp && !missingPerm) continue;
+      unmigratedMap.set(key, {
         ...emp,
         supplierId: scopedSupId,
         email: normalizeStoreEmail(emp.email),
@@ -948,6 +956,24 @@ export function extractUnmigratedEmployeesFromSuppliers(
     }
   }
 
-  return unmigrated;
+  return Array.from(unmigratedMap.values());
 }
+
+/**
+ * Returns IDs of supplier records that still carry an embedded `employees` property
+ * in Firestore and should have that legacy field stripped via `deleteField()`.
+ */
+export function getSupplierIdsWithLegacyEmployeesField(
+  suppliers: Supplier[] = []
+): string[] {
+  return (suppliers || [])
+    .filter(
+      (sup) =>
+        Boolean(sup?.id) &&
+        Object.prototype.hasOwnProperty.call(sup, 'employees') &&
+        sup.employees !== undefined
+    )
+    .map((sup) => sup.id);
+}
+
 
