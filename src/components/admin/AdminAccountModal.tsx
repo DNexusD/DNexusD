@@ -94,7 +94,7 @@ export const AdminAccountModal: React.FC<AdminAccountModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -128,13 +128,13 @@ export const AdminAccountModal: React.FC<AdminAccountModalProps> = ({
       if (password.trim()) {
         updates.password = password.trim();
       }
-      const res = updateAdminAccount(editingAccount.id, updates);
+      const res = await updateAdminAccount(editingAccount.id, updates);
       if (!res.success) {
         setFormError(res.error || 'تعذر حفظ التعديلات.');
         return;
       }
     } else {
-      const res = addAdminAccount({
+      const res = await addAdminAccount({
         name: name.trim(),
         email: email.trim().toLowerCase(),
         password: password.trim(),

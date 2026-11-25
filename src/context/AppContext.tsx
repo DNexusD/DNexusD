@@ -401,7 +401,7 @@ interface AppContextType {
   }) => { success: boolean; error?: string; account?: SupplierBankAccount };
   saveBatchBankAccounts: (
     input: BatchBankAccountsInput
-  ) => { success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee };
+  ) => Promise<{ success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee }>;
   toggleBankAccountTransferPrivilege: (accountId: string, enabled: boolean) => void;
   deleteSupplierBankAccount: (accountId: string) => void;
   confirmDepositReceiptByReceiver: (depositId: string, decision: 'confirmed' | 'rejected', note?: string) => void;
@@ -501,7 +501,9 @@ interface AppContextType {
   updateDropdownOption: (listKey: PlatformDropdownListKey, optionId: string, updates: Partial<Pick<DropdownOptionItem, 'labelAr' | 'value' | 'isActive'>>) => void;
   deleteDropdownOption: (listKey: PlatformDropdownListKey, optionId: string) => void;
   
-  addSupplier: (newSup: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => void;
+  addSupplier: (
+    newSup: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>
+  ) => Promise<{ success: boolean; error?: string; supplier?: Supplier }>;
   updateSupplierFeeConfig: (supplierId: string, config: { feeType: 'percentage' | 'fixed' | 'both'; percentage: number; fixedAmount: number; feesConfig?: PlatformFeesConfig }) => void;
   adminUpdateSupplier: (supplierId: string, updates: Partial<Supplier>) => { success: boolean; error?: string };
   toggleSupplierActiveStatus: (supplierId: string) => void;
@@ -517,8 +519,8 @@ interface AppContextType {
     isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }) => { success: boolean; error?: string; employee?: OfficeEmployee };
-  updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string; employee?: OfficeEmployee }>;
+  updateOfficeEmployee: (empId: string, updates: Partial<OfficeEmployee>) => Promise<{ success: boolean; error?: string }>;
   removeOfficeEmployee: (empId: string) => void;
   addAdminAccount: (accountData: {
     name: string;
@@ -528,8 +530,8 @@ interface AppContextType {
     roleTitle: string;
     permissions: AdminPermissions;
     isActive?: boolean;
-  }) => { success: boolean; error?: string };
-  updateAdminAccount: (accountId: string, updates: Partial<AdminAccount>) => { success: boolean; error?: string };
+  }) => Promise<{ success: boolean; error?: string }>;
+  updateAdminAccount: (accountId: string, updates: Partial<AdminAccount>) => Promise<{ success: boolean; error?: string }>;
   removeAdminAccount: (accountId: string) => void;
 }
 
@@ -2890,32 +2892,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (identity.kind === 'unregistered') {
         const activeSupList = authData.suppliers.filter(s => isSupplierActive(s));
         const defaultSupId = activeSupList[0]?.id || authData.suppliers[0]?.id || '';
-        const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
-        const newPos: POSClient = {
-          id: `pos-fb-${fbUser.uid.slice(0, 8)}`,
-          posCode: newPosCode,
-          tradeName: `متجر ${displayName}`,
-          ownerName: displayName,
-          phone: fbUser.phoneNumber || '+966 55 000 0000',
-          email: cleanEmail,
-          country: 'المملكة العربية السعودية',
-          city: 'الرياض',
+        const existingMatch = await firestoreSync.findDuplicatePosClientForSupplier({
           supplierId: defaultSupId,
-          tier: 'regular',
-          walletBalance: 0,
-          totalSpent: 0,
-          ordersCount: 0,
-          createdAt: new Date().toISOString().substring(0, 10),
-          qrCodeValue: `DIGIPOS:${newPosCode}`,
-          logoUrl: fbUser.photoURL || undefined
-        };
-        setPosClients(prev => [newPos, ...prev.filter(p => p.id !== newPos.id)]);
-        firestoreSync.savePosClient(newPos).catch(console.error);
+          email: cleanEmail,
+          phone: fbUser.phoneNumber || undefined,
+          uid: fbUser.uid,
+        });
+
+        let resolvedPos: POSClient;
+        if (existingMatch) {
+          resolvedPos = await firestoreSync.savePosClient({
+            ...existingMatch,
+            uid: fbUser.uid,
+            userId: fbUser.uid,
+            email: cleanEmail,
+            ...(fbUser.phoneNumber ? { phone: fbUser.phoneNumber } : {}),
+            ...(fbUser.photoURL && !existingMatch.logoUrl ? { logoUrl: fbUser.photoURL } : {}),
+          });
+        } else {
+          const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
+          const newPos: POSClient = {
+            id: `pos-${fbUser.uid}`,
+            uid: fbUser.uid,
+            userId: fbUser.uid,
+            posCode: newPosCode,
+            tradeName: `متجر ${displayName}`,
+            ownerName: displayName,
+            phone: fbUser.phoneNumber || '+966 55 000 0000',
+            email: cleanEmail,
+            country: 'المملكة العربية السعودية',
+            city: 'الرياض',
+            supplierId: defaultSupId,
+            tier: 'regular',
+            walletBalance: 0,
+            totalSpent: 0,
+            ordersCount: 0,
+            createdAt: new Date().toISOString().substring(0, 10),
+            qrCodeValue: `DIGIPOS:${newPosCode}`,
+            logoUrl: fbUser.photoURL || undefined
+          };
+          resolvedPos = await firestoreSync.savePosClient(newPos);
+        }
+
+        setPosClients(prev => [resolvedPos, ...prev.filter(p => p.id !== resolvedPos.id)]);
         identity = {
           kind: 'pos_client',
           email: cleanEmail,
-          posRecords: [newPos],
-          suppliers: authData.suppliers.filter(s => s.id === defaultSupId),
+          posRecords: [resolvedPos],
+          suppliers: authData.suppliers.filter(s => s.id === (resolvedPos.supplierId || defaultSupId)),
         };
       }
 
@@ -2938,7 +2962,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
       }
 
-      firestoreSync.saveUser(built.authUser).catch(console.error);
+      await firestoreSync.saveUser(built.authUser, fbUser.uid).catch(console.error);
 
       if (built.role !== 'pos_client') {
         triggerConfetti();
@@ -3364,13 +3388,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 'تم إيقاف تفعيل حسابك لدى المتجر مؤقتاً. يرجى التواصل مع مالك المتجر لإعادة التفعيل.',
             };
           }
-          await firestoreSync.savePosClient(recovery.posClient);
-          setPosClients(prev => [recovery.posClient, ...prev.filter(p => p.id !== recovery.posClient.id)]);
+          const savedRecoveredPos = await firestoreSync.savePosClient({
+            ...recovery.posClient,
+            uid: verifiedUid,
+            userId: verifiedUid,
+            email: cleanEmail,
+          });
+          setPosClients(prev => [savedRecoveredPos, ...prev.filter(p => p.id !== savedRecoveredPos.id)]);
           identity = {
             kind: 'pos_client',
             email: cleanEmail,
-            posRecords: [recovery.posClient],
-            suppliers: activeSuppliers.filter(s => s.id === recovery.posClient.supplierId),
+            posRecords: [savedRecoveredPos],
+            suppliers: activeSuppliers.filter(s => s.id === savedRecoveredPos.supplierId),
           };
         } else {
           await fbSignOut(auth).catch(() => {});
@@ -3494,7 +3523,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'تم إلغاء جلسة تسجيل الدخول.' };
       }
 
-      firestoreSync.saveUser(built.authUser).catch(console.error);
+      firestoreSync.saveUser(built.authUser, verifiedUid).catch(console.error);
 
       if (built.role !== 'pos_client') {
         triggerConfetti();
@@ -3701,75 +3730,111 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      const conflictCheck = checkEmailRegistrationConflict({
-        email: cleanEmail,
-        desiredRole: chosenRole,
-        superAdmin: activeSuperAdmin,
-        suppliers: activeSuppliers,
-        posClients: activePosClients,
-        targetSupplierId,
-      });
-      if (conflictCheck.conflict) {
+      const [conflictCheck, firestoreEmailCheck] = await Promise.all([
+        Promise.resolve(
+          checkEmailRegistrationConflict({
+            email: cleanEmail,
+            desiredRole: chosenRole,
+            superAdmin: activeSuperAdmin,
+            suppliers: activeSuppliers,
+            posClients: activePosClients,
+            targetSupplierId,
+          })
+        ),
+        firestoreSync.checkEmailExistsAcrossCollections(
+          cleanEmail,
+          chosenRole === 'pos_client'
+            ? { allowExistingPosClientForDifferentSupplierId: targetSupplierId }
+            : undefined
+        ),
+      ]);
+
+      if (conflictCheck.conflict || firestoreEmailCheck.exists) {
         await rollbackCreatedAuth();
+        const errMsg =
+          conflictCheck.error ||
+          firestoreEmailCheck.error ||
+          'هذا البريد الإلكتروني مسجل مسبقاً في قاعدة البيانات.';
         showToast({
           type: 'error',
           title: 'تعذر إنشاء الحساب',
-          description: conflictCheck.error
+          description: errMsg
         });
-        return { success: false, error: conflictCheck.error };
+        return { success: false, error: errMsg };
       }
 
       let associatedId = '';
       let newPos: POSClient | undefined;
       let newSup: Supplier | undefined;
 
-      // 3. Prepare entity and save to Firestore (strictly including email on POSClient)
+      // 3. Prepare entity and save to Firestore (preventing duplicate posClients by uid/email/phone)
       if (chosenRole === 'pos_client') {
-        const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
-        newPos = {
-          id: `pos-${fbUser.uid}`,
-          posCode: newPosCode,
-          tradeName: tradeName || `متجر ${name}`,
-          ownerName: name,
-          phone: phone || '+966 55 000 0000',
-          email: cleanEmail,
-          country: 'المملكة العربية السعودية',
-          city: 'الرياض',
+        const existingClient = await firestoreSync.findDuplicatePosClientForSupplier({
           supplierId: targetSupplierId,
-          tier: posInviteDefaults ? posInviteDefaults.tier : 'regular',
-          ...(posInviteDefaults
-            ? {
-                canRequestLoans: posInviteDefaults.canRequestLoans,
-                canReceiveSupplierTransfers: posInviteDefaults.canReceiveSupplierTransfers,
-                canGetBonus: posInviteDefaults.canGetBonus,
-                canViewGifts: posInviteDefaults.canViewGifts,
-                isAccreditedPos: posInviteDefaults.isAccreditedPos,
-                posUpgradeStatus: posInviteDefaults.isAccreditedPos ? 'approved' : 'none',
-                ...(posInviteDefaults.isAccreditedPos
-                  ? {
-                      accreditedAt: new Date().toISOString(),
-                      posUpgradeRequestedAt: new Date().toISOString(),
-                      posUpgradeRespondedAt: new Date().toISOString(),
-                      accreditedByName:
-                        matchedInviteLink?.supplierName ||
-                        activeSuppliers.find((s) => s.id === targetSupplierId)?.storeName ||
-                        'المتجر',
-                    }
-                  : {}),
-              }
-            : { posUpgradeStatus: 'none' }),
-          walletBalance: 0,
-          totalSpent: 0,
-          ordersCount: 0,
-          createdAt: new Date().toISOString().substring(0, 10),
-          qrCodeValue: `DIGIPOS:${newPosCode}`
-        };
+          email: cleanEmail,
+          phone,
+          uid: fbUser.uid,
+        });
+
+        const newPosCode = `POS-${Math.floor(10000 + Math.random() * 90000)}`;
+        const candidatePos: POSClient = existingClient
+          ? {
+              ...existingClient,
+              uid: fbUser.uid,
+              userId: fbUser.uid,
+              email: cleanEmail,
+              tradeName: tradeName || existingClient.tradeName || `متجر ${name}`,
+              ownerName: name || existingClient.ownerName,
+              phone: phone || existingClient.phone || '+966 55 000 0000',
+            }
+          : {
+              id: `pos-${fbUser.uid}`,
+              uid: fbUser.uid,
+              userId: fbUser.uid,
+              posCode: newPosCode,
+              tradeName: tradeName || `متجر ${name}`,
+              ownerName: name,
+              phone: phone || '+966 55 000 0000',
+              email: cleanEmail,
+              country: 'المملكة العربية السعودية',
+              city: 'الرياض',
+              supplierId: targetSupplierId,
+              tier: posInviteDefaults ? posInviteDefaults.tier : 'regular',
+              ...(posInviteDefaults
+                ? {
+                    canRequestLoans: posInviteDefaults.canRequestLoans,
+                    canReceiveSupplierTransfers: posInviteDefaults.canReceiveSupplierTransfers,
+                    canGetBonus: posInviteDefaults.canGetBonus,
+                    canViewGifts: posInviteDefaults.canViewGifts,
+                    isAccreditedPos: posInviteDefaults.isAccreditedPos,
+                    posUpgradeStatus: posInviteDefaults.isAccreditedPos ? 'approved' : 'none',
+                    ...(posInviteDefaults.isAccreditedPos
+                      ? {
+                          accreditedAt: new Date().toISOString(),
+                          posUpgradeRequestedAt: new Date().toISOString(),
+                          posUpgradeRespondedAt: new Date().toISOString(),
+                          accreditedByName:
+                            matchedInviteLink?.supplierName ||
+                            activeSuppliers.find((s) => s.id === targetSupplierId)?.storeName ||
+                            'المتجر',
+                        }
+                      : {}),
+                  }
+                : { posUpgradeStatus: 'none' }),
+              walletBalance: 0,
+              totalSpent: 0,
+              ordersCount: 0,
+              createdAt: new Date().toISOString().substring(0, 10),
+              qrCodeValue: `DIGIPOS:${newPosCode}`
+            };
+
+        newPos = await firestoreSync.savePosClient(candidatePos);
         associatedId = newPos.id;
-        await firestoreSync.savePosClient(newPos);
         setPosClients(prev => [newPos!, ...prev.filter(p => p.id !== newPos!.id)]);
       } else {
         newSup = {
           id: `sup-${fbUser.uid}`,
+          uid: fbUser.uid,
           name,
           storeName: tradeName || `مؤسسة ${name} للخدمات`,
           phone: phone || '+966 50 000 0000',
@@ -3791,16 +3856,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSuppliers(prev => [newSup!, ...prev.filter(s => s.id !== newSup!.id)]);
       }
 
-      // 4. Save User record
+      // 4. Save single canonical User record strictly keyed by Firebase Auth UID
       const authUser: AuthUser = {
         id: fbUser.uid,
+        uid: fbUser.uid,
         email: cleanEmail,
         name,
         role: chosenRole,
         phone,
         associatedId
       };
-      await firestoreSync.saveUser(authUser);
+      await firestoreSync.saveUser(authUser, fbUser.uid);
 
       // 5. Record invite usage & await supplier notification BEFORE signing out
       if (matchedInviteLink && newPos) {
@@ -5163,9 +5229,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, account: savedAccount };
   };
 
-  const saveBatchBankAccounts = (
+  const saveBatchBankAccounts = async (
     input: BatchBankAccountsInput
-  ): { success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee } => {
+  ): Promise<{ success: boolean; error?: string; accounts?: SupplierBankAccount[]; employee?: OfficeEmployee }> => {
     if (!assertEmployeePermission(effectiveEmployeePerms.canManageBankAccounts, 'ليس لديك صلاحية إدارة الحسابات البنكية وتفويض الاستلام.')) {
       return { success: false, error: 'ليس لديك صلاحية إدارة الحسابات البنكية.' };
     }
@@ -5197,7 +5263,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           canReviewCashDeposits: true,
           canReviewLoanDeposits: true
         };
-        const updRes = updateOfficeEmployee(existingEmp.id, {
+        const updRes = await updateOfficeEmployee(existingEmp.id, {
           name: input.accountHolderName.trim(),
           phone: input.accountHolderPhone?.trim() || existingEmp.phone,
           country: input.country.trim(),
@@ -5220,7 +5286,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           permissions: mergedPermissions
         };
       } else {
-        const addRes = addOfficeEmployee({
+        const addRes = await addOfficeEmployee({
           name: input.accountHolderName.trim(),
           email: cleanEmail,
           password: input.employeePassword?.trim() || '123456',
@@ -7684,14 +7750,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firestoreSync.savePosClient(updatedClient).catch(console.error);
 
     if (currentUser && currentUser.associatedId === posId) {
+      const canonicalUid = currentUser.uid || (auth.currentUser?.uid && normalizeStoreEmail(auth.currentUser.email) === normalizeStoreEmail(updates.email || currentUser.email) ? auth.currentUser.uid : undefined);
       const updatedAuthUser: AuthUser = {
         ...currentUser,
+        ...(canonicalUid ? { id: canonicalUid, uid: canonicalUid } : {}),
         name: updates.ownerName || currentUser.name,
-        email: updates.email || currentUser.email,
+        email: normalizeStoreEmail(updates.email || currentUser.email),
         phone: updates.phone || currentUser.phone
       };
       setCurrentUser(updatedAuthUser);
-      firestoreSync.saveUser(updatedAuthUser).catch(console.error);
+      firestoreSync.saveUser(updatedAuthUser, canonicalUid).catch(console.error);
     }
 
     showToast({
@@ -7706,6 +7774,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const targetSup = suppliers.find(s => s.id === supplierId) || supplier;
     const normalizedUpdates: Partial<Supplier> = {
       ...updates,
+      ...(updates.email !== undefined ? { email: normalizeStoreEmail(updates.email) } : {}),
       ...(updates.socialLinks !== undefined
         ? { socialLinks: sanitizeSupplierSocialLinks(updates.socialLinks) }
         : {})
@@ -7720,14 +7789,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firestoreSync.saveSupplier(updatedSup).catch(console.error);
 
     if (currentUser && currentUser.associatedId === supplierId) {
+      const canonicalUid = currentUser.uid || (auth.currentUser?.uid && normalizeStoreEmail(auth.currentUser.email) === normalizeStoreEmail(updates.email || currentUser.email) ? auth.currentUser.uid : undefined);
       const updatedAuthUser: AuthUser = {
         ...currentUser,
+        ...(canonicalUid ? { id: canonicalUid, uid: canonicalUid } : {}),
         name: updates.name || currentUser.name,
-        email: updates.email || currentUser.email,
+        email: normalizeStoreEmail(updates.email || currentUser.email),
         phone: updates.phone || currentUser.phone
       };
       setCurrentUser(updatedAuthUser);
-      firestoreSync.saveUser(updatedAuthUser).catch(console.error);
+      firestoreSync.saveUser(updatedAuthUser, canonicalUid).catch(console.error);
     }
 
     showToast({
@@ -8737,8 +8808,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Add Supplier by Super Admin
-  const addSupplier = (newSupData: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>) => {
+  // Add Supplier by Super Admin (prevents duplicate emails across Firestore)
+  const addSupplier = async (
+    newSupData: Omit<Supplier, 'id' | 'walletBalance' | 'createdAt'>
+  ): Promise<{ success: boolean; error?: string; supplier?: Supplier }> => {
+    const cleanEmail = normalizeStoreEmail(newSupData.email);
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      const msg = 'يرجى إدخال بريد إلكتروني صحيح للمتجر.';
+      showToast({ type: 'error', title: 'بريد غير صحيح', description: msg });
+      return { success: false, error: msg };
+    }
+
+    if (
+      isEmailUsedByOtherAccount(cleanEmail, {
+        currentSupplierId: '',
+        suppliers,
+        posClients,
+        superAdminEmail: superAdmin.email,
+        adminAccounts: superAdmin.adminAccounts,
+      })
+    ) {
+      const msg = 'هذا البريد الإلكتروني مسجل مسبقاً لحساب آخر في المنصة.';
+      showToast({ type: 'error', title: 'تعارض البريد الإلكتروني', description: msg });
+      return { success: false, error: msg };
+    }
+
+    const remoteEmailCheck = await firestoreSync.checkEmailExistsAcrossCollections(cleanEmail);
+    if (remoteEmailCheck.exists) {
+      const msg = remoteEmailCheck.error || 'هذا البريد الإلكتروني مسجل مسبقاً في قاعدة البيانات.';
+      showToast({ type: 'error', title: 'تعارض البريد الإلكتروني', description: msg });
+      return { success: false, error: msg };
+    }
+
     const newId = `sup-${Date.now()}`;
     const defaultConfig = getEffectivePlatformFeesConfig(
       {
@@ -8749,26 +8850,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       superAdmin
     );
+
+    let provisionedUid: string | undefined;
+    if ((newSupData.password || '').trim().length >= 6) {
+      const authRes = await provisionSecondaryAuthAccount({
+        email: cleanEmail,
+        password: newSupData.password,
+      }).catch(() => ({ ok: false, uid: undefined }));
+      if (authRes?.uid) {
+        provisionedUid = authRes.uid;
+      }
+    }
+
     const newSup: Supplier = {
       ...newSupData,
+      email: cleanEmail,
+      ...(provisionedUid ? { uid: provisionedUid } : {}),
       feesConfig: defaultConfig,
       id: newId,
       walletBalance: 0,
       createdAt: new Date().toISOString().substring(0, 10)
     };
     setRawSuppliers(prev => [...prev, stripEmployeesFromSupplierForStorage(newSup)]);
-    firestoreSync.saveSupplier(newSup).catch(console.error);
-    if ((newSup.password || '').trim().length >= 6) {
-      void provisionSecondaryAuthAccount({
-        email: newSup.email,
-        password: newSup.password,
-      }).catch(() => {});
+    await firestoreSync.saveSupplier(newSup).catch(console.error);
+
+    if (provisionedUid) {
+      await firestoreSync.saveUser(
+        {
+          id: provisionedUid,
+          uid: provisionedUid,
+          email: cleanEmail,
+          name: newSup.name,
+          role: 'supplier',
+          phone: newSup.phone,
+          associatedId: newSup.id,
+        },
+        provisionedUid
+      ).catch(console.error);
     }
+
     showToast({
       type: 'success',
       title: 'تمت إضافة المتجر بنجاح',
       description: `تم تسجيل المتجر (${newSup.name}) وضبط نسب الرسوم الخاصة به بنجاح.`
     });
+    return { success: true, supplier: newSup };
   };
 
   // Super Admin updates specific supplier fee (supports two-section PlatformFeesConfig + legacy sync)
@@ -9152,7 +9278,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const addOfficeEmployee = (employeeData: {
+  const addOfficeEmployee = async (employeeData: {
     name: string;
     email: string;
     password?: string;
@@ -9161,7 +9287,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isTransferReceiverOnly?: boolean;
     roleTitle: string;
     permissions: EmployeePermissions;
-  }): { success: boolean; error?: string; employee?: OfficeEmployee } => {
+  }): Promise<{ success: boolean; error?: string; employee?: OfficeEmployee }> => {
     if (!assertEmployeePermission(effectiveEmployeePerms.canManageEmployees, 'ليس لديك صلاحية إضافة موظفين جدد للمتجر.')) {
       return { success: false, error: 'ليس لديك صلاحية إضافة موظفين.' };
     }
@@ -9191,10 +9317,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const cleanEmail = normalizeStoreEmail(employeeData.email);
+    const remoteEmailCheck = await firestoreSync.checkEmailExistsAcrossCollections(cleanEmail);
+    if (remoteEmailCheck.exists) {
+      const msg = remoteEmailCheck.error || 'هذا البريد الإلكتروني مسجل مسبقاً في قاعدة البيانات.';
+      showToast({
+        type: 'error',
+        title: 'البريد الإلكتروني مستخدم مسبقاً',
+        description: msg
+      });
+      return { success: false, error: msg };
+    }
+
     const cleanPassword = (employeeData.password || '').trim();
+    let provisionedUid: string | undefined;
+    if (cleanPassword.length >= 6) {
+      const authRes = await provisionSecondaryAuthAccount({
+        email: cleanEmail,
+        password: cleanPassword,
+      }).catch(() => ({ ok: false, uid: undefined }));
+      if (authRes?.uid) {
+        provisionedUid = authRes.uid;
+      }
+    }
+
     const normalizedPerms = normalizeEmployeePermissions(employeeData.permissions);
     const newEmp: OfficeEmployee = {
       id: `emp-${Date.now().toString().slice(-6)}-${Math.floor(10 + Math.random() * 90)}`,
+      ...(provisionedUid ? { uid: provisionedUid } : {}),
       supplierId: supplier.id,
       name: employeeData.name.trim(),
       email: cleanEmail,
@@ -9235,16 +9384,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firestoreSync.saveSupplier(compactSup).catch(console.error);
     }
 
-    // 2. Persist atomically to `employees`, `employeePermissions`, and `users` collections
-    firestoreSync.saveEmployeeWithPermissions(newEmp).catch(console.error);
-
-    // 3. Provision Firebase Auth account on secondary worker so direct fast login works cleanly
-    if (cleanPassword.length >= 6) {
-      void provisionSecondaryAuthAccount({
-        email: cleanEmail,
-        password: cleanPassword,
-      }).catch(() => {});
-    }
+    // 2. Persist to `employees`, `employeePermissions`, and canonical `users/{uid}` (never creates `users/emp-...`)
+    await firestoreSync.saveEmployeeWithPermissions(newEmp).catch(console.error);
 
     showToast({
       type: 'success',
@@ -9255,10 +9396,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, employee: newEmp };
   };
 
-  const updateOfficeEmployee = (
+  const updateOfficeEmployee = async (
     empId: string,
     updates: Partial<OfficeEmployee>
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     if (!assertEmployeePermission(effectiveEmployeePerms.canManageEmployees, 'ليس لديك صلاحية تعديل بيانات أو صلاحيات الموظفين.')) {
       return { success: false, error: 'ليس لديك صلاحية تعديل الموظفين.' };
     }
@@ -9310,9 +9451,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: validation.error };
     }
 
+    if (nextEmail !== normalizeStoreEmail(targetEmp.email)) {
+      const remoteEmailCheck = await firestoreSync.checkEmailExistsAcrossCollections(nextEmail, {
+        excludeEmployeeId: empId,
+        excludeUserId: targetEmp.uid,
+      });
+      if (remoteEmailCheck.exists) {
+        const msg = remoteEmailCheck.error || 'البريد الإلكتروني مستخدم مسبقاً لحساب آخر في المنصة.';
+        showToast({
+          type: 'error',
+          title: 'تعارض البريد الإلكتروني',
+          description: msg
+        });
+        return { success: false, error: msg };
+      }
+    }
+
+    let provisionedUid = updates.uid || targetEmp.uid;
+    if (nextPassword.length >= 6) {
+      const authRes = await provisionSecondaryAuthAccount({
+        email: nextEmail,
+        password: nextPassword,
+        previousEmail: targetEmp.email,
+        previousPassword: targetEmp.password,
+      }).catch(() => ({ ok: false, uid: undefined }));
+      if (authRes?.uid) {
+        provisionedUid = authRes.uid;
+      }
+    }
+
     const mergedEmp: OfficeEmployee = {
       ...targetEmp,
       ...updates,
+      ...(provisionedUid ? { uid: provisionedUid } : {}),
       supplierId: targetEmp.supplierId || supplier.id,
       name: (updates.name ?? targetEmp.name).trim(),
       email: nextEmail,
@@ -9348,16 +9519,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firestoreSync.saveSupplier(compactSup).catch(console.error);
     }
 
-    firestoreSync.saveEmployeeWithPermissions(mergedEmp).catch(console.error);
-
-    if (nextPassword.length >= 6) {
-      void provisionSecondaryAuthAccount({
-        email: nextEmail,
-        password: nextPassword,
-        previousEmail: targetEmp.email,
-        previousPassword: targetEmp.password,
-      }).catch(() => {});
-    }
+    await firestoreSync.saveEmployeeWithPermissions(mergedEmp).catch(console.error);
 
     if (currentUser?.employeeId === empId) {
       if (!isEmployeeActive(mergedEmp)) {
@@ -9370,6 +9532,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           prev
             ? {
                 ...prev,
+                ...(mergedEmp.uid ? { id: mergedEmp.uid, uid: mergedEmp.uid } : {}),
                 name: mergedEmp.name,
                 email: mergedEmp.email,
                 phone: mergedEmp.phone,
@@ -9430,7 +9593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const addAdminAccount = (accountData: {
+  const addAdminAccount = async (accountData: {
     name: string;
     email: string;
     password: string;
@@ -9438,7 +9601,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     roleTitle: string;
     permissions: AdminPermissions;
     isActive?: boolean;
-  }): { success: boolean; error?: string } => {
+  }): Promise<{ success: boolean; error?: string }> => {
     const existingAccounts = superAdmin.adminAccounts || [];
     const validation = validateAdminAccountInput(
       accountData,
@@ -9455,9 +9618,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const cleanEmail = accountData.email.trim().toLowerCase();
+    const remoteEmailCheck = await firestoreSync.checkEmailExistsAcrossCollections(cleanEmail);
+    if (remoteEmailCheck.exists) {
+      const msg = remoteEmailCheck.error || 'هذا البريد الإلكتروني مسجل مسبقاً لحساب آخر.';
+      showToast({
+        type: 'error',
+        title: 'البريد الإلكتروني مستخدم مسبقاً',
+        description: msg
+      });
+      return { success: false, error: msg };
+    }
+
+    let provisionedUid: string | undefined;
+    if ((accountData.password || '').trim().length >= 6) {
+      const authRes = await provisionSecondaryAuthAccount({
+        email: cleanEmail,
+        password: accountData.password.trim(),
+      }).catch(() => ({ ok: false, uid: undefined }));
+      if (authRes?.uid) {
+        provisionedUid = authRes.uid;
+      }
+    }
+
     const today = new Date().toISOString().substring(0, 10);
     const newAccount: AdminAccount = {
       id: `adm-${Date.now().toString().slice(-6)}-${Math.floor(10 + Math.random() * 90)}`,
+      ...(provisionedUid ? { uid: provisionedUid } : {}),
       name: accountData.name.trim(),
       email: cleanEmail,
       password: accountData.password.trim(),
@@ -9474,26 +9660,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminAccounts: [newAccount, ...existingAccounts]
     };
     setSuperAdmin(nextAdmin);
-    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+    await firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
 
-    const adminAuthUser: AuthUser = {
-      id: newAccount.id,
-      email: cleanEmail,
-      name: newAccount.name,
-      role: 'super_admin',
-      phone: newAccount.phone || undefined,
-      associatedId: 'admin',
-      adminAccountId: newAccount.id,
-      roleTitle: newAccount.roleTitle,
-      adminPermissions: newAccount.permissions
-    };
-    firestoreSync.saveUser(adminAuthUser).catch(console.error);
-
-    if ((newAccount.password || '').length >= 6) {
-      void provisionSecondaryAuthAccount({
+    if (provisionedUid) {
+      const adminAuthUser: AuthUser = {
+        id: provisionedUid,
+        uid: provisionedUid,
         email: cleanEmail,
-        password: newAccount.password,
-      }).catch(() => {});
+        name: newAccount.name,
+        role: 'super_admin',
+        phone: newAccount.phone || undefined,
+        associatedId: 'admin',
+        adminAccountId: newAccount.id,
+        roleTitle: newAccount.roleTitle,
+        adminPermissions: newAccount.permissions
+      };
+      await firestoreSync.saveUser(adminAuthUser, provisionedUid).catch(console.error);
     }
 
     showToast({
@@ -9505,27 +9687,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateAdminAccount = (
+  const updateAdminAccount = async (
     accountId: string,
     updates: Partial<AdminAccount>
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const existingAccounts = superAdmin.adminAccounts || [];
     const target = existingAccounts.find(a => a.id === accountId);
     if (!target) {
       return { success: false, error: 'الحساب الإداري غير موجود.' };
     }
 
+    const nextEmail = (updates.email ?? target.email).trim().toLowerCase();
+    if (nextEmail !== target.email.trim().toLowerCase()) {
+      const remoteEmailCheck = await firestoreSync.checkEmailExistsAcrossCollections(nextEmail, {
+        excludeAdminAccountId: accountId,
+        excludeUserId: target.uid,
+      });
+      if (remoteEmailCheck.exists) {
+        const msg = remoteEmailCheck.error || 'البريد الإلكتروني مستخدم مسبقاً لحساب آخر.';
+        showToast({
+          type: 'error',
+          title: 'تعارض البريد الإلكتروني',
+          description: msg
+        });
+        return { success: false, error: msg };
+      }
+    }
+
+    const nextPassword =
+      updates.password !== undefined && updates.password.trim().length > 0
+        ? updates.password.trim()
+        : target.password;
+
+    let provisionedUid = updates.uid || target.uid;
+    if ((nextPassword || '').length >= 6) {
+      const authRes = await provisionSecondaryAuthAccount({
+        email: nextEmail,
+        password: nextPassword,
+        previousEmail: target.email,
+        previousPassword: target.password,
+      }).catch(() => ({ ok: false, uid: undefined }));
+      if (authRes?.uid) {
+        provisionedUid = authRes.uid;
+      }
+    }
+
     const mergedAccount: AdminAccount = {
       ...target,
       ...updates,
+      ...(provisionedUid ? { uid: provisionedUid } : {}),
       name: (updates.name ?? target.name).trim(),
-      email: (updates.email ?? target.email).trim().toLowerCase(),
+      email: nextEmail,
       phone: (updates.phone ?? target.phone).trim(),
       roleTitle: (updates.roleTitle ?? target.roleTitle).trim() || 'مشرف تطبيق',
-      password:
-        updates.password !== undefined && updates.password.trim().length > 0
-          ? updates.password.trim()
-          : target.password,
+      password: nextPassword,
       permissions: updates.permissions ? { ...updates.permissions } : { ...target.permissions },
       updatedAt: new Date().toISOString().substring(0, 10)
     };
@@ -9564,28 +9779,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       adminAccounts: existingAccounts.map(a => (a.id === accountId ? mergedAccount : a))
     };
     setSuperAdmin(nextAdmin);
-    firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
+    await firestoreSync.saveSuperAdmin(nextAdmin).catch(console.error);
 
-    const adminAuthUser: AuthUser = {
-      id: mergedAccount.id,
-      email: mergedAccount.email,
-      name: mergedAccount.name,
-      role: 'super_admin',
-      phone: mergedAccount.phone || undefined,
-      associatedId: 'admin',
-      adminAccountId: mergedAccount.id,
-      roleTitle: mergedAccount.roleTitle,
-      adminPermissions: mergedAccount.permissions
-    };
-    firestoreSync.saveUser(adminAuthUser).catch(console.error);
-
-    if ((mergedAccount.password || '').length >= 6) {
-      void provisionSecondaryAuthAccount({
+    if (provisionedUid) {
+      const adminAuthUser: AuthUser = {
+        id: provisionedUid,
+        uid: provisionedUid,
         email: mergedAccount.email,
-        password: mergedAccount.password,
-        previousEmail: target.email,
-        previousPassword: target.password,
-      }).catch(() => {});
+        name: mergedAccount.name,
+        role: 'super_admin',
+        phone: mergedAccount.phone || undefined,
+        associatedId: 'admin',
+        adminAccountId: mergedAccount.id,
+        roleTitle: mergedAccount.roleTitle,
+        adminPermissions: mergedAccount.permissions
+      };
+      await firestoreSync.saveUser(adminAuthUser, provisionedUid).catch(console.error);
     }
 
     if (currentUser?.adminAccountId === accountId) {
@@ -9597,6 +9806,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           prev
             ? {
                 ...prev,
+                ...(mergedAccount.uid ? { id: mergedAccount.uid, uid: mergedAccount.uid } : {}),
                 name: mergedAccount.name,
                 email: mergedAccount.email,
                 phone: mergedAccount.phone || undefined,

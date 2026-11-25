@@ -6,6 +6,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
         "email": { "type": "string" },
         "name": { "type": "string" },
         "role": { "type": "string", "enum": ["pos_client", "supplier", "super_admin", "employee"] },
@@ -17,7 +18,8 @@
         "permissions": { "type": "object" },
         "adminAccountId": { "type": "string" },
         "adminPermissions": { "type": "object" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
       "required": ["id", "email", "name", "role"]
     },
@@ -27,6 +29,8 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "userId": { "type": "string" },
         "posCode": { "type": "string" },
         "tradeName": { "type": "string" },
         "ownerName": { "type": "string" },
@@ -67,6 +71,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
         "name": { "type": "string" },
         "storeName": { "type": "string" },
         "phone": { "type": "string" },
@@ -485,6 +490,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "uid": { "type": "string" },
         "supplierId": { "type": "string" },
         "permissionId": { "type": "string" },
         "name": { "type": "string" },

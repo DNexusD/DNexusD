@@ -8,8 +8,11 @@ import {
   checkEmailRegistrationConflict,
   evaluateEmployeeLoginEligibility,
   evaluatePosClientLoginEligibility,
+  findMatchingPosClientRecord,
+  isLegacyPrefixedUserId,
   isMasterAdminEmail,
   isPosClientActive,
+  normalizePhoneForMatch,
   resolveAccountIdentityByEmail,
   resolveAuthoritativeIdentityFromFirestore,
   resolveScopedCurrentPos,
@@ -597,6 +600,97 @@ test('isPosClientActive and evaluatePosClientLoginEligibility block suspended cl
     'pos-active'
   );
 });
+
+test('buildAuthUserFromIdentity always uses Firebase Auth UID across all roles including employees', () => {
+  const emp: OfficeEmployee = {
+    id: 'emp-123456',
+    supplierId: 'sup-1',
+    name: 'موظف اختبار',
+    email: 'staff@store.sa',
+    phone: '0501112233',
+    roleTitle: 'مشرف شحن',
+    isActive: true,
+    permissions: { canManagePlayerIdOrders: true },
+    createdAt: '2026-01-01',
+  };
+  const sup = makeSupplier({ id: 'sup-1', email: 'owner@store.sa', employees: [emp] });
+
+  const builtEmp = buildAuthUserFromIdentity(
+    { kind: 'employee', email: 'staff@store.sa', supplier: sup, employee: emp },
+    { uid: 'firebaseUidEmp999' }
+  );
+  assert.equal(builtEmp.authUser.id, 'firebaseUidEmp999');
+  assert.equal(builtEmp.authUser.uid, 'firebaseUidEmp999');
+  assert.equal(builtEmp.authUser.employeeId, 'emp-123456');
+  assert.equal(builtEmp.authUser.associatedId, 'sup-1');
+
+  assert.equal(isLegacyPrefixedUserId('emp-123456'), true);
+  assert.equal(isLegacyPrefixedUserId('usr-abc'), true);
+  assert.equal(isLegacyPrefixedUserId('pos-usr-1'), true);
+  assert.equal(isLegacyPrefixedUserId('firebaseUidEmp999'), false);
+});
+
+test('findMatchingPosClientRecord detects existing store clients by uid, normalized email, or real phone while ignoring placeholders', () => {
+  const existing = makePosClient({
+    id: 'pos-existing-1',
+    uid: 'uid-client-1',
+    userId: 'uid-client-1',
+    supplierId: 'sup-1',
+    email: 'client1@pos.sa',
+    phone: '+966 50 123 4567',
+  });
+  const otherStoreClient = makePosClient({
+    id: 'pos-other-store',
+    supplierId: 'sup-2',
+    email: 'client1@pos.sa',
+    phone: '+966 50 123 4567',
+  });
+  const placeholderPhoneClient = makePosClient({
+    id: 'pos-placeholder',
+    supplierId: 'sup-1',
+    email: 'other@pos.sa',
+    phone: '+966 55 000 0000',
+  });
+
+  // Matches by uid within same supplier
+  assert.equal(
+    findMatchingPosClientRecord([existing, otherStoreClient], {
+      supplierId: 'sup-1',
+      uid: 'uid-client-1',
+    })?.id,
+    'pos-existing-1'
+  );
+
+  // Matches by normalized email (case + whitespace) within same supplier
+  assert.equal(
+    findMatchingPosClientRecord([existing, otherStoreClient], {
+      supplierId: 'sup-1',
+      email: '  CLIENT1@POS.SA ',
+    })?.id,
+    'pos-existing-1'
+  );
+
+  // Matches by normalized real phone number even with formatting differences
+  assert.equal(
+    findMatchingPosClientRecord([existing, otherStoreClient], {
+      supplierId: 'sup-1',
+      phone: '0501234567',
+    })?.id,
+    'pos-existing-1'
+  );
+
+  // Does NOT collide across different suppliers or on placeholder phone numbers
+  assert.equal(
+    findMatchingPosClientRecord([placeholderPhoneClient], {
+      supplierId: 'sup-1',
+      email: 'brandnew@pos.sa',
+      phone: '+966 55 000 0000',
+    }),
+    undefined
+  );
+  assert.equal(normalizePhoneForMatch('+966 55 000 0000'), '');
+});
+
 
 
 

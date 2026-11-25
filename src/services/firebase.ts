@@ -117,18 +117,23 @@ export async function provisionSecondaryAuthAccount(params: {
     } catch (err: unknown) {
       const fbErr = err as { code?: string };
       if (fbErr?.code === 'auth/email-already-in-use') {
-        const oldPwd = (params.previousPassword || '').trim();
-        const oldEmail = (params.previousEmail || cleanEmail).trim().toLowerCase();
-        if (oldEmail === cleanEmail && oldPwd && oldPwd !== cleanPassword) {
-          try {
-            const signInCred = await signInWithEmailAndPassword(secAuth, cleanEmail, oldPwd);
-            await updatePassword(signInCred.user, cleanPassword);
-            return { ok: true, uid: signInCred.user.uid };
-          } catch {
-            return { ok: true, reason: 'already_exists' };
+        try {
+          const samePwdCred = await signInWithEmailAndPassword(secAuth, cleanEmail, cleanPassword);
+          return { ok: true, uid: samePwdCred.user.uid, reason: 'already_exists' };
+        } catch {
+          const oldPwd = (params.previousPassword || '').trim();
+          const oldEmail = (params.previousEmail || cleanEmail).trim().toLowerCase();
+          if (oldEmail === cleanEmail && oldPwd && oldPwd !== cleanPassword) {
+            try {
+              const signInCred = await signInWithEmailAndPassword(secAuth, cleanEmail, oldPwd);
+              await updatePassword(signInCred.user, cleanPassword);
+              return { ok: true, uid: signInCred.user.uid, reason: 'already_exists_updated' };
+            } catch {
+              return { ok: true, reason: 'already_exists' };
+            }
           }
+          return { ok: true, reason: 'already_exists' };
         }
-        return { ok: true, reason: 'already_exists' };
       }
       return { ok: false, reason: fbErr?.code || 'auth_provision_failed' };
     }

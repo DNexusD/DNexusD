@@ -85,7 +85,7 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
     setCanManageEmployees(norm.canManageEmployees);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -94,7 +94,7 @@ export const EditOfficeEmployeeModal: React.FC<EditOfficeEmployeeModalProps> = (
       return;
     }
 
-    const res = updateOfficeEmployee(employee.id, {
+    const res = await updateOfficeEmployee(employee.id, {
       name: name.trim(),
       email: email.trim(),
       ...(password.trim() ? { password: password.trim() } : {}),

@@ -131,6 +131,71 @@ export function sortPosRecordsDeterministically(
   });
 }
 
+export function isLegacyPrefixedUserId(id?: string | null): boolean {
+  const clean = typeof id === 'string' ? id.trim() : '';
+  if (!clean) return true;
+  return /^(usr-|emp-|adm-|sup-usr-|pos-usr-|sup-|pos-)/.test(clean);
+}
+
+export function normalizePhoneForMatch(phone?: string | null): string {
+  const digits = typeof phone === 'string' ? phone.replace(/\D+/g, '') : '';
+  if (!digits || digits.length < 7) return '';
+  if (
+    digits === '966550000000' ||
+    digits === '966500000000' ||
+    digits === '550000000' ||
+    digits === '500000000' ||
+    digits === '0550000000' ||
+    digits === '0500000000' ||
+    /^(\d)\1+$/.test(digits)
+  ) {
+    return '';
+  }
+  return digits.length > 9 ? digits.slice(-9) : digits;
+}
+
+export function findMatchingPosClientRecord(
+  candidates: POSClient[] = [],
+  criteria: {
+    supplierId?: string;
+    email?: string;
+    phone?: string;
+    uid?: string;
+    userId?: string;
+    excludePosId?: string;
+  }
+): POSClient | undefined {
+  const cleanSupId = (criteria.supplierId || '').trim();
+  const cleanEmail = normalizeStoreEmail(criteria.email);
+  const cleanPhone = normalizePhoneForMatch(criteria.phone);
+  const cleanUid = (criteria.uid || criteria.userId || '').trim();
+  const cleanExcludeId = (criteria.excludePosId || '').trim();
+
+  const scoped = candidates.filter((p) => {
+    if (!p || !p.id) return false;
+    if (cleanExcludeId && p.id === cleanExcludeId) return false;
+    if (cleanSupId && p.supplierId !== cleanSupId) return false;
+    return true;
+  });
+
+  if (cleanUid) {
+    const byUid = scoped.find((p) => p.uid === cleanUid || p.userId === cleanUid);
+    if (byUid) return byUid;
+  }
+
+  if (cleanEmail) {
+    const byEmail = scoped.find((p) => normalizeStoreEmail(p.email) === cleanEmail);
+    if (byEmail) return byEmail;
+  }
+
+  if (cleanPhone) {
+    const byPhone = scoped.find((p) => normalizePhoneForMatch(p.phone) === cleanPhone);
+    if (byPhone) return byPhone;
+  }
+
+  return undefined;
+}
+
 export function findPosClientsForEmail(
   email: string,
   posClients: POSClient[] = [],
@@ -590,15 +655,19 @@ export function buildAuthUserFromIdentity(
   posId: string;
   requiresSupplierSelection: boolean;
 } {
+  const cleanUid = (options?.uid || '').trim() || undefined;
+
   if (identity.kind === 'sub_admin') {
     const acc = identity.adminAccount;
+    const resolvedUid = cleanUid || acc.uid;
     return {
       role: 'super_admin',
       supplierId: '',
       posId: '',
       requiresSupplierSelection: false,
       authUser: {
-        id: options?.uid || acc.id,
+        id: resolvedUid || acc.id,
+        ...(resolvedUid ? { uid: resolvedUid } : {}),
         email: identity.email,
         name: acc.name,
         role: 'super_admin',
@@ -612,13 +681,15 @@ export function buildAuthUserFromIdentity(
   }
 
   if (identity.kind === 'supplier') {
+    const resolvedUid = cleanUid || identity.supplier.uid;
     return {
       role: 'supplier',
       supplierId: identity.supplier.id,
       posId: '',
       requiresSupplierSelection: false,
       authUser: {
-        id: options?.uid || `sup-usr-${identity.supplier.id}`,
+        id: resolvedUid || `sup-usr-${identity.supplier.id}`,
+        ...(resolvedUid ? { uid: resolvedUid } : {}),
         email: identity.email,
         name: identity.supplier.name,
         role: 'supplier',
@@ -629,6 +700,7 @@ export function buildAuthUserFromIdentity(
   }
 
   if (identity.kind === 'employee') {
+    const resolvedUid = cleanUid || identity.employee.uid;
     const perms = isEmployeeActive(identity.employee)
       ? normalizeEmployeePermissions(identity.employee.permissions)
       : normalizeEmployeePermissions(null);
@@ -638,7 +710,8 @@ export function buildAuthUserFromIdentity(
       posId: '',
       requiresSupplierSelection: false,
       authUser: {
-        id: identity.employee.id,
+        id: resolvedUid || identity.employee.id,
+        ...(resolvedUid ? { uid: resolvedUid } : {}),
         email: identity.email,
         name: identity.employee.name,
         role: 'employee',
@@ -659,7 +732,8 @@ export function buildAuthUserFromIdentity(
       posId: '',
       requiresSupplierSelection: false,
       authUser: {
-        id: options?.uid || 'usr-master-admin',
+        id: cleanUid || 'usr-master-admin',
+        ...(cleanUid ? { uid: cleanUid } : {}),
         email: identity.email,
         name: options?.masterAdminName || 'الإدارة العامة للمنصة',
         role: 'super_admin',
@@ -683,13 +757,15 @@ export function buildAuthUserFromIdentity(
     activeSupplierIds.includes(s.id)
   ).length;
   const requiresSupplierSelection = activeSuppliersCount > 1;
+  const resolvedUid = cleanUid || preferred.uid || preferred.userId;
   return {
     role: 'pos_client',
     supplierId: preferred.supplierId || identity.suppliers[0]?.id || '',
     posId: preferred.id,
     requiresSupplierSelection,
     authUser: {
-      id: options?.uid || `pos-usr-${preferred.id}`,
+      id: resolvedUid || `pos-usr-${preferred.id}`,
+      ...(resolvedUid ? { uid: resolvedUid } : {}),
       email: identity.email,
       name: preferred.ownerName || preferred.tradeName,
       role: 'pos_client',

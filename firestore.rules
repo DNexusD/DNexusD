@@ -29,9 +29,145 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Users collection
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && !id.matches('.*/.*');
+    }
+
+    function isValidNormalizedEmail(email) {
+      return email is string
+        && email.size() >= 3
+        && email.size() <= 254
+        && email == email.lower()
+        && email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$');
+    }
+
+    function authEmailMatches(email) {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() == email.lower();
+    }
+
+    function isPlatformAdmin() {
+      return isSignedIn() && (
+        (
+          request.auth.token.email != null && (
+            request.auth.token.email.lower() in ['admin@digipos-platform.com', 'jmiyemen66@gmail.com']
+            || (
+              exists(/databases/$(database)/documents/system/superAdmin)
+              && get(/databases/$(database)/documents/system/superAdmin).data.email is string
+              && get(/databases/$(database)/documents/system/superAdmin).data.email.lower() == request.auth.token.email.lower()
+            )
+          )
+        )
+        || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin'
+        )
+      );
+    }
+
+    function isStoreOwnerForUser(supplierId) {
+      return isSignedIn()
+        && supplierId is string
+        && supplierId.size() > 0
+        && exists(/databases/$(database)/documents/suppliers/$(supplierId))
+        && get(/databases/$(database)/documents/suppliers/$(supplierId)).data.email is string
+        && authEmailMatches(get(/databases/$(database)/documents/suppliers/$(supplierId)).data.email);
+    }
+
+    function isStoreHrManagerForUser(supplierId) {
+      return isSignedIn()
+        && supplierId is string
+        && supplierId.size() > 0
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'employee'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.supplierId == supplierId
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions is map
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions.canManageEmployees == true;
+    }
+
+    function isValidUserDoc(data, userId) {
+      return isValidId(userId)
+        && data.keys().hasAll(['id', 'email', 'name', 'role'])
+        && data.id is string
+        && data.id == userId
+        && (!('uid' in data) || (data.uid is string && data.uid == userId))
+        && isValidNormalizedEmail(data.email)
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 200
+        && data.role in ['pos_client', 'supplier', 'super_admin', 'employee']
+        && (!('associatedId' in data) || (data.associatedId is string && data.associatedId.size() <= 128))
+        && (!('supplierId' in data) || (data.supplierId is string && data.supplierId.size() <= 128))
+        && (!('employeeId' in data) || (data.employeeId is string && data.employeeId.size() <= 128));
+    }
+
+    // Users collection (Single source of truth keyed by Firebase Auth UID)
     match /users/{userId} {
-      allow read, write: if request.auth != null;
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidUserDoc(request.resource.data, userId)
+        && (
+          (
+            request.auth.uid == userId
+            && authEmailMatches(request.resource.data.email)
+            && (request.resource.data.role != 'super_admin' || isPlatformAdmin())
+          )
+          || isPlatformAdmin()
+          || (
+            request.resource.data.role == 'employee'
+            && ('supplierId' in request.resource.data)
+            && (
+              isStoreOwnerForUser(request.resource.data.supplierId)
+              || isStoreHrManagerForUser(request.resource.data.supplierId)
+            )
+          )
+        );
+      allow update: if isSignedIn()
+        && isValidUserDoc(request.resource.data, userId)
+        && (
+          (
+            request.auth.uid == userId
+            && authEmailMatches(request.resource.data.email)
+            && (
+              !('role' in resource.data)
+              || request.resource.data.role == resource.data.role
+            )
+          )
+          || isPlatformAdmin()
+          || (
+            request.resource.data.role == 'employee'
+            && ('supplierId' in request.resource.data)
+            && (
+              isStoreOwnerForUser(request.resource.data.supplierId)
+              || isStoreHrManagerForUser(request.resource.data.supplierId)
+            )
+          )
+        );
+      allow delete: if isSignedIn() && (
+        request.auth.uid == userId
+        || (resource.data.email is string && authEmailMatches(resource.data.email))
+        || isPlatformAdmin()
+        || (
+          resource.data.role == 'employee'
+          && ('supplierId' in resource.data)
+          && (
+            isStoreOwnerForUser(resource.data.supplierId)
+            || isStoreHrManagerForUser(resource.data.supplierId)
+          )
+        )
+        || (
+          resource.data.role == 'pos_client'
+          && ('associatedId' in resource.data)
+          && resource.data.associatedId is string
+          && exists(/databases/$(database)/documents/posClients/$(resource.data.associatedId))
+          && isStoreOwnerForUser(get(/databases/$(database)/documents/posClients/$(resource.data.associatedId)).data.supplierId)
+        )
+      );
     }
 
     // POS Clients collection

@@ -335,11 +335,11 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
-  const handleCreateSupplier = (e: React.FormEvent) => {
+  const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSupName.trim() || !newSupStoreName.trim()) return;
 
-    addSupplier({
+    const res = await addSupplier({
       name: newSupName.trim(),
       storeName: newSupStoreName.trim(),
       phone: newSupPhone.trim(),
@@ -355,6 +355,8 @@ export const AdminDashboard: React.FC = () => {
         accountNumber: ''
       }
     });
+
+    if (!res.success) return;
 
     setShowAddSupplierModal(false);
     setNewSupName('');

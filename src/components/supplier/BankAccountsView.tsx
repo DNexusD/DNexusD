@@ -371,10 +371,10 @@ export const BankAccountsView: React.FC = () => {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
-  const handleBatchSubmit = (e: React.FormEvent) => {
+  const handleBatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
-    const res = saveBatchBankAccounts({
+    const res = await saveBatchBankAccounts({
       mode: addMode,
       country: batchForm.country,
       accountHolderName: batchForm.accountHolderName,

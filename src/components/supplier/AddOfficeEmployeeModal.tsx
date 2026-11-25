@@ -79,7 +79,7 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
     setCanManageEmployees(norm.canManageEmployees);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
@@ -93,7 +93,7 @@ export const AddOfficeEmployeeModal: React.FC<AddOfficeEmployeeModalProps> = ({ 
       return;
     }
 
-    const res = addOfficeEmployee({
+    const res = await addOfficeEmployee({
       name: name.trim(),
       email: email.trim(),
       password: password.trim(),

@@ -198,9 +198,9 @@ export const OfficeEmployeesView: React.FC<OfficeEmployeesViewProps> = ({ employ
     setDraftPerms(savedSelectedPerms);
   };
 
-  const handleSaveSelectedPermissions = () => {
+  const handleSaveSelectedPermissions = async () => {
     if (!selectedEmployee) return;
-    const res = updateOfficeEmployee(selectedEmployee.id, { permissions: draftPerms });
+    const res = await updateOfficeEmployee(selectedEmployee.id, { permissions: draftPerms });
     if (!res.success) {
       setSaveStatusMsg({
         type: 'error',
@@ -214,13 +214,13 @@ export const OfficeEmployeesView: React.FC<OfficeEmployeesViewProps> = ({ employ
     });
   };
 
-  const handleQuickMatrixToggle = (emp: OfficeEmployee, key: GranularEmployeePermissionKey) => {
+  const handleQuickMatrixToggle = async (emp: OfficeEmployee, key: GranularEmployeePermissionKey) => {
     const current = normalizeEmployeePermissions(emp.permissions);
     const next = normalizeEmployeePermissions({
       ...current,
       [key]: !current[key],
     });
-    const res = updateOfficeEmployee(emp.id, { permissions: next });
+    const res = await updateOfficeEmployee(emp.id, { permissions: next });
     if (!res.success) {
       setSaveStatusMsg({
         type: 'error',
@@ -231,10 +231,10 @@ export const OfficeEmployeesView: React.FC<OfficeEmployeesViewProps> = ({ employ
     }
   };
 
-  const handleToggleEmployeeActive = (emp: OfficeEmployee) => {
+  const handleToggleEmployeeActive = async (emp: OfficeEmployee) => {
     if (currentUser?.employeeId === emp.id) return;
     const currentlyActive = isEmployeeActive(emp);
-    const res = updateOfficeEmployee(emp.id, { isActive: !currentlyActive });
+    const res = await updateOfficeEmployee(emp.id, { isActive: !currentlyActive });
     if (!res.success) {
       setSaveStatusMsg({
         type: 'error',

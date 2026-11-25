@@ -50,6 +50,7 @@ export interface AdminPermissions {
 
 export interface AdminAccount {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   password?: string;
@@ -63,6 +64,7 @@ export interface AdminAccount {
 
 export interface AuthUser {
   id: string;
+  uid?: string;
   email: string;
   name: string;
   role: UserRole;
@@ -74,6 +76,7 @@ export interface AuthUser {
   roleTitle?: string;
   permissions?: EmployeePermissions;
   adminPermissions?: AdminPermissions;
+  updatedAt?: string;
 }
 
 export type AccountTier = 'regular' | 'bronze' | 'silver' | 'gold' | 'vip';
@@ -224,6 +227,8 @@ export type PosUpgradeStatus = 'none' | 'pending_client_approval' | 'approved' |
 
 export interface POSClient {
   id: string;
+  uid?: string;
+  userId?: string;
   posCode: string; // e.g. "RYD-84920" (3 letters - 5 digits)
   tradeName: string; // اسم المحل التجاري
   ownerName: string; // اسم العميل
@@ -306,6 +311,7 @@ export interface EmployeePermissionRecord {
 
 export interface OfficeEmployee {
   id: string;
+  uid?: string;
   supplierId: string;
   permissionId?: string;
   name: string;
@@ -342,6 +348,7 @@ export interface SupplierSocialLinks {
 
 export interface Supplier {
   id: string;
+  uid?: string;
   name: string;
   storeName: string;
   phone: string;

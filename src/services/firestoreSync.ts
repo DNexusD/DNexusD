@@ -78,7 +78,10 @@ import {
 import {
   filterNotificationsForPosClient,
   findAdminAccountByEmail,
+  findMatchingPosClientRecord,
+  isLegacyPrefixedUserId,
   isMasterAdminEmail,
+  normalizePhoneForMatch,
   resolveAuthoritativeIdentityFromFirestore
 } from '../utils/accountAuth';
 
@@ -290,13 +293,31 @@ export const firestoreSync = {
         userDoc = {
           ...(uidUserSnap.data() as AuthUser),
           id: uidUserSnap.id,
+          uid: uidUserSnap.id,
         };
       } else if (emailUsersSnap && !emailUsersSnap.empty) {
-        const firstDoc = emailUsersSnap.docs[0];
+        const preferredDoc =
+          emailUsersSnap.docs.find((d) => !isLegacyPrefixedUserId(d.id)) ||
+          emailUsersSnap.docs[0];
         userDoc = {
-          ...(firstDoc.data() as AuthUser),
-          id: firstDoc.id,
+          ...(preferredDoc.data() as AuthUser),
+          id: preferredDoc.id,
         };
+      }
+
+      // Self-heal any duplicate `users` documents sharing this normalized email when authenticated
+      if (
+        uid &&
+        auth.currentUser?.uid === uid &&
+        emailUsersSnap &&
+        !emailUsersSnap.empty
+      ) {
+        const duplicateUserRefs = emailUsersSnap.docs
+          .filter((d) => d.id !== uid)
+          .map((d) => doc(db, 'users', d.id));
+        if (duplicateUserRefs.length > 0) {
+          void this.commitBatchDeletes(duplicateUserRefs).catch(() => {});
+        }
       }
 
       const rawEmployees = employeesSnap ? mapDocsById<OfficeEmployee>(employeesSnap.docs) : [];
@@ -895,87 +916,441 @@ export const firestoreSync = {
     posClients: POSClient[],
     separatedEmployees: OfficeEmployee[] = []
   ): Promise<number> {
-    const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
-    const seenUserIds = new Set<string>();
-    const nowIso = new Date().toISOString();
+    // Only update/deduplicate existing UID-keyed `users` documents (never create custom-ID `emp-`, `sup-`, `pos-`, `usr-` docs).
+    try {
+      const usersSnap = await withFirestoreRecovery(() =>
+        getDocsFromServer(collection(db, 'users'))
+      ).catch(() => null);
+      if (!usersSnap) return 0;
 
-    const pushEmployeeUser = (emp: OfficeEmployee, fallbackSupId?: string) => {
-      if (!emp?.id || !emp.email || seenUserIds.has(emp.id)) return;
-      const scopedSupId = emp.supplierId || fallbackSupId || '';
-      if (!scopedSupId) return;
-      seenUserIds.add(emp.id);
-      const empUser: AuthUser & { updatedAt: string } = {
-        id: emp.id,
-        email: normalizeStoreEmail(emp.email),
-        name: emp.name,
-        role: 'employee',
-        phone: emp.phone,
-        associatedId: scopedSupId,
-        supplierId: scopedSupId,
-        employeeId: emp.id,
-        roleTitle: emp.roleTitle,
-        permissions: normalizeEmployeePermissions(emp.permissions),
-        updatedAt: nowIso,
-      };
-      userEntries.push({ path: ['users', emp.id], data: empUser });
-    };
+      const docsByEmail = new Map<string, Array<{ id: string; data: Partial<AuthUser> }>>();
+      for (const docSnap of usersSnap.docs) {
+        const data = docSnap.data() as Partial<AuthUser>;
+        const cleanEmail = normalizeStoreEmail(data?.email);
+        if (!cleanEmail) continue;
+        const list = docsByEmail.get(cleanEmail) || [];
+        list.push({ id: docSnap.id, data });
+        docsByEmail.set(cleanEmail, list);
+      }
 
-    for (const emp of separatedEmployees) {
-      pushEmployeeUser(emp);
-    }
+      const nowIso = new Date().toISOString();
+      const userEntries: Array<{ path: [string, string]; data: unknown }> = [];
+      const duplicateRefsToDelete: DocumentReference[] = [];
+      const accountByEmail = new Map<string, AuthUser & { updatedAt: string }>();
 
-    for (const sup of suppliers) {
-      if (!sup?.id) continue;
-      if (sup.email && !seenUserIds.has(sup.id)) {
-        seenUserIds.add(sup.id);
-        const cleanSupEmail = normalizeStoreEmail(sup.email);
-        const supUser: AuthUser & { updatedAt: string } = {
-          id: sup.id,
-          email: cleanSupEmail,
-          name: sup.name,
-          role: 'supplier',
-          phone: sup.phone,
-          associatedId: sup.id,
+      const registerEmployee = (emp: OfficeEmployee, fallbackSupId?: string) => {
+        const cleanEmail = normalizeStoreEmail(emp?.email);
+        const scopedSupId = emp?.supplierId || fallbackSupId || '';
+        if (!emp?.id || !cleanEmail || !scopedSupId || accountByEmail.has(cleanEmail)) return;
+        accountByEmail.set(cleanEmail, {
+          id: emp.uid || emp.id,
+          ...(emp.uid ? { uid: emp.uid } : {}),
+          email: cleanEmail,
+          name: emp.name,
+          role: 'employee',
+          phone: emp.phone,
+          associatedId: scopedSupId,
+          supplierId: scopedSupId,
+          employeeId: emp.id,
+          roleTitle: emp.roleTitle,
+          permissions: normalizeEmployeePermissions(emp.permissions),
           updatedAt: nowIso,
-        };
-        userEntries.push({ path: ['users', sup.id], data: supUser });
-      }
-      for (const emp of sup.employees || []) {
-        pushEmployeeUser(emp, sup.id);
-      }
-    }
-
-    for (const client of posClients) {
-      if (!client?.id || !client.email || seenUserIds.has(client.id)) continue;
-      seenUserIds.add(client.id);
-      const clientUser: AuthUser & { updatedAt: string } = {
-        id: client.id,
-        email: normalizeStoreEmail(client.email),
-        name: client.ownerName || client.tradeName,
-        role: 'pos_client',
-        phone: client.phone,
-        associatedId: client.id,
-        updatedAt: nowIso,
+        });
       };
-      userEntries.push({ path: ['users', client.id], data: clientUser });
-    }
 
-    return this.commitBatchSets(userEntries);
+      for (const sup of suppliers) {
+        if (!sup?.id) continue;
+        const cleanSupEmail = normalizeStoreEmail(sup.email);
+        if (cleanSupEmail && !accountByEmail.has(cleanSupEmail)) {
+          accountByEmail.set(cleanSupEmail, {
+            id: sup.uid || sup.id,
+            ...(sup.uid ? { uid: sup.uid } : {}),
+            email: cleanSupEmail,
+            name: sup.name,
+            role: 'supplier',
+            phone: sup.phone,
+            associatedId: sup.id,
+            updatedAt: nowIso,
+          });
+        }
+        for (const emp of sup.employees || []) {
+          registerEmployee(emp, sup.id);
+        }
+      }
+
+      for (const emp of separatedEmployees) {
+        registerEmployee(emp);
+      }
+
+      for (const client of posClients) {
+        const cleanClientEmail = normalizeStoreEmail(client?.email);
+        if (!client?.id || !cleanClientEmail || accountByEmail.has(cleanClientEmail)) continue;
+        const clientUid = (client.uid || client.userId || '').trim() || undefined;
+        accountByEmail.set(cleanClientEmail, {
+          id: clientUid || client.id,
+          ...(clientUid ? { uid: clientUid } : {}),
+          email: cleanClientEmail,
+          name: client.ownerName || client.tradeName,
+          role: 'pos_client',
+          phone: client.phone,
+          associatedId: client.id,
+          updatedAt: nowIso,
+        });
+      }
+
+      for (const [cleanEmail, docList] of docsByEmail.entries()) {
+        const canonicalExisting =
+          docList.find((d) => !isLegacyPrefixedUserId(d.id)) ||
+          docList.find((d) => typeof d.data?.uid === 'string' && d.data.uid === d.id);
+
+        if (!canonicalExisting) {
+          continue;
+        }
+
+        for (const d of docList) {
+          if (d.id !== canonicalExisting.id) {
+            duplicateRefsToDelete.push(doc(db, 'users', d.id));
+          }
+        }
+
+        const matchedAccount = accountByEmail.get(cleanEmail);
+        if (matchedAccount) {
+          userEntries.push({
+            path: ['users', canonicalExisting.id],
+            data: {
+              ...matchedAccount,
+              id: canonicalExisting.id,
+              uid: canonicalExisting.id,
+              email: cleanEmail,
+            },
+          });
+        }
+      }
+
+      // Also upsert accounts that explicitly carry a real Firebase Auth UID even if no `users/{uid}` doc existed yet
+      for (const [cleanEmail, acc] of accountByEmail.entries()) {
+        const explicitUid = (acc.uid || '').trim();
+        if (!explicitUid || isLegacyPrefixedUserId(explicitUid)) continue;
+        if (userEntries.some((entry) => entry.path[1] === explicitUid)) continue;
+        userEntries.push({
+          path: ['users', explicitUid],
+          data: {
+            ...acc,
+            id: explicitUid,
+            uid: explicitUid,
+            email: cleanEmail,
+          },
+        });
+      }
+
+      if (duplicateRefsToDelete.length > 0) {
+        await this.commitBatchDeletes(duplicateRefsToDelete).catch(() => {});
+      }
+
+      return this.commitBatchSets(userEntries);
+    } catch {
+      return 0;
+    }
   },
 
-  // Sync User profile
-  async saveUser(user: AuthUser): Promise<void> {
-    const path = `users/${user.id}`;
+  async findExistingUsersByEmail(email: string): Promise<AuthUser[]> {
+    const cleanEmail = normalizeStoreEmail(email);
+    if (!cleanEmail) return [];
     try {
-      const cleanUser = sanitizeData({
-        ...user,
-        updatedAt: new Date().toISOString()
-      });
-      await withFirestoreRecovery(() =>
-        setDoc(doc(db, 'users', user.id), cleanUser, { merge: true })
+      const queries = [
+        getDocsQueryPreferServer(() =>
+          query(collection(db, 'users'), where('email', '==', cleanEmail))
+        ),
+      ];
+      if (email.trim() && email.trim() !== cleanEmail) {
+        queries.push(
+          getDocsQueryPreferServer(() =>
+            query(collection(db, 'users'), where('email', '==', email.trim()))
+          )
+        );
+      }
+      const snaps = await Promise.all(queries);
+      const map = new Map<string, AuthUser>();
+      for (const snap of snaps) {
+        for (const d of snap.docs) {
+          map.set(d.id, { ...(d.data() as AuthUser), id: d.id });
+        }
+      }
+      return Array.from(map.values());
+    } catch {
+      return [];
+    }
+  },
+
+  async findDuplicatePosClientForSupplier(params: {
+    supplierId: string;
+    email?: string;
+    phone?: string;
+    uid?: string;
+    userId?: string;
+    excludePosId?: string;
+  }): Promise<POSClient | null> {
+    const cleanSupId = (params.supplierId || '').trim();
+    if (!cleanSupId) return null;
+    try {
+      const snap = await getDocsQueryPreferServer(() =>
+        query(collection(db, 'posClients'), where('supplierId', '==', cleanSupId))
       );
+      const storeClients = mapDocsById<POSClient>(snap.docs);
+      const match = findMatchingPosClientRecord(storeClients, params);
+      return match || null;
+    } catch {
+      return null;
+    }
+  },
+
+  async checkEmailExistsAcrossCollections(
+    email: string,
+    options?: {
+      excludeUserId?: string;
+      excludeEmployeeId?: string;
+      excludeSupplierId?: string;
+      excludePosId?: string;
+      excludeAdminAccountId?: string;
+      allowExistingPosClientForDifferentSupplierId?: string;
+    }
+  ): Promise<{
+    exists: boolean;
+    source?: 'super_admin' | 'admin_account' | 'supplier' | 'employee' | 'pos_client' | 'users';
+    error?: string;
+    existingUsers: AuthUser[];
+    existingPosClients: POSClient[];
+  }> {
+    const cleanEmail = normalizeStoreEmail(email);
+    if (!cleanEmail) {
+      return {
+        exists: true,
+        error: 'يرجى إدخال بريد إلكتروني صحيح.',
+        existingUsers: [],
+        existingPosClients: [],
+      };
+    }
+
+    try {
+      const [users, empSnap, supSnap, posSnap, adminSnap] = await Promise.all([
+        this.findExistingUsersByEmail(cleanEmail),
+        getDocsQueryPreferServer(() =>
+          query(collection(db, 'employees'), where('email', '==', cleanEmail))
+        ).catch(() => null),
+        getDocsQueryPreferServer(() =>
+          query(collection(db, 'suppliers'), where('email', '==', cleanEmail))
+        ).catch(() => null),
+        getDocsQueryPreferServer(() =>
+          query(collection(db, 'posClients'), where('email', '==', cleanEmail))
+        ).catch(() => null),
+        getDocPreferServer(() => doc(db, 'system', 'superAdmin')).catch(() => null),
+      ]);
+
+      const superAdminData =
+        adminSnap && adminSnap.exists() ? (adminSnap.data() as Partial<SuperAdmin>) : null;
+      if (isMasterAdminEmail(cleanEmail, superAdminData?.email)) {
+        return {
+          exists: true,
+          source: 'super_admin',
+          error: 'هذا البريد الإلكتروني مخصص للإدارة العامة ولا يمكن استخدامه.',
+          existingUsers: users,
+          existingPosClients: [],
+        };
+      }
+
+      const matchedAdminAcc = findAdminAccountByEmail(
+        cleanEmail,
+        superAdminData?.adminAccounts || []
+      );
+      if (matchedAdminAcc && matchedAdminAcc.id !== options?.excludeAdminAccountId) {
+        return {
+          exists: true,
+          source: 'admin_account',
+          error: 'هذا البريد الإلكتروني مسجل مسبقاً كحساب إداري.',
+          existingUsers: users,
+          existingPosClients: [],
+        };
+      }
+
+      const matchedSuppliers = supSnap
+        ? mapDocsById<Supplier>(supSnap.docs).filter((s) => s.id !== options?.excludeSupplierId)
+        : [];
+      if (matchedSuppliers.length > 0) {
+        return {
+          exists: true,
+          source: 'supplier',
+          error: 'هذا البريد الإلكتروني مسجل بالفعل لحساب متجر.',
+          existingUsers: users,
+          existingPosClients: [],
+        };
+      }
+
+      const matchedEmployees = empSnap
+        ? mapDocsById<OfficeEmployee>(empSnap.docs).filter(
+            (e) => e.id !== options?.excludeEmployeeId
+          )
+        : [];
+      if (matchedEmployees.length > 0) {
+        return {
+          exists: true,
+          source: 'employee',
+          error: 'هذا البريد الإلكتروني مسجل بالفعل لحساب موظف متجر.',
+          existingUsers: users,
+          existingPosClients: [],
+        };
+      }
+
+      const matchedPosClients = posSnap
+        ? mapDocsById<POSClient>(posSnap.docs).filter((p) => p.id !== options?.excludePosId)
+        : [];
+      const targetSupForMultiStore = (
+        options?.allowExistingPosClientForDifferentSupplierId || ''
+      ).trim();
+
+      if (matchedPosClients.length > 0) {
+        if (!targetSupForMultiStore) {
+          return {
+            exists: true,
+            source: 'pos_client',
+            error: 'هذا البريد الإلكتروني مسجل مسبقاً لحساب عميل نقطة بيع.',
+            existingUsers: users,
+            existingPosClients: matchedPosClients,
+          };
+        }
+        if (matchedPosClients.some((p) => p.supplierId === targetSupForMultiStore)) {
+          return {
+            exists: true,
+            source: 'pos_client',
+            error: 'هذا البريد الإلكتروني مسجل بالفعل لدى هذا المتجر.',
+            existingUsers: users,
+            existingPosClients: matchedPosClients,
+          };
+        }
+      }
+
+      const blockingUsers = users.filter((u) => {
+        if (options?.excludeUserId && (u.id === options.excludeUserId || u.uid === options.excludeUserId)) {
+          return false;
+        }
+        if (
+          options?.excludeEmployeeId &&
+          (u.employeeId === options.excludeEmployeeId || u.id === options.excludeEmployeeId)
+        ) {
+          return false;
+        }
+        if (
+          options?.excludeSupplierId &&
+          u.role === 'supplier' &&
+          u.associatedId === options.excludeSupplierId
+        ) {
+          return false;
+        }
+        if (options?.excludePosId && u.role === 'pos_client' && u.associatedId === options.excludePosId) {
+          return false;
+        }
+        if (
+          options?.excludeAdminAccountId &&
+          u.adminAccountId === options.excludeAdminAccountId
+        ) {
+          return false;
+        }
+        if (targetSupForMultiStore && u.role === 'pos_client') {
+          return false;
+        }
+        return true;
+      });
+
+      if (blockingUsers.length > 0) {
+        return {
+          exists: true,
+          source: 'users',
+          error: 'هذا البريد الإلكتروني مسجل مسبقاً في قاعدة بيانات المستخدمين.',
+          existingUsers: users,
+          existingPosClients: matchedPosClients,
+        };
+      }
+
+      return {
+        exists: false,
+        existingUsers: users,
+        existingPosClients: matchedPosClients,
+      };
+    } catch {
+      return {
+        exists: false,
+        existingUsers: [],
+        existingPosClients: [],
+      };
+    }
+  },
+
+  // Sync User profile (Always uses Firebase Auth UID as single source of truth)
+  async saveUser(user: AuthUser, uidOverride?: string): Promise<AuthUser> {
+    const cleanEmail = normalizeStoreEmail(user.email);
+    const currentAuthEmail = normalizeStoreEmail(auth.currentUser?.email);
+    const resolvedUid =
+      (uidOverride || '').trim() ||
+      (user.uid || '').trim() ||
+      (!isLegacyPrefixedUserId(user.id) ? user.id.trim() : '') ||
+      (auth.currentUser && (!cleanEmail || currentAuthEmail === cleanEmail)
+        ? auth.currentUser.uid
+        : '');
+
+    const nowIso = new Date().toISOString();
+
+    try {
+      const existingByEmail = cleanEmail ? await this.findExistingUsersByEmail(cleanEmail) : [];
+
+      if (resolvedUid) {
+        const canonicalUser: AuthUser = {
+          ...user,
+          id: resolvedUid,
+          uid: resolvedUid,
+          email: cleanEmail || user.email,
+          updatedAt: nowIso,
+        };
+        const cleanUser = sanitizeData(canonicalUser);
+        await withFirestoreRecovery(() =>
+          setDoc(doc(db, 'users', resolvedUid), cleanUser, { merge: true })
+        );
+
+        const duplicateRefs = existingByEmail
+          .filter((d) => d.id && d.id !== resolvedUid)
+          .map((d) => doc(db, 'users', d.id));
+        if (duplicateRefs.length > 0) {
+          await this.commitBatchDeletes(duplicateRefs).catch(() => {});
+        }
+        return canonicalUser;
+      }
+
+      // If no Firebase Auth UID is available yet, only update a single already-existing `users` doc
+      // matching this email (never create a new custom-ID document like usr-/emp-/sup-/pos-/adm-).
+      if (existingByEmail.length > 0) {
+        const canonicalExisting =
+          existingByEmail.find((d) => !isLegacyPrefixedUserId(d.id)) || existingByEmail[0];
+        const targetId = canonicalExisting.id;
+        const mergedUser: AuthUser = {
+          ...user,
+          id: targetId,
+          ...(canonicalExisting.uid ? { uid: canonicalExisting.uid } : {}),
+          email: cleanEmail || user.email,
+          updatedAt: nowIso,
+        };
+        const cleanUser = sanitizeData(mergedUser);
+        await withFirestoreRecovery(() =>
+          setDoc(doc(db, 'users', targetId), cleanUser, { merge: true })
+        );
+        return mergedUser;
+      }
+
+      return {
+        ...user,
+        email: cleanEmail || user.email,
+        updatedAt: nowIso,
+      };
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.WRITE, `users/${resolvedUid || user.id}`);
+      return user;
     }
   },
 
@@ -1000,26 +1375,9 @@ export const firestoreSync = {
   },
 
   async findUserByEmail(email: string): Promise<AuthUser | null> {
-    const cleanEmail = normalizeStoreEmail(email);
-    if (!cleanEmail) return null;
-    try {
-      let snap = await getDocsQueryPreferServer(() =>
-        query(collection(db, 'users'), where('email', '==', cleanEmail))
-      );
-      if (snap.empty && email.trim() !== cleanEmail) {
-        snap = await getDocsQueryPreferServer(() =>
-          query(collection(db, 'users'), where('email', '==', email.trim()))
-        );
-      }
-      if (snap.empty) return null;
-      const firstDoc = snap.docs[0];
-      return {
-        ...(firstDoc.data() as AuthUser),
-        id: firstDoc.id,
-      };
-    } catch {
-      return null;
-    }
+    const matches = await this.findExistingUsersByEmail(email);
+    if (matches.length === 0) return null;
+    return matches.find((d) => !isLegacyPrefixedUserId(d.id)) || matches[0];
   },
 
   async findPosClientsByEmail(email: string): Promise<POSClient[]> {
@@ -1044,18 +1402,60 @@ export const firestoreSync = {
     }
   },
 
-  // POS Client operations
-  async savePosClient(client: POSClient): Promise<void> {
-    const path = `posClients/${client.id}`;
+  // POS Client operations (deduplicates by uid/userId, email, or non-placeholder phone within the same store)
+  async savePosClient(
+    client: POSClient,
+    options?: { skipDuplicateCheck?: boolean }
+  ): Promise<POSClient> {
+    const cleanEmail = normalizeStoreEmail(client.email);
+    const normalizedInput: POSClient = {
+      ...client,
+      ...(cleanEmail ? { email: cleanEmail } : {}),
+    };
+
+    let targetClient = normalizedInput;
+    if (!options?.skipDuplicateCheck && normalizedInput.supplierId) {
+      const duplicate = await this.findDuplicatePosClientForSupplier({
+        supplierId: normalizedInput.supplierId,
+        email: cleanEmail,
+        phone: normalizedInput.phone,
+        uid: normalizedInput.uid || normalizedInput.userId,
+        excludePosId: normalizedInput.id,
+      });
+
+      if (duplicate) {
+        const resolvedPhone = normalizePhoneForMatch(normalizedInput.phone)
+          ? normalizedInput.phone
+          : duplicate.phone || normalizedInput.phone;
+        const mergedUid = normalizedInput.uid || duplicate.uid || normalizedInput.userId || duplicate.userId;
+        targetClient = {
+          ...duplicate,
+          ...normalizedInput,
+          id: duplicate.id,
+          posCode: duplicate.posCode || normalizedInput.posCode,
+          qrCodeValue: duplicate.qrCodeValue || normalizedInput.qrCodeValue,
+          walletBalance: Math.max(duplicate.walletBalance || 0, normalizedInput.walletBalance || 0),
+          totalSpent: Math.max(duplicate.totalSpent || 0, normalizedInput.totalSpent || 0),
+          ordersCount: Math.max(duplicate.ordersCount || 0, normalizedInput.ordersCount || 0),
+          phone: resolvedPhone,
+          ...(cleanEmail ? { email: cleanEmail } : duplicate.email ? { email: normalizeStoreEmail(duplicate.email) } : {}),
+          ...(mergedUid ? { uid: mergedUid, userId: mergedUid } : {}),
+        };
+      }
+    }
+
+    const path = `posClients/${targetClient.id}`;
     try {
-      const cleanClient = sanitizeData(client);
+      const cleanClient = sanitizeData(targetClient);
       await withFirestoreRecovery(() =>
-        setDoc(doc(db, 'posClients', client.id), cleanClient, { merge: true })
+        setDoc(doc(db, 'posClients', targetClient.id), cleanClient, { merge: true })
       );
-      clearEntityPendingSync('posClients', client.id);
+      clearEntityPendingSync('posClients', targetClient.id);
+      return targetClient;
     } catch (error) {
-      markEntityPendingSync('posClients', client.id);
+      markEntityPendingSync('posClients', targetClient.id);
       handleFirestoreError(error, OperationType.WRITE, path);
+      return targetClient;
     }
   },
 
@@ -1074,19 +1474,15 @@ export const firestoreSync = {
     clientEmail?: string,
     keepEmailUserDocs: boolean = false
   ): Promise<void> {
-    await this.deletePosClient(posId);
-
-    // Clean up associated user profile docs so deleted client accounts cannot restore cleanly
+    // Clean up associated user profile docs BEFORE deleting posClients/{posId} so rule ownership checks succeed
     try {
-      await withFirestoreRecovery(() => deleteDoc(doc(db, 'users', posId))).catch(() => {});
-
       const assocSnap = await withFirestoreRecovery(() =>
         getDocs(query(collection(db, 'users'), where('associatedId', '==', posId)))
       ).catch(() => null);
       if (assocSnap && !assocSnap.empty) {
         await this.commitBatchDeletes(
           assocSnap.docs.map((d) => doc(db, 'users', d.id))
-        );
+        ).catch(() => {});
       }
 
       const cleanEmail = normalizeStoreEmail(clientEmail);
@@ -1102,13 +1498,15 @@ export const firestoreSync = {
             })
             .map((d) => doc(db, 'users', d.id));
           if (refsToDelete.length > 0) {
-            await this.commitBatchDeletes(refsToDelete);
+            await this.commitBatchDeletes(refsToDelete).catch(() => {});
           }
         }
       }
     } catch (err) {
       console.warn('Partial cleanup while deleting POS client user docs:', err);
     }
+
+    await this.deletePosClient(posId);
   },
 
   async fetchSupplierByIdFromServer(supplierId: string): Promise<Supplier | null> {
@@ -1171,7 +1569,7 @@ export const firestoreSync = {
     }
   },
 
-  // Separated Store Employee & Employee Permissions operations
+  // Separated Store Employee & Employee Permissions operations (never creates duplicate `users/emp-...` docs)
   async saveEmployeeWithPermissions(employee: OfficeEmployee): Promise<void> {
     const nowIso = new Date().toISOString();
     const cleanEmail = normalizeStoreEmail(employee.email);
@@ -1181,30 +1579,38 @@ export const firestoreSync = {
     const permissionDoc = sanitizeData(
       buildEmployeePermissionRecord({ ...employee, email: cleanEmail }, nowIso)
     );
-    const userDoc: AuthUser & { updatedAt: string } = sanitizeData({
-      id: employee.id,
-      email: cleanEmail,
-      name: employee.name,
-      role: 'employee',
-      phone: employee.phone,
-      associatedId: employee.supplierId,
-      supplierId: employee.supplierId,
-      employeeId: employee.id,
-      roleTitle: employee.roleTitle,
-      permissions: permissionDoc.permissions,
-      updatedAt: nowIso,
-    });
 
     try {
       await withFirestoreRecovery(async () => {
         const batch = writeBatch(db);
         batch.set(doc(db, 'employees', employee.id), employeeDoc, { merge: true });
         batch.set(doc(db, 'employeePermissions', employee.id), permissionDoc, { merge: true });
-        batch.set(doc(db, 'users', employee.id), userDoc, { merge: true });
         await batch.commit();
       });
       clearEntityPendingSync('employees', employee.id);
       clearEntityPendingSync('employeePermissions', employee.id);
+
+      // Update the single canonical `users/{uid}` doc if UID is known (or an existing `users` doc exists by email)
+      await this.saveUser(
+        {
+          id: employee.uid || employee.id,
+          ...(employee.uid ? { uid: employee.uid } : {}),
+          email: cleanEmail,
+          name: employee.name,
+          role: 'employee',
+          phone: employee.phone,
+          associatedId: employee.supplierId,
+          supplierId: employee.supplierId,
+          employeeId: employee.id,
+          roleTitle: employee.roleTitle,
+          permissions: permissionDoc.permissions,
+        },
+        employee.uid
+      ).catch(() => {});
+
+      if (employee.uid && employee.uid !== employee.id) {
+        await withFirestoreRecovery(() => deleteDoc(doc(db, 'users', employee.id))).catch(() => {});
+      }
     } catch (error) {
       markEntityPendingSync('employees', employee.id);
       markEntityPendingSync('employeePermissions', employee.id);
@@ -1214,11 +1620,22 @@ export const firestoreSync = {
 
   async deleteEmployeeAndPermissions(employeeId: string): Promise<void> {
     try {
+      const empUsersSnap = await withFirestoreRecovery(() =>
+        getDocs(query(collection(db, 'users'), where('employeeId', '==', employeeId)))
+      ).catch(() => null);
+
       await withFirestoreRecovery(async () => {
         const batch = writeBatch(db);
         batch.delete(doc(db, 'employees', employeeId));
         batch.delete(doc(db, 'employeePermissions', employeeId));
         batch.delete(doc(db, 'users', employeeId));
+        if (empUsersSnap && !empUsersSnap.empty) {
+          for (const uDoc of empUsersSnap.docs) {
+            if (uDoc.id !== employeeId) {
+              batch.delete(doc(db, 'users', uDoc.id));
+            }
+          }
+        }
         await batch.commit();
       });
       clearEntityPendingSync('employees', employeeId);
@@ -1269,22 +1686,6 @@ export const firestoreSync = {
       migratedPermissions.push(permRec);
       entries.push({ path: ['employees', emp.id], data: sepEmp });
       entries.push({ path: ['employeePermissions', emp.id], data: permRec });
-      entries.push({
-        path: ['users', emp.id],
-        data: {
-          id: emp.id,
-          email: normalizeStoreEmail(emp.email),
-          name: emp.name,
-          role: 'employee',
-          phone: emp.phone,
-          associatedId: emp.supplierId,
-          supplierId: emp.supplierId,
-          employeeId: emp.id,
-          roleTitle: emp.roleTitle,
-          permissions: permRec.permissions,
-          updatedAt: nowIso,
-        },
-      });
     }
     if (entries.length > 0) {
       await this.commitBatchSets(entries);
