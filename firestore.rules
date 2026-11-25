@@ -175,6 +175,18 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // Client Wallets collection
+    match /wallets/{walletId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Wallet Transactions Ledger collection
+    match /walletTransactions/{txId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
     // Suppliers collection
     match /suppliers/{supplierId} {
       allow read, write: if request.auth != null;
