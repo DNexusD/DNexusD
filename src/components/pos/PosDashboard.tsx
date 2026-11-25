@@ -1018,15 +1018,34 @@ export const PosDashboard: React.FC = () => {
         {/* Wallet Balance Strip & Action Buttons */}
         {isPosElVisible('pos_wallet_strip') && (
         <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <Wallet className="w-5 h-5" />
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <Wallet className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-[11px] text-slate-400 block">رصيد محفظتي المسبق لدى المتجر</span>
+                <div className="text-xl font-bold font-mono text-white tabular-nums">
+                  {formatCurrency(currentPos.walletBalance, { includeSymbol: false, withGrouping: true })}{' '}
+                  <span className="text-xs text-amber-400 font-sans font-medium">{currencyLabel}</span>
+                </div>
+              </div>
             </div>
-            <div>
-              <span className="text-[11px] text-slate-400 block">رصيد محفظتي المسبق لدى المتجر</span>
-              <div className="text-2xl font-bold font-mono text-white tabular-nums">
-                {formatCurrency(currentPos.walletBalance, { includeSymbol: false, withGrouping: true })}{' '}
-                <span className="text-xs text-amber-400 font-sans font-medium">{currencyLabel}</span>
+
+            {/* Pending services balance */}
+            <div className="flex items-center gap-3 bg-slate-950 px-3.5 py-2 rounded-2xl border border-slate-800">
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              <div>
+                <span className="text-[10px] text-slate-400 block">الرصيد المعلق للخدمات قيد الطلب</span>
+                <div className="text-sm font-bold font-mono text-cyan-300 tabular-nums">
+                  {formatCurrency(
+                    clientOrders
+                      .filter(o => o.status === 'pending_supplier' || o.status === 'in_progress')
+                      .reduce((sum, o) => sum + (o.totalDeducted || o.costPrice || 0), 0),
+                    { includeSymbol: false, withGrouping: true }
+                  )}{' '}
+                  <span className="text-[10px] text-cyan-400 font-sans">{currencyLabel}</span>
+                </div>
               </div>
             </div>
           </div>
