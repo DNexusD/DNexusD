@@ -6,13 +6,14 @@ import {
   query,
   where,
   orderBy,
+  limit,
   runTransaction,
-  serverTimestamp,
-  Timestamp,
-  setDoc
+  setDoc,
+  QueryConstraint
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { ClientWallet, WalletTransaction, WalletTransactionType, WalletReferenceType } from '../types/wallet';
+import { executeIndexedQueryWithFallback, sortRecordsByDateDesc } from '../utils/firestoreIndexQueries';
 
 export const walletService = {
   getWalletDocId(clientId: string): string {
@@ -86,23 +87,136 @@ export const walletService = {
     }
   },
 
-  async getWalletTransactions(clientId: string): Promise<WalletTransaction[]> {
+  async getWalletTransactions(
+    clientId: string,
+    options?: { type?: WalletTransactionType; limitCount?: number }
+  ): Promise<WalletTransaction[]> {
     const cleanClientId = (clientId || '').trim();
     if (!cleanClientId) return [];
+    const safeLimit =
+      options?.limitCount && options.limitCount > 0 ? Math.floor(options.limitCount) : undefined;
     try {
       const walletId = this.getWalletDocId(cleanClientId);
-      const q = query(
-        collection(db, 'walletTransactions'),
-        where('walletId', '==', walletId)
+      const indexedConstraints: QueryConstraint[] = [where('walletId', '==', walletId)];
+      if (options?.type) {
+        indexedConstraints.push(where('type', '==', options.type));
+      }
+      indexedConstraints.push(orderBy('createdAt', 'desc'));
+      if (safeLimit) {
+        indexedConstraints.push(limit(safeLimit));
+      }
+
+      return await executeIndexedQueryWithFallback(
+        async () => {
+          const snap = await getDocs(query(collection(db, 'walletTransactions'), ...indexedConstraints));
+          const list: WalletTransaction[] = [];
+          snap.forEach((d) => {
+            list.push({ id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) });
+          });
+          return list;
+        },
+        async () => {
+          const snap = await getDocs(
+            query(collection(db, 'walletTransactions'), where('walletId', '==', walletId))
+          );
+          const list: WalletTransaction[] = [];
+          snap.forEach((d) => {
+            const item = { id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) };
+            if (!options?.type || item.type === options.type) {
+              list.push(item);
+            }
+          });
+          const sorted = sortRecordsByDateDesc(list, (tx) => tx.createdAt);
+          return safeLimit ? sorted.slice(0, safeLimit) : sorted;
+        }
       );
-      const snap = await getDocs(q);
-      const list: WalletTransaction[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) });
-      });
-      return list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
     } catch (err) {
       console.warn('Error fetching wallet transactions:', err);
+      return [];
+    }
+  },
+
+  async getSupplierWallets(
+    supplierId: string,
+    statusFilter?: 'active' | 'frozen'
+  ): Promise<ClientWallet[]> {
+    const cleanSupId = (supplierId || '').trim();
+    if (!cleanSupId) return [];
+    try {
+      const indexedConstraints: QueryConstraint[] = [where('supplierId', '==', cleanSupId)];
+      if (statusFilter) {
+        indexedConstraints.push(where('status', '==', statusFilter));
+      } else {
+        indexedConstraints.push(orderBy('updatedAt', 'desc'));
+      }
+
+      return await executeIndexedQueryWithFallback(
+        async () => {
+          const snap = await getDocs(query(collection(db, 'wallets'), ...indexedConstraints));
+          const list: ClientWallet[] = [];
+          snap.forEach((d) => {
+            list.push({ id: d.id, ...(d.data() as Omit<ClientWallet, 'id'>) });
+          });
+          return statusFilter ? sortRecordsByDateDesc(list, (w) => w.updatedAt) : list;
+        },
+        async () => {
+          const snap = await getDocs(query(collection(db, 'wallets'), where('supplierId', '==', cleanSupId)));
+          const list: ClientWallet[] = [];
+          snap.forEach((d) => {
+            const wallet = { id: d.id, ...(d.data() as Omit<ClientWallet, 'id'>) };
+            if (!statusFilter || wallet.status === statusFilter) {
+              list.push(wallet);
+            }
+          });
+          return sortRecordsByDateDesc(list, (w) => w.updatedAt);
+        }
+      );
+    } catch (err) {
+      console.warn('Error fetching supplier wallets:', err);
+      return [];
+    }
+  },
+
+  async getSupplierWalletTransactions(
+    supplierId: string,
+    options?: { type?: WalletTransactionType; limitCount?: number }
+  ): Promise<WalletTransaction[]> {
+    const cleanSupId = (supplierId || '').trim();
+    if (!cleanSupId) return [];
+    const safeLimit =
+      options?.limitCount && options.limitCount > 0 ? Math.floor(options.limitCount) : 250;
+    try {
+      const indexedConstraints: QueryConstraint[] = [where('supplierId', '==', cleanSupId)];
+      if (options?.type) {
+        indexedConstraints.push(where('type', '==', options.type));
+      }
+      indexedConstraints.push(orderBy('createdAt', 'desc'), limit(safeLimit));
+
+      return await executeIndexedQueryWithFallback(
+        async () => {
+          const snap = await getDocs(query(collection(db, 'walletTransactions'), ...indexedConstraints));
+          const list: WalletTransaction[] = [];
+          snap.forEach((d) => {
+            list.push({ id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) });
+          });
+          return list;
+        },
+        async () => {
+          const snap = await getDocs(
+            query(collection(db, 'walletTransactions'), where('supplierId', '==', cleanSupId))
+          );
+          const list: WalletTransaction[] = [];
+          snap.forEach((d) => {
+            const item = { id: d.id, ...(d.data() as Omit<WalletTransaction, 'id'>) };
+            if (!options?.type || item.type === options.type) {
+              list.push(item);
+            }
+          });
+          return sortRecordsByDateDesc(list, (tx) => tx.createdAt).slice(0, safeLimit);
+        }
+      );
+    } catch (err) {
+      console.warn('Error fetching supplier wallet transactions:', err);
       return [];
     }
   },

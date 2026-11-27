@@ -16,9 +16,22 @@ import { recoverFirestoreInstance } from './services/firebase';
 import { SupplierContactLinks } from './components/common/SupplierContactLinks';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SupplierSelector } from './components/auth/SupplierSelector';
+import { ShieldCheck } from 'lucide-react';
 
 const MainContent: React.FC = () => {
-  const { role, activeNavTab, isAuthenticated, isSupplierSelectionRequired, isSupplierPosPreviewMode, logout } = useApp();
+  const {
+    role,
+    activeNavTab,
+    isAuthenticated,
+    isSupplierSelectionRequired,
+    isSupplierPosPreviewMode,
+    closeSupplierPosPreview,
+    inspectedAdminSupplierId,
+    closeAdminInspectSupplier,
+    suppliers,
+    inspectedPosClient,
+    logout,
+  } = useApp();
   const [resetOobCode, setResetOobCode] = React.useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const parsed = parsePasswordResetUrl(window.location.search);
@@ -131,6 +144,53 @@ const MainContent: React.FC = () => {
   }
 
   if (role === 'super_admin') {
+    if (inspectedAdminSupplierId) {
+      const inspectedSup = suppliers.find(s => s.id === inspectedAdminSupplierId);
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+          <div className="bg-amber-500 text-slate-950 px-4 py-2.5 text-xs font-bold flex items-center justify-between gap-2 shadow-lg sticky top-0 z-50">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>وضع إشراف الإدارة العامة (قراءة فقط) — تستعرض الآن واجهة المتجر: {inspectedSup?.storeName || inspectedSup?.name} ({inspectedAdminSupplierId})</span>
+            </div>
+            <button
+              type="button"
+              onClick={closeAdminInspectSupplier}
+              className="px-3 py-1 rounded-lg bg-slate-950 text-amber-400 hover:bg-slate-900 transition-colors cursor-pointer text-xs font-bold whitespace-nowrap"
+            >
+              عودة إلى لوحة إدارة المنصة
+            </button>
+          </div>
+          <div className="flex-1">
+            <SupplierDashboard />
+          </div>
+        </div>
+      );
+    }
+
+    if (isSupplierPosPreviewMode) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+          <div className="bg-amber-500 text-slate-950 px-4 py-2.5 text-xs font-bold flex items-center justify-between gap-2 shadow-lg sticky top-0 z-50">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>وضع إشراف الإدارة العامة (قراءة فقط) — تستعرض الآن واجهة العميل: {inspectedPosClient?.tradeName} ({inspectedPosClient?.id})</span>
+            </div>
+            <button
+              type="button"
+              onClick={closeSupplierPosPreview}
+              className="px-3 py-1 rounded-lg bg-slate-950 text-amber-400 hover:bg-slate-900 transition-colors cursor-pointer text-xs font-bold whitespace-nowrap"
+            >
+              عودة إلى لوحة إدارة المنصة
+            </button>
+          </div>
+          <div className="flex-1">
+            <PosDashboard />
+          </div>
+        </div>
+      );
+    }
+
     return <AdminDashboard />;
   }
 

@@ -42,6 +42,7 @@ import {
   isNavigatorOffline,
   isTransientFirestoreError
 } from '../utils/firestoreConnectivity';
+import { isMissingFirestoreIndexError } from '../utils/firestoreIndexQueries';
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
@@ -338,6 +339,53 @@ export function safeOnSnapshot<T = DocumentData>(
         return;
       }
       throw err;
+    }
+  };
+}
+
+/**
+ * Subscribes to an indexed query (e.g. `where` + `orderBy` + optional `limit`) and
+ * transparently falls back to an unindexed query if the composite index is not yet built/deployed.
+ */
+export function safeIndexedOnSnapshot<T = DocumentData>(
+  indexedTarget: Query<T>,
+  fallbackTarget: Query<T>,
+  onNext: (snapshot: QuerySnapshot<T>) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  let isDisposed = false;
+  let usingFallback = false;
+  let activeUnsub: (() => void) | null = null;
+
+  activeUnsub = safeOnSnapshot(
+    indexedTarget,
+    onNext,
+    (err) => {
+      if (isDisposed) return;
+      if (!usingFallback && isMissingFirestoreIndexError(err)) {
+        usingFallback = true;
+        const staleUnsub = activeUnsub;
+        activeUnsub = null;
+        try {
+          staleUnsub?.();
+        } catch {
+          // ignore stale cleanup errors
+        }
+        activeUnsub = safeOnSnapshot(fallbackTarget, onNext, onError);
+        return;
+      }
+      onError?.(err);
+    }
+  );
+
+  return () => {
+    isDisposed = true;
+    const currentUnsub = activeUnsub;
+    activeUnsub = null;
+    try {
+      currentUnsub?.();
+    } catch {
+      // ignore cleanup error
     }
   };
 }

@@ -173,6 +173,7 @@ import {
   provisionSecondaryAuthAccount,
   subscribeFirestoreRecovery,
   safeOnSnapshot,
+  safeIndexedOnSnapshot,
   auth,
   googleProvider,
   db,
@@ -209,7 +210,7 @@ import {
   hasClientApprovedPosUpgrade,
 } from '../utils/posAccreditation';
 import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, doc, getDocFromServer, query, where } from 'firebase/firestore';
+import { collection, doc, getDocFromServer, limit, orderBy, query, where } from 'firebase/firestore';
 import { firestoreSync, ScopedLoginData } from '../services/firestoreSync';
 
 interface ToastMessage {
@@ -303,6 +304,10 @@ interface AppContextType {
   isSupplierPosPreviewMode: boolean;
   openSupplierPosPreview: (posId: string) => boolean;
   closeSupplierPosPreview: () => void;
+  inspectedPosClient: POSClient | null;
+  inspectedAdminSupplierId: string | null;
+  openAdminInspectSupplier: (supplierId: string) => void;
+  closeAdminInspectSupplier: () => void;
   respondToPosUpgrade: (decision: 'approved' | 'declined') => void;
   posClients: POSClient[];
   suppliers: Supplier[];
@@ -599,9 +604,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [isAuthenticated, role, currentUser, currentPosId, posClients]
   );
 
-  const supplier = React.useMemo(
-    () =>
-      resolveScopedSupplier({
+  const [inspectedAdminSupplierId, setInspectedAdminSupplierId] = useState<string | null>(null);
+
+  const openAdminInspectSupplier = (supplierId: string) => {
+    if (role !== 'super_admin') return;
+    const target = suppliers.find((s) => s.id === supplierId);
+    if (!target) {
+      showToast({ type: 'error', title: 'خطأ', description: 'لم يتم العثور على المتجر المطلوب.' });
+      return;
+    }
+    setInspectedAdminSupplierId(supplierId);
+    setActiveNavTab('overview');
+  };
+
+  const closeAdminInspectSupplier = () => {
+    setInspectedAdminSupplierId(null);
+  };
+
+  const supplier = React.useMemo(() => {
+    if (role === 'super_admin' && inspectedAdminSupplierId) {
+      return suppliers.find((s) => s.id === inspectedAdminSupplierId) || resolveScopedSupplier({
         isAuthenticated,
         role,
         currentUser,
@@ -609,9 +631,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentPos,
         suppliers,
         posClients,
-      }),
-    [isAuthenticated, role, currentUser, currentSupplierId, currentPos, suppliers, posClients]
-  );
+      });
+    }
+    return resolveScopedSupplier({
+      isAuthenticated,
+      role,
+      currentUser,
+      currentSupplierId,
+      currentPos,
+      suppliers,
+      posClients,
+    });
+  }, [isAuthenticated, role, currentUser, currentSupplierId, currentPos, suppliers, posClients, inspectedAdminSupplierId]);
 
   const effectiveEmployeePerms = React.useMemo(
     () => resolveEffectiveEmployeePermissions(currentUser, role, supplier),
@@ -624,7 +655,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!inspectedPosId || !isAuthenticated) return null;
     const candidate = posClients.find((p) => p.id === inspectedPosId);
     if (!candidate) return null;
-    const allowed = canSupplierInspectPosInterface({
+    const allowed = role === 'super_admin' ? true : canSupplierInspectPosInterface({
       client: candidate,
       supplierId: supplier?.id || '',
       role,
@@ -1851,64 +1882,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role === 'pos_client' ? currentPos?.id || currentPosId || currentUser?.associatedId || '' : '';
     const cleanCurrentEmail = normalizeStoreEmail(currentUser?.email);
 
-    // 1. Orders live sync (role-scoped)
-    const ordersTarget =
+    // 1. Orders live sync (role-scoped, server-sorted via composite index with automatic fallback)
+    const ordersFallbackTarget =
       role === 'super_admin'
-        ? collection(db, 'orders')
+        ? query(collection(db, 'orders'))
         : role === 'pos_client' && targetPosId
         ? query(collection(db, 'orders'), where('posId', '==', targetPosId))
         : (role === 'supplier' || role === 'employee') && targetSupId
         ? query(collection(db, 'orders'), where('supplierId', '==', targetSupId))
         : null;
 
-    const unsubOrders = ordersTarget
-      ? safeOnSnapshot(
-          ordersTarget,
-          (snapshot) => {
-            if (!isEffectActive) return;
-            markConnectedIfLive(snapshot.metadata.fromCache);
-            const remoteOrders: Order[] = [];
-            snapshot.forEach(docSnap => {
-              remoteOrders.push(docSnap.data() as Order);
-            });
-            remoteOrders.sort(
-              (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
-            );
-            setOrders(remoteOrders);
-          },
-          (err) => {
-            handleSnapshotError(err, OperationType.LIST, 'orders', handleTransientOffline);
-          }
-        )
-      : () => {};
+    const ordersIndexedTarget =
+      role === 'super_admin'
+        ? query(collection(db, 'orders'), orderBy('date', 'desc'))
+        : role === 'pos_client' && targetPosId
+        ? query(collection(db, 'orders'), where('posId', '==', targetPosId), orderBy('date', 'desc'))
+        : (role === 'supplier' || role === 'employee') && targetSupId
+        ? query(collection(db, 'orders'), where('supplierId', '==', targetSupId), orderBy('date', 'desc'))
+        : null;
+
+    const unsubOrders =
+      ordersIndexedTarget && ordersFallbackTarget
+        ? safeIndexedOnSnapshot(
+            ordersIndexedTarget,
+            ordersFallbackTarget,
+            (snapshot) => {
+              if (!isEffectActive) return;
+              markConnectedIfLive(snapshot.metadata.fromCache);
+              const remoteOrders: Order[] = [];
+              snapshot.forEach(docSnap => {
+                remoteOrders.push(docSnap.data() as Order);
+              });
+              remoteOrders.sort(
+                (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+              );
+              setOrders(remoteOrders);
+            },
+            (err) => {
+              handleSnapshotError(err, OperationType.LIST, 'orders', handleTransientOffline);
+            }
+          )
+        : () => {};
 
     // 2. Deposit Requests & Loans live sync (role-scoped; POS clients get store-scoped so delegated receivers see receipts)
-    const depositsTarget =
+    const depositsFallbackTarget =
       role === 'super_admin'
-        ? collection(db, 'depositRequests')
+        ? query(collection(db, 'depositRequests'))
         : targetSupId
         ? query(collection(db, 'depositRequests'), where('supplierId', '==', targetSupId))
         : null;
 
-    const unsubDeposits = depositsTarget
-      ? safeOnSnapshot(
-          depositsTarget,
-          (snapshot) => {
-            if (!isEffectActive) return;
-            const remoteDeps: DepositRequest[] = [];
-            snapshot.forEach(docSnap => {
-              remoteDeps.push(docSnap.data() as DepositRequest);
-            });
-            remoteDeps.sort(
-              (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
-            );
-            setDepositRequests(remoteDeps);
-          },
-          (err) => {
-            handleSnapshotError(err, OperationType.LIST, 'depositRequests', handleTransientOffline);
-          }
-        )
-      : () => {};
+    const depositsIndexedTarget =
+      role === 'super_admin'
+        ? query(collection(db, 'depositRequests'), orderBy('date', 'desc'))
+        : targetSupId
+        ? query(collection(db, 'depositRequests'), where('supplierId', '==', targetSupId), orderBy('date', 'desc'))
+        : null;
+
+    const unsubDeposits =
+      depositsIndexedTarget && depositsFallbackTarget
+        ? safeIndexedOnSnapshot(
+            depositsIndexedTarget,
+            depositsFallbackTarget,
+            (snapshot) => {
+              if (!isEffectActive) return;
+              const remoteDeps: DepositRequest[] = [];
+              snapshot.forEach(docSnap => {
+                remoteDeps.push(docSnap.data() as DepositRequest);
+              });
+              remoteDeps.sort(
+                (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
+              );
+              setDepositRequests(remoteDeps);
+            },
+            (err) => {
+              handleSnapshotError(err, OperationType.LIST, 'depositRequests', handleTransientOffline);
+            }
+          )
+        : () => {};
 
     // 3. POS Clients live sync (store-scoped + client's own email records)
     const handlePosClientSafetyCheck = (syncedClients: POSClient[], fromCache: boolean) => {
@@ -2472,8 +2523,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 9. Notifications live sync (cross-device real-time alerts for Client & Supplier)
     if (role === 'super_admin') {
       secondaryUnsubs.push(
-        safeOnSnapshot(
-          collection(db, 'notifications'),
+        safeIndexedOnSnapshot(
+          query(collection(db, 'notifications'), orderBy('createdAt', 'desc'), limit(500)),
+          query(collection(db, 'notifications')),
           (snapshot) => {
             if (!isEffectActive) return;
             const list: AppNotification[] = [];
@@ -2482,7 +2534,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (notif.id) list.push(notif);
             });
             list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-            setNotifications(list);
+            setNotifications(list.slice(0, 500));
           },
           (err) => {
             handleSnapshotError(err, OperationType.LIST, 'notifications', handleTransientOffline);
@@ -2502,12 +2554,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           targetSupId
         );
         scoped.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-        setNotifications(scoped);
+        setNotifications(scoped.slice(0, 300));
       };
 
       if (targetSupId) {
         secondaryUnsubs.push(
-          safeOnSnapshot(
+          safeIndexedOnSnapshot(
+            query(
+              collection(db, 'notifications'),
+              where('supplierId', '==', targetSupId),
+              orderBy('createdAt', 'desc'),
+              limit(300)
+            ),
             query(collection(db, 'notifications'), where('supplierId', '==', targetSupId)),
             (snapshot) => {
               if (!isEffectActive) return;
@@ -2527,7 +2585,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (targetPosId) {
         secondaryUnsubs.push(
-          safeOnSnapshot(
+          safeIndexedOnSnapshot(
+            query(
+              collection(db, 'notifications'),
+              where('posId', '==', targetPosId),
+              orderBy('createdAt', 'desc'),
+              limit(300)
+            ),
             query(collection(db, 'notifications'), where('posId', '==', targetPosId)),
             (snapshot) => {
               if (!isEffectActive) return;
@@ -2546,7 +2610,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } else if ((role === 'supplier' || role === 'employee') && targetSupId) {
       secondaryUnsubs.push(
-        safeOnSnapshot(
+        safeIndexedOnSnapshot(
+          query(
+            collection(db, 'notifications'),
+            where('supplierId', '==', targetSupId),
+            orderBy('createdAt', 'desc'),
+            limit(300)
+          ),
           query(collection(db, 'notifications'), where('supplierId', '==', targetSupId)),
           (snapshot) => {
             if (!isEffectActive) return;
@@ -2556,7 +2626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (notif.id) list.push(notif);
             });
             list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-            setNotifications(list);
+            setNotifications(list.slice(0, 300));
           },
           (err) => {
             handleSnapshotError(err, OperationType.LIST, 'notifications', handleTransientOffline);
@@ -2571,18 +2641,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const secondaryTimer = setTimeout(() => {
       if (!isEffectActive) return;
 
-      // 10. Loan Repayment Requests live sync (store-scoped)
-      const loanRepaymentsTarget =
+      // 10. Loan Repayment Requests live sync (store-scoped, server-sorted via composite index)
+      const loanRepaymentsFallbackTarget =
         role === 'super_admin'
-          ? collection(db, 'loanRepaymentRequests')
+          ? query(collection(db, 'loanRepaymentRequests'))
           : targetSupId
           ? query(collection(db, 'loanRepaymentRequests'), where('supplierId', '==', targetSupId))
           : null;
 
-      if (loanRepaymentsTarget) {
+      const loanRepaymentsIndexedTarget =
+        role === 'super_admin'
+          ? query(collection(db, 'loanRepaymentRequests'), orderBy('date', 'desc'))
+          : targetSupId
+          ? query(collection(db, 'loanRepaymentRequests'), where('supplierId', '==', targetSupId), orderBy('date', 'desc'))
+          : null;
+
+      if (loanRepaymentsIndexedTarget && loanRepaymentsFallbackTarget) {
         secondaryUnsubs.push(
-          safeOnSnapshot(
-            loanRepaymentsTarget,
+          safeIndexedOnSnapshot(
+            loanRepaymentsIndexedTarget,
+            loanRepaymentsFallbackTarget,
             (snapshot) => {
               if (!isEffectActive) return;
               const remoteReqs: LoanRepaymentRequest[] = [];
@@ -2630,19 +2708,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 12. Accounting Entries live sync (posId-scoped for clients; supplierId-scoped for stores; all for admin)
-      const accountingTarget =
+      const accountingFallbackTarget =
         role === 'super_admin'
-          ? collection(db, 'accountingEntries')
+          ? query(collection(db, 'accountingEntries'))
           : role === 'pos_client' && targetPosId
           ? query(collection(db, 'accountingEntries'), where('posId', '==', targetPosId))
           : (role === 'supplier' || role === 'employee') && targetSupId
           ? query(collection(db, 'accountingEntries'), where('supplierId', '==', targetSupId))
           : null;
 
-      if (accountingTarget) {
+      const accountingIndexedTarget =
+        role === 'super_admin'
+          ? query(collection(db, 'accountingEntries'), orderBy('date', 'desc'))
+          : role === 'pos_client' && targetPosId
+          ? query(collection(db, 'accountingEntries'), where('posId', '==', targetPosId), orderBy('date', 'desc'))
+          : (role === 'supplier' || role === 'employee') && targetSupId
+          ? query(collection(db, 'accountingEntries'), where('supplierId', '==', targetSupId), orderBy('date', 'desc'))
+          : null;
+
+      if (accountingIndexedTarget && accountingFallbackTarget) {
         secondaryUnsubs.push(
-          safeOnSnapshot(
-            accountingTarget,
+          safeIndexedOnSnapshot(
+            accountingIndexedTarget,
+            accountingFallbackTarget,
             (snapshot) => {
               if (!isEffectActive) return;
               const entryMap = new Map<string, AccountingEntry>();
@@ -2717,8 +2805,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (role === 'super_admin') {
         // 15. Admin Accounting Entries live sync (super_admin only)
         secondaryUnsubs.push(
-          safeOnSnapshot(
-            collection(db, 'adminAccountingEntries'),
+          safeIndexedOnSnapshot(
+            query(collection(db, 'adminAccountingEntries'), orderBy('date', 'desc')),
+            query(collection(db, 'adminAccountingEntries')),
             (snapshot) => {
               if (!isEffectActive) return;
               const admMap = new Map<string, AdminAccountingEntry>();
@@ -7579,7 +7668,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openSupplierPosPreview = (posId: string): boolean => {
     const candidate = posClientsRef.current.find(p => p.id === posId);
-    const allowed = canSupplierInspectPosInterface({
+    const allowed = role === 'super_admin' ? Boolean(candidate) : canSupplierInspectPosInterface({
       client: candidate,
       supplierId: supplier?.id || '',
       role,
@@ -9980,6 +10069,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSupplierPosPreviewMode,
         openSupplierPosPreview,
         closeSupplierPosPreview,
+        inspectedPosClient,
+        inspectedAdminSupplierId,
+        openAdminInspectSupplier,
+        closeAdminInspectSupplier,
         respondToPosUpgrade,
         posClients,
         suppliers,

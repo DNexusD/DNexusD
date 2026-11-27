@@ -520,6 +520,49 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "employeeId", "supplierId", "email", "permissions", "isActive", "updatedAt"]
+    },
+    "ClientWallet": {
+      "title": "ClientWallet",
+      "description": "Dedicated client financial wallet tracking available and pending balances",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clientId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "currency": { "type": "string", "enum": ["SAR", "USD"] },
+        "availableBalance": { "type": "number" },
+        "pendingBalance": { "type": "number" },
+        "totalDeposited": { "type": "number" },
+        "totalSpent": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "frozen"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "clientId", "supplierId", "currency", "availableBalance", "pendingBalance", "status", "createdAt", "updatedAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Immutable atomic wallet movement ledger entry for each client",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "walletId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "type": { "type": "string", "enum": ["deposit", "order_hold", "order_capture", "order_release", "refund", "manual_credit", "manual_debit", "loan_repayment"] },
+        "direction": { "type": "string", "enum": ["credit", "debit", "hold", "release"] },
+        "amount": { "type": "number" },
+        "availableBalanceBefore": { "type": "number" },
+        "availableBalanceAfter": { "type": "number" },
+        "pendingBalanceBefore": { "type": "number" },
+        "pendingBalanceAfter": { "type": "number" },
+        "referenceType": { "type": "string", "enum": ["order", "depositRequest", "loanRepayment", "manual"] },
+        "referenceId": { "type": "string" },
+        "description": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "walletId", "clientId", "type", "direction", "amount", "referenceType", "referenceId", "description", "createdAt"]
     }
   },
   "firestore": {
@@ -598,6 +641,14 @@
     "/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/Notification" },
       "description": "Real-time client and supplier alerts"
+    },
+    "/wallets/{walletId}": {
+      "schema": { "$ref": "#/entities/ClientWallet" },
+      "description": "Client financial wallets tracking available, pending, deposited, and spent balances"
+    },
+    "/walletTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/WalletTransaction" },
+      "description": "Immutable wallet movement ledger entries per client"
     },
     "/loginCodes/{email}": {
       "schema": { "$ref": "#/entities/LoginCode" },

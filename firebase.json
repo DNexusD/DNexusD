@@ -1,0 +1,7 @@
+{
+  "firestore": {
+    "database": "ai-studio-dnexusd2-b2353ab9-efaa-467e-b2a7-f958ebd4a4c8",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

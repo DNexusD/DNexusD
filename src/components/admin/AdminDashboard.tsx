@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AdminStatementView } from './AdminStatementView';
 import { AdminInterfaceSettingsView } from './AdminInterfaceSettingsView';
@@ -20,7 +20,9 @@ import {
 } from '../../utils/storeSupervision';
 import {
   PlatformFeesConfig,
+  POSClient,
   ServiceFeeRule,
+  Supplier,
 } from '../../types';
 import {
   ClientFeeServiceKey,
@@ -100,7 +102,9 @@ export const AdminDashboard: React.FC = () => {
     getMyAppearanceSettings,
     updateMyAppearanceSettings,
     syncAllToFirestore,
-    isSyncingWithFirestore
+    isSyncingWithFirestore,
+    openAdminInspectSupplier,
+    openSupplierPosPreview
   } = useApp();
 
   const [showAppearanceModal, setShowAppearanceModal] = useState(false);
@@ -301,6 +305,33 @@ export const AdminDashboard: React.FC = () => {
   const activeSupervisedStore = supervisedStoreState
     ? suppliers.find(s => s.id === supervisedStoreState.supplierId) || null
     : null;
+
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const trimmedGlobalQuery = globalSearchQuery.trim().toLowerCase();
+
+  const matchingSuppliers = useMemo(() => {
+    if (!trimmedGlobalQuery) return [];
+    return suppliers.filter(s =>
+      (s.name || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (s.storeName || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (s.email || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (s.phone || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (s.city || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (s.id || '').toLowerCase().includes(trimmedGlobalQuery)
+    );
+  }, [suppliers, trimmedGlobalQuery]);
+
+  const matchingClients = useMemo(() => {
+    if (!trimmedGlobalQuery) return [];
+    return posClients.filter(p =>
+      (p.ownerName || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (p.tradeName || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (p.email || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (p.phone || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (p.city || '').toLowerCase().includes(trimmedGlobalQuery) ||
+      (p.id || '').toLowerCase().includes(trimmedGlobalQuery)
+    );
+  }, [posClients, trimmedGlobalQuery]);
 
   const handleSaveGlobalFee = (e: React.FormEvent) => {
     e.preventDefault();
@@ -704,6 +735,123 @@ export const AdminDashboard: React.FC = () => {
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Universal Search & Inspection Hub for Super Admin */}
+          {perms.canManageSuppliers && (
+            <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <Search className="w-5 h-5 text-amber-400" />
+                    <span>محطة البحث الشامل والاطلاع الفوري على أي متجر أو عميل (قراءة فقط)</span>
+                  </h2>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    ابحث بالاسم، البريد الإلكتروني، رقم الهاتف، المدينة، أو المعرف للانتقال الفوري إلى واجهة أي متجر أو عميل والاطلاع على بياناتهم.
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={globalSearchQuery}
+                  onChange={e => setGlobalSearchQuery(e.target.value)}
+                  placeholder="ابحث بالاسم، البريد الإلكتروني، الهاتف، المدينة أو المعرف (مثال: متجر، محمد، .com)..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pr-10 pl-3 py-3 text-white text-xs shadow-inner focus:border-amber-500/50 outline-none transition-colors"
+                />
+              </div>
+
+              {trimmedGlobalQuery && (
+                <div className="space-y-4 pt-2">
+                  <div className="text-xs font-bold text-slate-300">
+                    نتائج البحث عن (&quot;{globalSearchQuery}&quot;): {matchingSuppliers.length} متجر، {matchingClients.length} عميل ونقطة بيع
+                  </div>
+
+                  {matchingSuppliers.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold text-purple-400 uppercase tracking-wider">المتاجر المطابقة:</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {matchingSuppliers.map((sup: Supplier) => {
+                          const supActive = isSupplierActive(sup);
+                          return (
+                            <div key={sup.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white truncate">{sup.storeName}</span>
+                                  <span className="text-slate-500">·</span>
+                                  <span className="text-amber-400 text-[11px]">{sup.name}</span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${supActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                                    {supActive ? 'نشط' : 'موقوف'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 flex items-center gap-3 flex-wrap font-mono">
+                                  <span>{sup.email || 'بدون إيميل'}</span>
+                                  <span>{sup.phone || ''}</span>
+                                  <span className="text-slate-500">({sup.id})</span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => openAdminInspectSupplier(sup.id)}
+                                className="px-3 py-2 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer shadow-md"
+                                title="الدخول إلى واجهة المتجر للقراءة فقط"
+                              >
+                                <Eye className="w-4 h-4 shrink-0" />
+                                <span>دخول المتجر</span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {matchingClients.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold text-cyan-400 uppercase tracking-wider">العملاء ونقاط البيع المطابقة:</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {matchingClients.map((client: POSClient) => {
+                          const linkedSup = suppliers.find(s => s.id === client.supplierId);
+                          return (
+                            <div key={client.id} className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white truncate">{client.tradeName}</span>
+                                  <span className="text-slate-500">·</span>
+                                  <span className="text-cyan-300 text-[11px]">{client.ownerName}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-400 flex items-center gap-3 flex-wrap font-mono">
+                                  <span>{client.email || 'بدون إيميل'}</span>
+                                  <span>{client.phone || ''}</span>
+                                  {linkedSup && <span className="text-amber-400">متجر: {linkedSup.storeName}</span>}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => openSupplierPosPreview(client.id)}
+                                className="px-3 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer shadow-md"
+                                title="الدخول إلى واجهة العميل للقراءة فقط"
+                              >
+                                <Eye className="w-4 h-4 shrink-0" />
+                                <span>دخول العميل</span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {matchingSuppliers.length === 0 && matchingClients.length === 0 && (
+                    <div className="p-6 text-center text-slate-400">
+                      لا توجد أي متاجر أو عملاء مطابقة لبحثك (&quot;{globalSearchQuery}&quot;).
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

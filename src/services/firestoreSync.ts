@@ -9,6 +9,7 @@ import {
   getDocsFromServer,
   query,
   where,
+  orderBy,
   limit,
   setDoc,
   updateDoc,
@@ -16,7 +17,8 @@ import {
   deleteDoc,
   writeBatch,
   DocumentReference,
-  Query
+  Query,
+  QueryConstraint
 } from 'firebase/firestore';
 import {
   db,
@@ -31,6 +33,11 @@ import {
   isFirestoreInternalAssertionError,
   isNavigatorOffline,
 } from '../utils/firestoreConnectivity';
+import {
+  chunkArray,
+  executeIndexedQueryWithFallback,
+  sortRecordsByDateDesc,
+} from '../utils/firestoreIndexQueries';
 import {
   POSClient,
   Supplier,
@@ -558,10 +565,35 @@ export const firestoreSync = {
           getDocsFromServer(query(collection(db, colName), where(field, '==', value)))
         ).catch(() => null);
 
+      const queryColOrdered = (
+        colName: string,
+        field: string,
+        value: string | boolean,
+        orderField: string,
+        orderDir: 'asc' | 'desc' = 'desc',
+        limitCount?: number
+      ) =>
+        executeIndexedQueryWithFallback(
+          () => {
+            const constraints: QueryConstraint[] = [
+              where(field, '==', value),
+              orderBy(orderField, orderDir),
+            ];
+            if (limitCount && limitCount > 0) {
+              constraints.push(limit(limitCount));
+            }
+            return withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, colName), ...constraints))
+            );
+          },
+          () =>
+            withFirestoreRecovery(() =>
+              getDocsFromServer(query(collection(db, colName), where(field, '==', value)))
+            )
+        ).catch(() => null);
+
       const sortByDateDesc = <T extends { date?: string }>(items: T[]): T[] =>
-        [...items].sort(
-          (a, b) => (new Date(b.date || 0).getTime() || 0) - (new Date(a.date || 0).getTime() || 0)
-        );
+        sortRecordsByDateDesc(items, (item) => item.date);
 
       if (identity.kind === 'supplier' || identity.kind === 'employee') {
         const supId = identity.supplier.id;
@@ -588,12 +620,12 @@ export const firestoreSync = {
             queryCol('services', 'supplierId', supId),
             queryCol('voucherWarehouses', 'supplierId', supId),
             queryCol('supplierBankAccounts', 'supplierId', supId),
-            queryCol('orders', 'supplierId', supId),
-            queryCol('depositRequests', 'supplierId', supId),
-            queryCol('loanRepaymentRequests', 'supplierId', supId),
-            queryCol('accountingEntries', 'supplierId', supId),
+            queryColOrdered('orders', 'supplierId', supId, 'date', 'desc'),
+            queryColOrdered('depositRequests', 'supplierId', supId, 'date', 'desc'),
+            queryColOrdered('loanRepaymentRequests', 'supplierId', supId, 'date', 'desc'),
+            queryColOrdered('accountingEntries', 'supplierId', supId, 'date', 'desc'),
             queryCol('inviteLinks', 'supplierId', supId),
-            queryCol('notifications', 'supplierId', supId),
+            queryColOrdered('notifications', 'supplierId', supId, 'createdAt', 'desc', 300),
           ]);
 
           scopedData.storePosClients = mergeSnapList<POSClient>([storeClientsSnap]);
@@ -614,9 +646,9 @@ export const firestoreSync = {
             mergeSnapList<AccountingEntry>([accountingSnap])
           );
           scopedData.inviteLinks = mergeSnapList<InviteLink>([invitesSnap]);
-          scopedData.notifications = mergeSnapList<AppNotification>([notifsSnap]).sort((a, b) =>
-            (b.createdAt || '').localeCompare(a.createdAt || '')
-          );
+          scopedData.notifications = mergeSnapList<AppNotification>([notifsSnap])
+            .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+            .slice(0, 300);
         }
       } else if (identity.kind === 'pos_client') {
         const scopedPosIds = Array.from(
@@ -650,16 +682,32 @@ export const firestoreSync = {
           Promise.all(
             scopedSupIds.map((supId) => queryCol('supplierBankAccounts', 'supplierId', supId))
           ),
-          Promise.all(scopedPosIds.map((posId) => queryCol('orders', 'posId', posId))),
+          Promise.all(scopedPosIds.map((posId) => queryColOrdered('orders', 'posId', posId, 'date', 'desc'))),
           Promise.all(
-            scopedSupIds.map((supId) => queryCol('depositRequests', 'supplierId', supId))
+            scopedSupIds.map((supId) =>
+              queryColOrdered('depositRequests', 'supplierId', supId, 'date', 'desc')
+            )
           ),
           Promise.all(
-            scopedSupIds.map((supId) => queryCol('loanRepaymentRequests', 'supplierId', supId))
+            scopedSupIds.map((supId) =>
+              queryColOrdered('loanRepaymentRequests', 'supplierId', supId, 'date', 'desc')
+            )
           ),
-          Promise.all(scopedPosIds.map((posId) => queryCol('accountingEntries', 'posId', posId))),
-          Promise.all(scopedPosIds.map((posId) => queryCol('notifications', 'posId', posId))),
-          Promise.all(scopedSupIds.map((supId) => queryCol('notifications', 'supplierId', supId))),
+          Promise.all(
+            scopedPosIds.map((posId) =>
+              queryColOrdered('accountingEntries', 'posId', posId, 'date', 'desc')
+            )
+          ),
+          Promise.all(
+            scopedPosIds.map((posId) =>
+              queryColOrdered('notifications', 'posId', posId, 'createdAt', 'desc', 300)
+            )
+          ),
+          Promise.all(
+            scopedSupIds.map((supId) =>
+              queryColOrdered('notifications', 'supplierId', supId, 'createdAt', 'desc', 300)
+            )
+          ),
           needsPeerClients
             ? Promise.all(scopedSupIds.map((supId) => queryCol('posClients', 'supplierId', supId)))
             : Promise.resolve([]),
@@ -689,9 +737,9 @@ export const firestoreSync = {
             allowedNotifsMap.set(n.id, n);
           }
         }
-        scopedData.notifications = Array.from(allowedNotifsMap.values()).sort((a, b) =>
-          (b.createdAt || '').localeCompare(a.createdAt || '')
-        );
+        scopedData.notifications = Array.from(allowedNotifsMap.values())
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+          .slice(0, 300);
 
         if (needsPeerClients && peerClientSnaps.length > 0) {
           const mergedPeerMap = new Map<string, POSClient>();
@@ -871,20 +919,51 @@ export const firestoreSync = {
       return { clients: [], users: [] };
     }
 
-    const [clientsSnap, usersSnap] = await Promise.all([
-      withFirestoreRecovery(() =>
-        getDocsFromServer(
-          query(collection(db, 'posClients'), where('supplierId', '==', supplierId))
-        )
-      ),
-      withFirestoreRecovery(() =>
-        getDocsFromServer(query(collection(db, 'users'), where('role', '==', 'pos_client')))
+    const clientsSnap = await withFirestoreRecovery(() =>
+      getDocsFromServer(
+        query(collection(db, 'posClients'), where('supplierId', '==', supplierId))
+      )
+    );
+    const clients = mapDocsById<POSClient>(clientsSnap.docs);
+    if (clients.length === 0) {
+      return { clients: [], users: [] };
+    }
+
+    const clientIds = Array.from(new Set(clients.map((c) => c.id).filter(Boolean)));
+    const associatedIdChunks = chunkArray(clientIds, 30);
+
+    const [scopedUsersSnap, ...chunkSnaps] = await Promise.all([
+      executeIndexedQueryWithFallback(
+        () =>
+          withFirestoreRecovery(() =>
+            getDocsFromServer(
+              query(
+                collection(db, 'users'),
+                where('role', '==', 'pos_client'),
+                where('supplierId', '==', supplierId)
+              )
+            )
+          ),
+        async () => null
       ).catch(() => null),
+      ...associatedIdChunks.map((chunk) =>
+        withFirestoreRecovery(() =>
+          getDocsFromServer(query(collection(db, 'users'), where('associatedId', 'in', chunk)))
+        ).catch(() => null)
+      ),
     ]);
 
+    const userMap = new Map<string, AuthUser>();
+    for (const snap of [scopedUsersSnap, ...chunkSnaps]) {
+      if (!snap) continue;
+      for (const u of mapDocsById<AuthUser>(snap.docs)) {
+        if (u.id) userMap.set(u.id, u);
+      }
+    }
+
     return {
-      clients: mapDocsById<POSClient>(clientsSnap.docs),
-      users: usersSnap ? mapDocsById<AuthUser>(usersSnap.docs) : [],
+      clients,
+      users: Array.from(userMap.values()),
     };
   },
 
@@ -1125,13 +1204,63 @@ export const firestoreSync = {
   }): Promise<POSClient | null> {
     const cleanSupId = (params.supplierId || '').trim();
     if (!cleanSupId) return null;
+
+    const cleanEmail = normalizeStoreEmail(params.email);
+    const cleanUid = (params.uid || params.userId || '').trim();
+    const cleanPhone = normalizePhoneForMatch(params.phone);
+    const rawPhone = (params.phone || '').trim();
+
     try {
-      const snap = await getDocsQueryPreferServer(() =>
-        query(collection(db, 'posClients'), where('supplierId', '==', cleanSupId))
-      );
-      const storeClients = mapDocsById<POSClient>(snap.docs);
-      const match = findMatchingPosClientRecord(storeClients, params);
-      return match || null;
+      const targetedLookups: Array<Promise<POSClient[]>> = [];
+
+      const runCompoundPosQuery = (field: 'email' | 'uid' | 'userId' | 'phone', val: string) =>
+        executeIndexedQueryWithFallback(
+          async () => {
+            const snap = await getDocsQueryPreferServer(() =>
+              query(
+                collection(db, 'posClients'),
+                where('supplierId', '==', cleanSupId),
+                where(field, '==', val),
+                limit(5)
+              )
+            );
+            return mapDocsById<POSClient>(snap.docs);
+          },
+          async () => []
+        ).catch(() => []);
+
+      if (cleanUid) {
+        targetedLookups.push(runCompoundPosQuery('uid', cleanUid));
+        targetedLookups.push(runCompoundPosQuery('userId', cleanUid));
+      }
+      if (cleanEmail) {
+        targetedLookups.push(runCompoundPosQuery('email', cleanEmail));
+      }
+      if (rawPhone) {
+        targetedLookups.push(runCompoundPosQuery('phone', rawPhone));
+      }
+
+      if (targetedLookups.length > 0) {
+        const candidateGroups = await Promise.all(targetedLookups);
+        const candidates = candidateGroups.flat();
+        const fastMatch = findMatchingPosClientRecord(candidates, params);
+        if (fastMatch) {
+          return fastMatch;
+        }
+      }
+
+      // If normalized phone matching is needed or compound indexes are still building,
+      // fall back to store-scoped lookup on single-field `supplierId` index.
+      if (cleanPhone || cleanEmail || cleanUid) {
+        const snap = await getDocsQueryPreferServer(() =>
+          query(collection(db, 'posClients'), where('supplierId', '==', cleanSupId))
+        );
+        const storeClients = mapDocsById<POSClient>(snap.docs);
+        const match = findMatchingPosClientRecord(storeClients, params);
+        return match || null;
+      }
+
+      return null;
     } catch {
       return null;
     }
